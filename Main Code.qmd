@@ -1,0 +1,32 @@
+---
+title: "Testing"
+author: "POC"
+format: html
+editor: visual
+---
+
+## Testing
+
+I will use this document to work on my SIMOA code since I am having trouble with it currently in the existing format. In this way I can mess around with this code and not be worried about it impacting my original data and now that I know what I want to do for my clusters it is easier for me to manipulate the variables in a manner that will set me up for success later.
+
+## Loading the Data
+
+```{r}
+#| label: Loading the Data
+######
+# In this section I will load in the dataset I want to use and name it "SIMOA" 
+# so it is easier to call back on later and i know that this is my original datset.
+######
+
+
+
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
