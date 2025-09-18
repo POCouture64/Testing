@@ -15,7 +15,7 @@ I will use this document to work on my SIMOA code since I am having trouble with
 #| label: Loading the Data
 ######
 # In this section I will load in the dataset I want to use and name it "SIMOA" 
-# so it is easier to call back on later and i know that this is my original datset.
+# so it is easier to call back on later and i know that this is my original dataset.
 ######
 
 library(readr)
@@ -24,7 +24,8 @@ View(SIMOA)
 
 ```
 
-You can add options to executable code like this
+
+## 
 
 ```{r}
 #| echo: false
