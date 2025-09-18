@@ -18,7 +18,9 @@ I will use this document to work on my SIMOA code since I am having trouble with
 # so it is easier to call back on later and i know that this is my original datset.
 ######
 
-
+library(readr)
+SIMOA <- read_csv("SIMOA Report.csv")
+View(SIMOA)
 
 ```
 
