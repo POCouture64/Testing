@@ -11,6 +11,8 @@ I will use this document to work on my SIMOA code since I am having trouble with
 
 ## Loading the Data
 
+The section I will use to lead the dataset that I will use for the analysis.
+
 ```{r}
 #| label: Loading the Data
 ######
@@ -25,11 +27,39 @@ View(SIMOA)
 ```
 
 
-## 
+## Eligible Particpants
+
+The section where I have set out the inclusion criteria to remove people from the dataset that do not meet our criteria.
 
 ```{r}
-#| echo: false
-2 * 2
+#| label: Eligible Participants
+######
+# In this section I will filter out those who have indicated they are <65 or that have not answered   # yes to the question about age category or not answered either question. I will also filter out those # who did not select one of the 14 BZRAs listed because we do not want the results to be affected by other sedating medications such as antihistamines or SSRI's.
+######
+
+library(tidyverse)
+
+# Original count
+n_original <- nrow(SIMOA)
+
+# After age filtering
+SIMOA_age_filtered <- SIMOA %>%
+  filter(age_cat == 1 | (age_cat == 0 & age >= 65))
+n_after_age <- nrow(SIMOA_age_filtered)
+
+# After both filters
+SIMOA <- SIMOA_age_filtered %>%
+  filter(rowSums(select(., starts_with("c_sp___"))[, 1:14] == 1, na.rm = TRUE) > 0)
+n_final <- nrow(SIMOA)
+
+# Report results
+cat("Original sample:", n_original, "\n")
+cat("After age filtering:", n_after_age, "(removed:", n_original - n_after_age, ")\n")
+cat("After c_sp filtering:", n_final, "(removed:", n_after_age - n_final, ")\n")
+cat("Total removed:", n_original - n_final, "\n")
 ```
 
-The `echo: false` option disables the printing of code (only output is displayed).
+
+## Group Comparison
+
+
