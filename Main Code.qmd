@@ -59,7 +59,213 @@ cat("After c_sp filtering:", n_final, "(removed:", n_after_age - n_final, ")\n")
 cat("Total removed:", n_original - n_final, "\n")
 ```
 
+## Calculating Subscale Scores
+
+The section where I go about calculating the subscale scores for all the measures and ensure that this is properly done and that way I can comapre the groups in subscales rather than the full measure and it makes it easier to report.
+
+```{r}
+#| label: Subscale Scores
+######
+# In this section I will get the subscale scores for all the measures I have used. I will also ensure # that items are appropriately reverse-coded.
+# All subscale score coding will be found in this chunk but I have divided them to make them easy to # find. I would rather have 1 chunk that way it cuts down on the amount of space being taken up for this step.
+######
+
+######
+# BFI-10 SUBSCALE SCORES
+######
+
+# First, let's create a working copy
+data_personality <- SIMOA
+
+# Items to reverse: reserved, find_fault, lazy, relaxed, few_interests
+# Formula: reversed_score = 6 - original_score
+
+data_personality <- data_personality %>%
+  mutate(
+    reserved_rev = 6 - reserved,
+    find_fault_rev = 6 - find_fault,
+    lazy_rev = 6 - lazy,
+    relaxed_rev = 6 - relaxed,
+    few_interests_rev = 6 - few_interests
+  )
+
+# Verifying Reverse-Coding -- ALL GOOD!!
+# Check first 10 rows side by side
+data_personality %>%
+  select(reserved, reserved_rev, find_fault, find_fault_rev, lazy, lazy_rev, 
+         relaxed, relaxed_rev, few_interests, few_interests_rev) %>%
+  head(10)
+
+# Verify the math: original + reversed should equal 6
+data_personality %>%
+  mutate(
+    reserved_sum = reserved + reserved_rev,
+    find_fault_sum = find_fault + find_fault_rev,
+    lazy_sum = lazy + lazy_rev,
+    relaxed_sum = relaxed + relaxed_rev,
+    few_interests_sum = few_interests + few_interests_rev
+  ) %>%
+  select(ends_with("_sum")) %>%
+  summary()
+
+# Creating personality total scores
+data_personality <- data_personality %>%
+  mutate(
+    # Extraversion: reserved (reversed) + outgoing
+    Extraversion = reserved_rev + outgoing,
+    
+    # Agreeableness: trusting + find_fault (reversed)
+    Agreeableness = trusting + find_fault_rev,
+    
+    # Conscientiousness: lazy (reversed) + thorough
+    Conscientiousness = lazy_rev + thorough,
+    
+    # Neuroticism: relaxed (reversed) + nervous
+    Neuroticism = relaxed_rev + nervous,
+    
+    # Openness: few_interests (reversed) + imagination
+    Openness = few_interests_rev + imagination
+  )
+
+######
+# SURPS SUBSCALE SCORES
+######
+
+# First, reverse code SURPS Hopelessness items (all except surps17)
+# Formula for 1-4 scale: reversed_score = 5 - original_score
+data_personality <- data_personality %>%
+  mutate(
+    surps1_rev = 5 - surps1,
+    surps4_rev = 5 - surps4,
+    surps7_rev = 5 - surps7,
+    surps13_rev = 5 - surps13,
+    surps20_rev = 5 - surps20,
+    surps23_rev = 5 - surps23
+    # Note: surps17 is NOT reversed
+  )
+
+# Verifying Reverse-Coding -- ALL GOOD!!
+data_personality %>%
+  select(surps1, surps1_rev, surps4, surps4_rev, surps7, surps7_rev) %>%
+  head(10) %>%
+  mutate(
+    check1 = surps1 + surps1_rev,
+    check4 = surps4 + surps4_rev,
+    check7 = surps7 + surps7_rev
+  )
+
+# Quick verification - all sums should equal 5
+cat("All sums should equal 5:\n")
+print(unique(data_personality$surps1 + data_personality$surps1_rev))
+print(unique(data_personality$surps4 + data_personality$surps4_rev))
+print(unique(data_personality$surps7 + data_personality$surps7_rev))
+
+# Create SURPS total scores
+data_personality <- data_personality %>%
+  mutate(
+    # Impulsivity: surps2, surps5, surps11, surps15, surps22
+    SURPS_Impulsivity = surps2 + surps5 + surps11 + surps15 + surps22,
+    
+    # Sensation Seeking: surps3, surps6, surps9, surps12, surps16, surps19
+    SURPS_Sensation_Seeking = surps3 + surps6 + surps9 + surps12 + surps16 + surps19,
+    
+    # Hopelessness: surps1(rev), surps4(rev), surps7(rev), surps13(rev), surps17, surps20(rev), surps23(rev)
+    SURPS_Hopelessness = surps1_rev + surps4_rev + surps7_rev + surps13_rev + surps17 + surps20_rev + surps23_rev,
+    
+    # Anxiety Sensitivity: surps8, surps10, surps14, surps18, surps21
+    SURPS_Anxiety_Sensitivity = surps8 + surps10 + surps14 + surps18 + surps21
+  )
+
+######
+# DBAS SUBSCALE SCORES
+######
+
+# Response scale: 0-10 (0 = Strongly Disagree, 10 = Strongly Agree)
+# No reverse coding needed for DBAS-16
+
+data_personality <- data_personality %>%
+  mutate(
+    # Expectations subscale (2 items)
+    DBAS_Expectations = rowMeans(select(., dbas1, dbas_2), na.rm = TRUE),
+    
+    # Medications subscale (3 items) 
+    DBAS_Medications = rowMeans(select(., dbas_6, dbas_13, dbas_15), na.rm = TRUE),
+    
+    # Worry/Helplessness subscale (6 items)
+    DBAS_Worry = rowMeans(select(., dbas_3, dbas_4, dbas_8, dbas_10, dbas_11, dbas_14), na.rm = TRUE),
+    
+    # Consequences subscale (5 items)
+    DBAS_Consequences = rowMeans(select(., dbas_5, dbas_7, dbas_9, dbas_12, dbas_16), na.rm = TRUE)
+  )
+
+# Quick verification
+cat("DBAS-16 Subscale Summary:\n")
+data_personality %>%
+  select(DBAS_Expectations, DBAS_Medications, DBAS_Worry, DBAS_Consequences) %>%
+  summary()
+
+# Check for missing data patterns
+cat("\nMissing values per subscale:\n")
+data_personality %>%
+  select(DBAS_Expectations, DBAS_Medications, DBAS_Worry, DBAS_Consequences) %>%
+  summarise_all(~sum(is.na(.)))
+
+# Optional: Check first few rows
+cat("\nFirst 10 rows of DBAS subscales:\n")
+data_personality %>%
+  select(DBAS_Expectations, DBAS_Medications, DBAS_Worry, DBAS_Consequences) %>%
+  head(10)
+
+######
+# CISS SUBSCALE SCORES
+######
+
+data_personality <- data_personality %>%
+  mutate(
+    # Avoidance Style: ciss1, ciss4, ciss7, ciss9, ciss15, ciss18, ciss21
+    CISS_Avoidance_Style = ciss1 + ciss4 + ciss7 + ciss9 + ciss15 + ciss18 + ciss21,
+    
+    # Task Style: ciss2, ciss6, ciss8, ciss11, ciss13, ciss16, ciss19
+    CISS_Task_Style = ciss2 + ciss6 + ciss8 + ciss11 + ciss13 + ciss16 + ciss19,
+    
+    # Emotional Style: ciss3, ciss5, ciss10, ciss12, ciss14, ciss17, ciss20
+    CISS_Emotional_Style = ciss3 + ciss5 + ciss10 + ciss12 + ciss14 + ciss17 + ciss20
+  )
+
+# ============================================================================
+# VERIFICATION: Check CISS subscale creation
+# ============================================================================
+cat("CISS-21 Subscale Summary:\n")
+data_personality %>%
+  select(CISS_Avoidance_Style, CISS_Task_Style, CISS_Emotional_Style) %>%
+  summary()
+```
+
+
+
+
 
 ## Group Comparison
+
+The section where I will find all the descriptive statistics for the entirety of the group and then divide them based on whether they have stopped or continue to use BZRAs.
+
+Before I go about doing this, I need to calculate the subscale scores for all the measures and ensure this is properly done and that way I can compare the groups in subscales and also makes it easier to report.
+
+The order of the chunks in this section will be as follows: 
+1. Fining Subscale Scores;
+2. Entire Group Descriptive Stats; and
+3. Group Comparison Based on Current or Past Use of BZRAs.
+
+
+
+
+
+
+```{r}
+#| label: Entire Group
+######
+# IN this section I will look at the descriptive
+
+```
 
 
