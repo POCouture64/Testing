@@ -59,6 +59,7 @@ cat("After c_sp filtering:", n_final, "(removed:", n_after_age - n_final, ")\n")
 cat("Total removed:", n_original - n_final, "\n")
 ```
 
+
 ## Calculating Subscale Scores
 
 The section where I go about calculating the subscale scores for all the measures and ensure that this is properly done and that way I can comapre the groups in subscales rather than the full measure and it makes it easier to report.
@@ -242,29 +243,22 @@ data_personality %>%
 ```
 
 
-
-
-
 ## Group Comparison
 
 The section where I will find all the descriptive statistics for the entirety of the group and then divide them based on whether they have stopped or continue to use BZRAs.
 
-Before I go about doing this, I need to calculate the subscale scores for all the measures and ensure this is properly done and that way I can compare the groups in subscales and also makes it easier to report.
-
 The order of the chunks in this section will be as follows: 
-1. Fining Subscale Scores;
-2. Entire Group Descriptive Stats; and
-3. Group Comparison Based on Current or Past Use of BZRAs.
-
-
-
-
-
+1. Entire Group Descriptive Stats; and
+2. Group Comparison Based on Current or Past Use of BZRAs.
 
 ```{r}
 #| label: Entire Group
 ######
-# IN this section I will look at the descriptive
+# In this section I will include the code that will describe the entire sample. This section of the 
+# code will not divide people based on whether or not they have stopped using BZRAs. I can also add  # more comparisons later such as by AEs or any other factors.
+######
+
+
 
 ```
 
