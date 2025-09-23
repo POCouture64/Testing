@@ -256,7 +256,7 @@ initial_dataset <- data_personality %>%
     "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
     "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
     "osss_3_score", "phq2_score", "age", "sex", "gender", "prov_terr", 
-    "education", "employment", "driving_freq", "income", "scrn_stopped_bzra"
+    "education", "employment", "driving_freq", "income"
   )))
 
 # Calculate percentage of incomplete cases
@@ -283,7 +283,7 @@ cat("Testing convergence with different iteration numbers...\n")
 
 # Convert categorical variables to factors for testing
 test_dataset <- initial_dataset
-categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income", "scrn_stopped_bzra")
+categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income")
 
 for(var in categorical_vars) {
   if(var %in% names(test_dataset)) {
@@ -422,6 +422,10 @@ cat("Missing values after MICE:\n")
 sapply(final_dataset_imputed, function(x) sum(is.na(x)))
 
 cat("\nFinal sample size:", nrow(final_dataset_imputed), "\n")
+
+# Adding the outcome variable back to the imputed dataset for analysis
+final_dataset_imputed$scrn_stopped_bzra <- data_personality$scrn_stopped_bzra[1:nrow(final_dataset_imputed)]
+cat("Added outcome variable back to dataset for analysis\n")
 ```
 
 
