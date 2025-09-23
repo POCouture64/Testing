@@ -344,8 +344,12 @@ analysis_vars <- c(
   # Demographic variables (8 variables)
   "age", "sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income",
   # Outcome variable
-  "scrn_stopped_bzra"
+  #"scrn_stopped_bzra"
 )
+
+# I removed scrn_stopped_bzra because it is the outcome variable and should not be imputed because it may create artificial relationships, this is the prediction/analysis variable so imputing it would be circular reasoning, CI and other stats may be incorrect if the outcome is imputed.
+
+
 
 # Create dataset with selected variables
 final_dataset <- data_personality %>%
@@ -388,7 +392,7 @@ This section applies the findings from the previous 2 chunks to fill in the miss
 set.seed(123)
 
 # Convert categorical variables to factors
-categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income", "scrn_stopped_bzra")
+categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income")
 
 for(var in categorical_vars) {
   if(var %in% names(final_dataset)) {
