@@ -14,30 +14,39 @@ I will use this document to work on my SIMOA code since I am having trouble with
 The section I will use to lead the dataset that I will use for the analysis.
 
 ```{r}
-#| label: Loading the Data
+#| label: Loading the Data and Libraries
 ######
-# In this section I will load in the dataset I want to use and name it "SIMOA" 
+# Loading required libraries and data
+# In this section I will load all necessary packages and the dataset I want to use and name it "SIMOA" 
 # so it is easier to call back on later and i know that this is my original dataset.
 ######
 
-library(readr)
+# Load all required libraries
+library(readr)        # For reading CSV files
+library(tidyverse)    # For data manipulation (dplyr, ggplot2, etc.)
+library(mice)         # For multiple imputation
+library(VIM)          # For visualizing missing data
+library(naniar)       # For missing data exploration
+library(effsize)      # For effect size calculations
+library(ggplot2)      # For plotting (part of tidyverse but explicit)
+
+# Load the dataset
 SIMOA <- read_csv("SIMOA Report.csv")
 View(SIMOA)
-
 ```
 
-
-## Eligible Particpants
+## Eligible Participants
 
 The section where I have set out the inclusion criteria to remove people from the dataset that do not meet our criteria.
 
 ```{r}
 #| label: Eligible Participants
 ######
-# In this section I will filter out those who have indicated they are <65 or that have not answered   # yes to the question about age category or not answered either question. I will also filter out those # who did not select one of the 14 BZRAs listed because we do not want the results to be affected by other sedating medications such as antihistamines or SSRI's.
+# In this section I will filter out those who have indicated they are <65 or that have not answered   
+# yes to the question about age category or not answered either question. I will also filter out those 
+# who did not select one of the 14 BZRAs listed because we do not want the results to be affected by 
+# other sedating medications such as antihistamines or SSRI's.
 ######
-
-library(tidyverse)
 
 # Original count
 n_original <- nrow(SIMOA)
@@ -62,25 +71,26 @@ cat("Total removed:", n_original - n_final, "\n")
 
 ## Calculating Subscale Scores
 
-The section where I go about calculating the subscale scores for all the measures and ensure that this is properly done and that way I can comapre the groups in subscales rather than the full measure and it makes it easier to report.
+The section where I go about calculating the subscale scores for all the measures and ensure that this is properly done and that way I can compare the groups in subscales rather than the full measure and it makes it easier to report.
 
 ```{r}
 #| label: Subscale Scores
 ######
-# In this section I will get the subscale scores for all the measures I have used. I will also ensure # that items are appropriately reverse-coded.
-# All subscale score coding will be found in this chunk but I have divided them to make them easy to # find. I would rather have 1 chunk that way it cuts down on the amount of space being taken up for this step.
-######
-
-######
-# BFI-10 SUBSCALE SCORES
+# In this section I will get the subscale scores for all the measures I have used. I will also ensure
+# that items are appropriately reverse-coded.
+# All subscale score coding will be found in this chunk but I have divided them to make them easy to 
+# find. I would rather have 1 chunk that way it cuts down on the amount of space being taken up for this step.
 ######
 
 # First, let's create a working copy
 data_personality <- SIMOA
 
+######
+# BFI-10 SUBSCALE SCORES
+######
+
 # Items to reverse: reserved, find_fault, lazy, relaxed, few_interests
 # Formula: reversed_score = 6 - original_score
-
 data_personality <- data_personality %>%
   mutate(
     reserved_rev = 6 - reserved,
@@ -90,15 +100,14 @@ data_personality <- data_personality %>%
     few_interests_rev = 6 - few_interests
   )
 
-# Verifying Reverse-Coding -- ALL GOOD!!
-# Check first 10 rows side by side
+# Verifying Reverse-Coding
 data_personality %>%
   select(reserved, reserved_rev, find_fault, find_fault_rev, lazy, lazy_rev, 
          relaxed, relaxed_rev, few_interests, few_interests_rev) %>%
   head(10)
 
 # Verify the math: original + reversed should equal 6
-data_personality %>%
+verification_check <- data_personality %>%
   mutate(
     reserved_sum = reserved + reserved_rev,
     find_fault_sum = find_fault + find_fault_rev,
@@ -106,8 +115,10 @@ data_personality %>%
     relaxed_sum = relaxed + relaxed_rev,
     few_interests_sum = few_interests + few_interests_rev
   ) %>%
-  select(ends_with("_sum")) %>%
-  summary()
+  select(ends_with("_sum"))
+
+cat("BFI-10 Reverse coding verification (all should equal 6):\n")
+summary(verification_check)
 
 # Creating personality total scores
 data_personality <- data_personality %>%
@@ -145,18 +156,8 @@ data_personality <- data_personality %>%
     # Note: surps17 is NOT reversed
   )
 
-# Verifying Reverse-Coding -- ALL GOOD!!
-data_personality %>%
-  select(surps1, surps1_rev, surps4, surps4_rev, surps7, surps7_rev) %>%
-  head(10) %>%
-  mutate(
-    check1 = surps1 + surps1_rev,
-    check4 = surps4 + surps4_rev,
-    check7 = surps7 + surps7_rev
-  )
-
 # Quick verification - all sums should equal 5
-cat("All sums should equal 5:\n")
+cat("SURPS reverse coding verification (all should equal 5):\n")
 print(unique(data_personality$surps1 + data_personality$surps1_rev))
 print(unique(data_personality$surps4 + data_personality$surps4_rev))
 print(unique(data_personality$surps7 + data_personality$surps7_rev))
@@ -183,7 +184,6 @@ data_personality <- data_personality %>%
 
 # Response scale: 0-10 (0 = Strongly Disagree, 10 = Strongly Agree)
 # No reverse coding needed for DBAS-16
-
 data_personality <- data_personality %>%
   mutate(
     # Expectations subscale (2 items)
@@ -193,29 +193,17 @@ data_personality <- data_personality %>%
     DBAS_Medications = rowMeans(select(., dbas_6, dbas_13, dbas_15), na.rm = TRUE),
     
     # Worry/Helplessness subscale (6 items)
-    DBAS_Worry = rowMeans(select(., dbas_3, dbas_4, dbas_8, dbas_10, dbas_11, dbas_14), na.rm = TRUE),
+    DBAS_Worry_Helplessness = rowMeans(select(., dbas_3, dbas_4, dbas_8, dbas_10, dbas_11, dbas_14), na.rm = TRUE),
     
     # Consequences subscale (5 items)
     DBAS_Consequences = rowMeans(select(., dbas_5, dbas_7, dbas_9, dbas_12, dbas_16), na.rm = TRUE)
   )
 
-# Quick verification
+# DBAS verification
 cat("DBAS-16 Subscale Summary:\n")
 data_personality %>%
-  select(DBAS_Expectations, DBAS_Medications, DBAS_Worry, DBAS_Consequences) %>%
+  select(DBAS_Expectations, DBAS_Medications, DBAS_Worry_Helplessness, DBAS_Consequences) %>%
   summary()
-
-# Check for missing data patterns
-cat("\nMissing values per subscale:\n")
-data_personality %>%
-  select(DBAS_Expectations, DBAS_Medications, DBAS_Worry, DBAS_Consequences) %>%
-  summarise_all(~sum(is.na(.)))
-
-# Optional: Check first few rows
-cat("\nFirst 10 rows of DBAS subscales:\n")
-data_personality %>%
-  select(DBAS_Expectations, DBAS_Medications, DBAS_Worry, DBAS_Consequences) %>%
-  head(10)
 
 ######
 # CISS SUBSCALE SCORES
@@ -233,13 +221,203 @@ data_personality <- data_personality %>%
     CISS_Emotional_Style = ciss3 + ciss5 + ciss10 + ciss12 + ciss14 + ciss17 + ciss20
   )
 
-# ============================================================================
-# VERIFICATION: Check CISS subscale creation
-# ============================================================================
-cat("CISS-21 Subscale Summary:\n")
-data_personality %>%
-  select(CISS_Avoidance_Style, CISS_Task_Style, CISS_Emotional_Style) %>%
-  summary()
+# Calculate DBAS total score (sum of all subscales)
+data_personality <- data_personality %>%
+  mutate(
+    # Total DBAS score (sum of all 4 subscales)
+    dbas_score = DBAS_Expectations + DBAS_Medications + DBAS_Worry_Helplessness + DBAS_Consequences
+  )
+
+# Verification for DBAS total score
+cat("DBAS Total Score Summary:\n")
+summary(data_personality$dbas_score)
+cat("Expected range: 0-10 (average of subscales) or sum of raw items\n\n")
+```
+
+
+## MICE Parameters Optimization
+
+This section examines the data to determine the ideal number of iterations and imputations I should use on my code to ensure it is the ideal number.
+
+```{r}
+#| label: MICE Parameters Optimization
+######
+# Determine optimal number of imputations and iterations for MICE
+######
+
+# Quick initial analysis to estimate required imputations
+# Rule of thumb: number of imputations should be at least equal to percentage of missing cases
+
+# Calculate overall missingness
+initial_dataset <- data_personality %>%
+  select(all_of(c(
+    "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications",
+    "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+    "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+    "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
+    "osss_3_score", "phq2_score", "age", "sex", "gender", "prov_terr", 
+    "education", "employment", "driving_freq", "income", "scrn_stopped_bzra"
+  )))
+
+# Calculate percentage of incomplete cases
+incomplete_cases <- sum(!complete.cases(initial_dataset))
+total_cases <- nrow(initial_dataset)
+percent_incomplete <- round((incomplete_cases / total_cases) * 100, 1)
+
+cat("=== MICE PARAMETER OPTIMIZATION ===\n")
+cat("Total cases:", total_cases, "\n")
+cat("Complete cases:", total_cases - incomplete_cases, "\n") 
+cat("Incomplete cases:", incomplete_cases, "\n")
+cat("Percentage incomplete:", percent_incomplete, "%\n\n")
+
+# Recommend number of imputations
+recommended_m <- max(5, ceiling(percent_incomplete))
+if(recommended_m > 20) recommended_m <- 20  # Cap at reasonable maximum
+
+cat("RECOMMENDATIONS:\n")
+cat("Minimum imputations (m):", max(5, percent_incomplete), "\n")
+cat("Recommended imputations (m):", recommended_m, "\n\n")
+
+# Test convergence with different iteration numbers
+cat("Testing convergence with different iteration numbers...\n")
+
+# Convert categorical variables to factors for testing
+test_dataset <- initial_dataset
+categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income", "scrn_stopped_bzra")
+
+for(var in categorical_vars) {
+  if(var %in% names(test_dataset)) {
+    test_dataset[[var]] <- as.factor(test_dataset[[var]])
+  }
+}
+
+# Test with 5 iterations (quick test)
+set.seed(123)
+mice_test_5 <- mice(test_dataset, m = 3, maxit = 5, printFlag = FALSE)
+
+# Test with 10 iterations  
+set.seed(123)
+mice_test_10 <- mice(test_dataset, m = 3, maxit = 10, printFlag = FALSE)
+
+# Test with 20 iterations
+set.seed(123)
+mice_test_20 <- mice(test_dataset, m = 3, maxit = 20, printFlag = FALSE)
+
+# Plot convergence (if you want to see plots, uncomment these lines)
+plot(mice_test_5)
+plot(mice_test_10) 
+plot(mice_test_20)
+
+# Check convergence statistics
+cat("Convergence check complete.\n")
+cat("Recommended iterations (maxit): 10-20 (check plots if convergence issues)\n\n")
+
+cat("FINAL RECOMMENDATIONS:\n")
+cat("Use m =", recommended_m, "imputations\n")
+cat("Use maxit = 10 iterations (increase to 20 if convergence issues)\n")
+cat("Monitor convergence plots if you notice unstable results\n\n")
+```
+
+
+## Missing Data Analysis
+
+This section examines the missing data patterns before doing the multiple imputation to see if any special attention or statistics are required.
+
+```{r}
+#| label: Missing Data Analysis
+######
+# Examine missing data patterns before imputation
+######
+
+# Select variables for analysis
+analysis_vars <- c(
+  # DBAS scales (5 variables - including total score)
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", "dbas_score",
+  # Personality scales (5 variables)
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  # SURPS scales (4 variables)
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+  # CISS scales (3 variables)
+  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
+  # Additional variables (2 variables)
+  "osss_3_score", "phq2_score",
+  # Demographic variables (8 variables)
+  "age", "sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income",
+  # Outcome variable
+  "scrn_stopped_bzra"
+)
+
+# Create dataset with selected variables
+final_dataset <- data_personality %>%
+  select(all_of(analysis_vars))
+
+# Examine missing data patterns
+cat("=== MISSING DATA ANALYSIS ===\n")
+cat("Total sample size:", nrow(final_dataset), "\n\n")
+
+# Missing data summary
+missing_summary <- final_dataset %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  mutate(missing_percent = round((missing_count / nrow(final_dataset)) * 100, 1)) %>%
+  arrange(desc(missing_count))
+
+print("Missing data by variable:")
+print(missing_summary)
+
+# Check missing data patterns
+cat("\nMissing data patterns:\n")
+md.pattern(final_dataset, rotate.names = TRUE)
+
+# Visualize missing data (optional)
+VIM::aggr(final_dataset, col = c('navyblue','red'), numbers = TRUE, sortVars = TRUE)
+```
+
+
+## Multiple Imputation
+
+This section applies the findings from the previous 2 chunks to fill in the missing data and then reports the final dataset size.
+
+```{r}
+#| label: Multiple Imputation
+######
+# Apply MICE imputation for missing data
+######
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Convert categorical variables to factors
+categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income", "scrn_stopped_bzra")
+
+for(var in categorical_vars) {
+  if(var %in% names(final_dataset)) {
+    if(!is.factor(final_dataset[[var]])) {
+      final_dataset[[var]] <- as.factor(final_dataset[[var]])
+      cat(paste("Converted", var, "to factor\n"))
+    }
+  }
+}
+
+# Check if we have complete cases for comparison
+complete_cases <- sum(complete.cases(final_dataset))
+cat("Complete cases before imputation:", complete_cases, "out of", nrow(final_dataset), "\n")
+
+# Apply MICE imputation
+cat("\n=== RUNNING MICE IMPUTATION ===\n")
+cat("This may take a moment...\n")
+
+mice_result <- mice(final_dataset, m = 5, method = 'pmm', printFlag = FALSE, seed = 123)
+
+# Get the completed dataset (using the first imputation)
+final_dataset_imputed <- complete(mice_result, 1)
+
+# Verify imputation worked
+cat("\n=== IMPUTATION VERIFICATION ===\n")
+cat("Missing values after MICE:\n")
+sapply(final_dataset_imputed, function(x) sum(is.na(x)))
+
+cat("\nFinal sample size:", nrow(final_dataset_imputed), "\n")
 ```
 
 
@@ -247,19 +425,238 @@ data_personality %>%
 
 The section where I will find all the descriptive statistics for the entirety of the group and then divide them based on whether they have stopped or continue to use BZRAs.
 
-The order of the chunks in this section will be as follows: 
-1. Entire Group Descriptive Stats; and
-2. Group Comparison Based on Current or Past Use of BZRAs.
+```{r}
+#| label: Data Preparation for Analysis
+######
+# Prepare data with grouped variables and ensure proper variable types
+######
+
+# Variables to convert to numeric (if not already)
+numeric_vars <- c("DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", "dbas_score",
+                  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness", 
+                  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity", 
+                  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style","osss_3_score", "phq2_score", "age",
+                  # Adverse Effects Variables
+                  "side_effects_1", "side_effects_2", "side_effects_3", "side_effects_4",
+                  "safety_1", "safety_2", "safety_4", "adls_1", "adls_2", 
+                  "dependence_1", "dependence_2", "dependence_3",
+                  # Past Users AE Variables (v2 versions)
+                  "side_effects_1_v2", "side_effects_2_v2", "side_effects_3_v2", "side_effects_4_v2",
+                  "safety_1_v2", "safety_2_v2", "safety_4_v2", "adls_1_v2", "adls_2_v2",
+                  "dependence_1_v2", "dependence_2_v2", "dependence_3_v2",
+                  # Substance Use Variables
+                  "med_quant", "op_use", "can_use", "alc_use_wmn", "alc_use_men",
+                  # Sleep-related substance use frequencies
+                  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", "quet_use", "traz_use", "otc_use")
+
+# Convert specified variables to numeric
+final_dataset_imputed[numeric_vars] <- lapply(final_dataset_imputed[numeric_vars], function(x) as.numeric(as.character(x)))
+
+# Create regional groupings for prov_terr variable
+if("prov_terr" %in% names(final_dataset_imputed)) {
+  final_dataset_imputed$prov_terr_region <- case_when(
+    final_dataset_imputed$prov_terr %in% c(1, 2, 3, 12) ~ "Prairies",
+    final_dataset_imputed$prov_terr %in% c(9, 11) ~ "Central Canada", 
+    final_dataset_imputed$prov_terr %in% c(4, 5, 7, 10) ~ "Atlantic Canada",
+    final_dataset_imputed$prov_terr %in% c(6, 8, 13) ~ "Territories",
+    TRUE ~ NA_character_
+  )
+  
+  final_dataset_imputed$prov_terr_region <- factor(final_dataset_imputed$prov_terr_region,
+                                                   levels = c("Prairies", "Central Canada", 
+                                                             "Atlantic Canada", "Territories"))
+}
+
+# Create education groupings
+if("education" %in% names(final_dataset_imputed)) {
+  final_dataset_imputed$education_level <- case_when(
+    final_dataset_imputed$education %in% c(1, 2, 3) ~ "High School or Less",
+    final_dataset_imputed$education %in% c(4, 5) ~ "Trade School/University",
+    TRUE ~ NA_character_
+  )
+  
+  final_dataset_imputed$education_level <- factor(final_dataset_imputed$education_level,
+                                                  levels = c("High School or Less", "Trade School/University"))
+}
+
+# Create employment groupings
+if("employment" %in% names(final_dataset_imputed)) {
+  final_dataset_imputed$employment_status <- case_when(
+    final_dataset_imputed$employment %in% c(0, 3, 4) ~ "Retired/Not in Workforce",
+    final_dataset_imputed$employment %in% c(1, 2) ~ "Full- or Part-Time",
+    TRUE ~ NA_character_
+  )
+  
+  final_dataset_imputed$employment_status <- factor(final_dataset_imputed$employment_status,
+                                                    levels = c("Full- or Part-Time", "Retired/Not in Workforce"))
+}
+```
+
+
+## Entire Group Descriptives
 
 ```{r}
-#| label: Entire Group
+#| label: Entire Group Descriptives
 ######
 # In this section I will include the code that will describe the entire sample. This section of the 
-# code will not divide people based on whether or not they have stopped using BZRAs. I can also add  # more comparisons later such as by AEs or any other factors.
+# code will not divide people based on whether or not they have stopped using BZRAs.
 ######
 
+# Calculate means and SDs for numeric variables
+numeric_stats <- data.frame(
+  Variable = numeric_vars,
+  Mean = round(sapply(final_dataset_imputed[numeric_vars], function(x) mean(x, na.rm = TRUE)), 2),
+  SD = round(sapply(final_dataset_imputed[numeric_vars], function(x) sd(x, na.rm = TRUE)), 2),
+  Min = round(sapply(final_dataset_imputed[numeric_vars], function(x) min(x, na.rm = TRUE)), 2),
+  Max = round(sapply(final_dataset_imputed[numeric_vars], function(x) max(x, na.rm = TRUE)), 2)
+)
 
+cat("=== ENTIRE SAMPLE DESCRIPTIVE STATISTICS ===\n")
+print("NUMERIC VARIABLES:")
+print(numeric_stats)
 
+# Show frequency tables for categorical variables (using grouped versions)
+categorical_vars <- c("sex", "gender", "prov_terr_region", "education_level", "employment_status", "driving_freq", "income", "scrn_stopped_bzra")
+
+print("\nCATEGORICAL VARIABLES:")
+for(var in categorical_vars) {
+  if(var %in% names(final_dataset_imputed)) {
+    cat("\n", var, ":\n")
+    print(table(final_dataset_imputed[[var]], useNA = "ifany"))
+    cat("Percentages:\n")
+    print(round(prop.table(table(final_dataset_imputed[[var]], useNA = "ifany")) * 100, 1))
+  }
+}
 ```
+
+
+## Group Comparison Descritpives
+
+```{r}
+#| label: Group Comparisons by BZRA Status
+######
+# Compare groups based on whether they have stopped using BZRAs (scrn_stopped_bzra)
+######
+
+# Check if outcome variable exists and has valid values
+if("scrn_stopped_bzra" %in% names(final_dataset_imputed)) {
+  cat("=== GROUP COMPARISONS BY BZRA CESSATION STATUS ===\n")
+  cat("Outcome variable distribution:\n")
+  print(table(final_dataset_imputed$scrn_stopped_bzra, useNA = "ifany"))
+  
+  # Diagnostic check for the grouping variable
+  cat("\nDiagnostic check for outcome variable:\n")
+  cat("Variable type:", class(final_dataset_imputed$scrn_stopped_bzra), "\n")
+  cat("Levels:", levels(final_dataset_imputed$scrn_stopped_bzra), "\n")
+  
+  # Test one variable manually to ensure grouping works
+  cat("\nTesting grouping function with age variable:\n")
+  test_comparison <- final_dataset_imputed %>%
+    group_by(scrn_stopped_bzra) %>%
+    summarise(
+      n = n(),
+      Mean_Age = round(mean(age, na.rm = TRUE), 2),
+      SD_Age = round(sd(age, na.rm = TRUE), 2),
+      .groups = 'drop'
+    )
+  print(test_comparison)
+  
+  # Group comparisons for numeric variables
+  cat("\n=== NUMERIC VARIABLES BY GROUP ===\n")
+  for(var in numeric_vars) {
+    cat("\n", var, ":\n")
+    group_stats <- final_dataset_imputed %>%
+      group_by(scrn_stopped_bzra) %>%
+      summarise(
+        n = n(),
+        Mean = round(mean(!!sym(var), na.rm = TRUE), 2),
+        SD = round(sd(!!sym(var), na.rm = TRUE), 2),
+        .groups = 'drop'
+      )
+    print(group_stats)
+    
+    # Calculate Cohen's d effect size
+    group_0 <- final_dataset_imputed %>% 
+      filter(scrn_stopped_bzra == "0") %>% 
+      pull(!!sym(var))
+    group_1 <- final_dataset_imputed %>% 
+      filter(scrn_stopped_bzra == "1") %>% 
+      pull(!!sym(var))
+    
+    # Calculate effect size using effsize package
+    if(length(group_0) > 0 & length(group_1) > 0) {
+      effect_result <- effsize::cohen.d(group_1, group_0, na.rm = TRUE)
+      cat("Cohen's d:", round(effect_result$estimate, 3), "\n")
+      cat("Effect size magnitude:", effect_result$magnitude, "\n")
+      
+      # Add interpretation
+      d_value <- abs(effect_result$estimate)
+      interpretation <- if(d_value < 0.2) "negligible" else
+                       if(d_value < 0.5) "small" else  
+                       if(d_value < 0.8) "medium" else "large"
+      cat("Interpretation:", interpretation, "effect\n")
+    }
+    
+    cat("---\n")  # Add separator for clarity
+  }
+  
+  # Group comparisons for categorical variables
+  cat("\n=== CATEGORICAL VARIABLES BY GROUP ===\n")
+  categorical_comparison_vars <- c("sex", "gender", "prov_terr_region", "education_level", 
+                                  "employment_status", "driving_freq", "income")
+  
+  for(var in categorical_comparison_vars) {
+    if(var %in% names(final_dataset_imputed)) {
+      cat("\n", var, " by BZRA cessation status:\n")
+      print(table(final_dataset_imputed[[var]], final_dataset_imputed$scrn_stopped_bzra, useNA = "ifany"))
+    }
+  }
+  
+  # Additional substance use and medication comparisons
+  cat("\n=== SUBSTANCE USE AND MEDICATIONS BY GROUP ===\n")
+  
+  # Alcohol use comparison
+  if("alc_use_wmn" %in% names(final_dataset_imputed) | "alc_use_men" %in% names(final_dataset_imputed)) {
+    # Create combined alcohol variable
+    final_dataset_imputed$alcohol_use <- case_when(
+      !is.na(final_dataset_imputed$alc_use_wmn) ~ final_dataset_imputed$alc_use_wmn,
+      !is.na(final_dataset_imputed$alc_use_men) ~ final_dataset_imputed$alc_use_men,
+      TRUE ~ NA_real_
+    )
+    
+    cat("\nAlcohol use by BZRA cessation status:\n")
+    print(table(final_dataset_imputed$alcohol_use, final_dataset_imputed$scrn_stopped_bzra, useNA = "ifany"))
+  }
+  
+  # Cannabis use comparison
+  if("can_use" %in% names(final_dataset_imputed)) {
+    cat("\nCannabis use by BZRA cessation status:\n")
+    print(table(final_dataset_imputed$can_use, final_dataset_imputed$scrn_stopped_bzra, useNA = "ifany"))
+  }
+  
+  # Other medication use comparisons
+  other_med_vars <- c("op_use", "med_quant", "other_sub___0", "other_sub___1", 
+                     "other_sub___2", "other_sub___3", "other_sub___4", 
+                     "other_sub___5", "other_sub___6", "other_sub___7")
+  
+  for(var in other_med_vars) {
+    if(var %in% names(final_dataset_imputed)) {
+      cat("\n", var, " by BZRA cessation status:\n")
+      print(table(final_dataset_imputed[[var]], final_dataset_imputed$scrn_stopped_bzra, useNA = "ifany"))
+    }
+  }
+  
+} else {
+  cat("WARNING: Outcome variable 'scrn_stopped_bzra' not found in dataset.\n")
+  cat("Available variables:\n")
+  print(names(final_dataset_imputed))
+}
+
+cat("\n=== ANALYSIS READY ===\n")
+cat("Dataset 'final_dataset_imputed' is ready for statistical analysis.\n")
+cat("Sample size:", nrow(final_dataset_imputed), "\n")
+```
+
+
 
 
