@@ -32,7 +32,7 @@ library(ggplot2)      # For plotting (part of tidyverse but explicit)
 
 # Load the dataset
 SIMOA <- read_csv("SIMOA Report.csv")
-View(SIMOA)
+#View(SIMOA)
 ```
 
 ## Eligible Participants
@@ -342,13 +342,12 @@ analysis_vars <- c(
   # Additional variables (2 variables)
   "osss_3_score", "phq2_score",
   # Demographic variables (8 variables)
-  "age", "sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income",
+  "age", "sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income"
   # Outcome variable
   #"scrn_stopped_bzra"
 )
 
 # I removed scrn_stopped_bzra because it is the outcome variable and should not be imputed because it may create artificial relationships, this is the prediction/analysis variable so imputing it would be circular reasoning, CI and other stats may be incorrect if the outcome is imputed.
-
 
 
 # Create dataset with selected variables
@@ -409,7 +408,6 @@ cat("Complete cases before imputation:", complete_cases, "out of", nrow(final_da
 
 # Apply MICE imputation
 cat("\n=== RUNNING MICE IMPUTATION ===\n")
-cat("This may take a moment...\n")
 
 mice_result <- mice(final_dataset, m = 5, method = 'pmm', printFlag = FALSE, seed = 123)
 
@@ -429,6 +427,206 @@ cat("Added outcome variable back to dataset for analysis\n")
 ```
 
 
+## Secondary Variables
+
+This section adds variables about adverse effects, dependence, negative daytime experiences, substance use, sleep-related substance use.
+
+These variables could not be imputed because they are not MAR and since they are MNAR multiple imputation is not ideal to analyze the missingness.
+
+```{r}
+#| label: Adding Secondary Variables for Complete Case Analysis
+######
+# Add adverse effects and substance use variables back to imputed dataset
+# These variables are not imputed due to MNAR patterns but kept for secondary analyses
+######
+
+# 1. Add the variables back to your imputed dataset
+missing_vars_to_add <- c(
+  # Adverse effects - current users
+  "side_effects_1", "side_effects_2", "side_effects_3", "side_effects_4",
+  "safety_1", "safety_2", "safety_4", "adls_1", "adls_2", 
+  "dependence_1", "dependence_2", "dependence_3",
+  # Adverse effects - past users (v2 versions)
+  "side_effects_1_v2", "side_effects_2_v2", "side_effects_3_v2", "side_effects_4_v2",
+  "safety_1_v2", "safety_2_v2", "safety_4_v2", "adls_1_v2", "adls_2_v2",
+  "dependence_1_v2", "dependence_2_v2", "dependence_3_v2",
+  # Substance use variables
+  "med_quant", "op_use", "can_use", "alc_use_wmn", "alc_use_men",
+  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", "quet_use", "traz_use", "otc_use"
+)
+
+# Check which variables exist in original dataset
+existing_vars <- missing_vars_to_add[missing_vars_to_add %in% names(data_personality)]
+
+cat("Variables found in original dataset to add back:\n")
+print(existing_vars)
+
+# Add them back to imputed dataset (keep missing values as missing)
+if(length(existing_vars) > 0) {
+  n_rows <- nrow(final_dataset_imputed)
+  
+  for(var in existing_vars) {
+    final_dataset_imputed[[var]] <- data_personality[[var]][1:n_rows]
+    cat(sprintf("Added %s back (keeping original missing pattern)\n", var))
+  }
+}
+
+# Combine current and past user adverse effects variables
+# This creates unified variables that use current user data for current users,
+# and past user data for past users, identified by scrn_stopped_bzra
+cat("\n=== COMBINING CURRENT AND PAST USER VARIABLES ===\n")
+
+# Define variable pairs to combine
+var_pairs <- list(
+  side_effects_1 = c("side_effects_1", "side_effects_1_v2"),
+  side_effects_2 = c("side_effects_2", "side_effects_2_v2"),
+  side_effects_3 = c("side_effects_3", "side_effects_3_v2"),
+  side_effects_4 = c("side_effects_4", "side_effects_4_v2"),
+  safety_1 = c("safety_1", "safety_1_v2"),
+  safety_2 = c("safety_2", "safety_2_v2"),
+  safety_4 = c("safety_4", "safety_4_v2"),
+  adls_1 = c("adls_1", "adls_1_v2"),
+  adls_2 = c("adls_2", "adls_2_v2"),
+  dependence_1 = c("dependence_1", "dependence_1_v2"),
+  dependence_2 = c("dependence_2", "dependence_2_v2"),
+  dependence_3 = c("dependence_3", "dependence_3_v2")
+)
+
+# Create combined variables
+for(combined_name in names(var_pairs)) {
+  current_var <- var_pairs[[combined_name]][1]
+  past_var <- var_pairs[[combined_name]][2]
+  
+  if(current_var %in% names(final_dataset_imputed) && past_var %in% names(final_dataset_imputed)) {
+    # Combine: use current user data for current users (scrn_stopped_bzra == 0), 
+    # past user data for past users (scrn_stopped_bzra == 1)
+    final_dataset_imputed[[combined_name]] <- ifelse(
+      final_dataset_imputed$scrn_stopped_bzra == 0, 
+      final_dataset_imputed[[current_var]], 
+      final_dataset_imputed[[past_var]]
+    )
+    cat(sprintf("Created combined %s from %s and %s\n", combined_name, current_var, past_var))
+    
+    # Remove the separate versions to avoid confusion
+    final_dataset_imputed[[current_var]] <- NULL
+    final_dataset_imputed[[past_var]] <- NULL
+    
+  } else if(current_var %in% names(final_dataset_imputed)) {
+    # Only current version exists - rename to remove version indicator
+    final_dataset_imputed[[combined_name]] <- final_dataset_imputed[[current_var]]
+    final_dataset_imputed[[current_var]] <- NULL
+    cat(sprintf("Used only %s (renamed to %s)\n", current_var, combined_name))
+    
+  } else if(past_var %in% names(final_dataset_imputed)) {
+    # Only past version exists - rename to remove version indicator  
+    final_dataset_imputed[[combined_name]] <- final_dataset_imputed[[past_var]]
+    final_dataset_imputed[[past_var]] <- NULL
+    cat(sprintf("Used only %s (renamed to %s)\n", past_var, combined_name))
+  }
+}
+
+# 2. Create analysis datasets for different purposes
+
+# Main analysis dataset (your current imputed data)
+main_analysis_data <- final_dataset_imputed %>%
+  select(all_of(c(
+    # Core imputed variables
+    "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", "dbas_score",
+    "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+    "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+    "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
+    "osss_3_score", "phq2_score", "age", "sex", "gender", "prov_terr",
+    "education", "employment", "driving_freq", "income",
+    # Outcome
+    "scrn_stopped_bzra"
+  )))
+
+cat(sprintf("\nMain analysis dataset: %d complete cases out of %d total\n", 
+            sum(complete.cases(main_analysis_data)), nrow(main_analysis_data)))
+
+# 3. Secondary analysis datasets (complete case for specific domains)
+if(length(existing_vars) > 0) {
+  
+  # Adverse effects analysis dataset (using combined variables)
+  adverse_effects_vars <- names(final_dataset_imputed)[grepl("^(side_effects_|safety_|adls_|dependence_)[0-9]+$", names(final_dataset_imputed))]
+  
+  if(length(adverse_effects_vars) > 0) {
+    adverse_effects_data <- final_dataset_imputed %>%
+      select(all_of(c(
+        # Core predictors (imputed)
+        "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications",
+        "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+        "age", "sex", "education",
+        # Adverse effects (not imputed)
+        adverse_effects_vars,
+        # Outcome
+        "scrn_stopped_bzra"
+      ))) %>%
+      filter(complete.cases(.))  # Complete case analysis
+    
+    cat(sprintf("Adverse effects analysis dataset: %d complete cases\n", nrow(adverse_effects_data)))
+  }
+  
+  # Substance use analysis dataset (substance use variables weren't combined)
+  substance_use_vars <- names(final_dataset_imputed)[grepl("alc_|can_|op_|med_|melatonin|quet|traz|otc", names(final_dataset_imputed))]
+  
+  if(length(substance_use_vars) > 0) {
+    substance_use_data <- final_dataset_imputed %>%
+      select(all_of(c(
+        # Core predictors (imputed)
+        "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications",
+        "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+        "age", "sex", "education",
+        # Substance use (not imputed)
+        substance_use_vars,
+        # Outcome
+        "scrn_stopped_bzra"
+      ))) %>%
+      filter(complete.cases(.))  # Complete case analysis
+    
+    cat(sprintf("Substance use analysis dataset: %d complete cases\n", nrow(substance_use_data)))
+  }
+}
+
+# 4. Summary of approach
+cat("\n=== RECOMMENDED ANALYTICAL APPROACH ===\n")
+cat("1. MAIN ANALYSES: Use full imputed dataset (n=", nrow(main_analysis_data), ")\n")
+cat("   - Core personality and demographic predictors\n")
+cat("   - Maximum statistical power\n")
+cat("   - Unbiased by missing data patterns\n\n")
+
+cat("2. SECONDARY ANALYSES: Use domain-specific complete case datasets\n")
+cat("   - Adverse effects analyses: Complete case within relevant subgroups\n")
+cat("   - Substance use analyses: Complete case analysis\n")
+cat("   - Report sample sizes and missing data patterns\n\n")
+
+cat("3. SENSITIVITY ANALYSES:\n")
+cat("   - Compare main results with complete case analysis\n")
+cat("   - Report robustness of findings\n")
+cat("   - Document missing data assumptions\n")
+
+# Convert final variables to numeric where appropriate
+# Update to use combined variable names
+combined_adverse_vars <- names(final_dataset_imputed)[grepl("^(side_effects_|safety_|adls_|dependence_)[0-9]+$", names(final_dataset_imputed))]
+substance_vars <- names(final_dataset_imputed)[grepl("alc_|can_|op_|med_|melatonin|quet|traz|otc", names(final_dataset_imputed))]
+
+numeric_vars <- c("DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", "dbas_score",
+                 "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness", 
+                 "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity", 
+                 "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style","osss_3_score", "phq2_score", "age",
+                 combined_adverse_vars, substance_vars)
+
+# Filter to only existing variables
+final_numeric_vars <- numeric_vars[numeric_vars %in% names(final_dataset_imputed)]
+
+# Convert to numeric
+final_dataset_imputed[final_numeric_vars] <- lapply(final_dataset_imputed[final_numeric_vars], function(x) as.numeric(as.character(x)))
+
+cat(sprintf("\nConverted %d variables to numeric\n", length(final_numeric_vars)))
+cat("Final dataset ready for analysis!\n")
+```
+
+
 ## Group Comparison
 
 The section where I will find all the descriptive statistics for the entirety of the group and then divide them based on whether they have stopped or continue to use BZRAs.
@@ -439,28 +637,30 @@ The section where I will find all the descriptive statistics for the entirety of
 # Prepare data with grouped variables and ensure proper variable types
 ######
 
-# Variables to convert to numeric (if not already)
-numeric_vars <- c("DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", "dbas_score",
-                  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness", 
-                  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity", 
-                  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style","osss_3_score", "phq2_score", "age",
-                  # Adverse Effects Variables
-                  "side_effects_1", "side_effects_2", "side_effects_3", "side_effects_4",
-                  "safety_1", "safety_2", "safety_4", "adls_1", "adls_2", 
-                  "dependence_1", "dependence_2", "dependence_3",
-                  # Past Users AE Variables (v2 versions)
-                  "side_effects_1_v2", "side_effects_2_v2", "side_effects_3_v2", "side_effects_4_v2",
-                  "safety_1_v2", "safety_2_v2", "safety_4_v2", "adls_1_v2", "adls_2_v2",
-                  "dependence_1_v2", "dependence_2_v2", "dependence_3_v2",
-                  # Substance Use Variables
-                  "med_quant", "op_use", "can_use", "alc_use_wmn", "alc_use_men",
-                  # Sleep-related substance use frequencies
-                  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", "quet_use", "traz_use", "otc_use")
+# Core numeric variables
+core_numeric_vars <- c("DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", "dbas_score",
+                       "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness", 
+                       "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity", 
+                       "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
+                       "osss_3_score", "phq2_score", "age")
 
-# Convert specified variables to numeric
-final_dataset_imputed[numeric_vars] <- lapply(final_dataset_imputed[numeric_vars], function(x) as.numeric(as.character(x)))
+# Dynamically detect combined adverse effects variables
+combined_adverse_vars <- names(final_dataset_imputed)[grepl("^(side_effects_|safety_|adls_|dependence_)[0-9]+$", 
+                                                           names(final_dataset_imputed))]
 
-# Create regional groupings for prov_terr variable
+# Dynamically detect substance use variables
+substance_vars <- names(final_dataset_imputed)[grepl("alc_|can_|op_|med_|melatonin|quet|traz|otc", 
+                                                     names(final_dataset_imputed))]
+
+# Final list of numeric variables (only those that exist in dataset)
+final_numeric_vars <- c(core_numeric_vars, combined_adverse_vars, substance_vars)
+final_numeric_vars <- final_numeric_vars[final_numeric_vars %in% names(final_dataset_imputed)]
+
+# Convert to numeric safely
+final_dataset_imputed[final_numeric_vars] <- lapply(final_dataset_imputed[final_numeric_vars], 
+                                                    function(x) as.numeric(as.character(x)))
+
+# --- Regional groupings ---
 if("prov_terr" %in% names(final_dataset_imputed)) {
   final_dataset_imputed$prov_terr_region <- case_when(
     final_dataset_imputed$prov_terr %in% c(1, 2, 3, 12) ~ "Prairies",
@@ -472,10 +672,10 @@ if("prov_terr" %in% names(final_dataset_imputed)) {
   
   final_dataset_imputed$prov_terr_region <- factor(final_dataset_imputed$prov_terr_region,
                                                    levels = c("Prairies", "Central Canada", 
-                                                             "Atlantic Canada", "Territories"))
+                                                              "Atlantic Canada", "Territories"))
 }
 
-# Create education groupings
+# --- Education groupings ---
 if("education" %in% names(final_dataset_imputed)) {
   final_dataset_imputed$education_level <- case_when(
     final_dataset_imputed$education %in% c(1, 2, 3) ~ "High School or Less",
@@ -487,7 +687,7 @@ if("education" %in% names(final_dataset_imputed)) {
                                                   levels = c("High School or Less", "Trade School/University"))
 }
 
-# Create employment groupings
+# --- Employment groupings ---
 if("employment" %in% names(final_dataset_imputed)) {
   final_dataset_imputed$employment_status <- case_when(
     final_dataset_imputed$employment %in% c(0, 3, 4) ~ "Retired/Not in Workforce",
@@ -503,32 +703,39 @@ if("employment" %in% names(final_dataset_imputed)) {
 
 ## Entire Group Descriptives
 
+This section of the code will present all the descriptive statistics for the entire group with the variables about adverse effects, dependence, negative daytime experiences, substance use, sleep-related substance use added to the core personality and demographics data. 
+
 ```{r}
 #| label: Entire Group Descriptives
 ######
-# In this section I will include the code that will describe the entire sample. This section of the 
-# code will not divide people based on whether or not they have stopped using BZRAs.
+# Descriptive statistics for the entire sample (not divided by discontinuation status)
 ######
 
-# Calculate means and SDs for numeric variables
-numeric_stats <- data.frame(
-  Variable = numeric_vars,
-  Mean = round(sapply(final_dataset_imputed[numeric_vars], function(x) mean(x, na.rm = TRUE)), 2),
-  SD = round(sapply(final_dataset_imputed[numeric_vars], function(x) sd(x, na.rm = TRUE)), 2),
-  Min = round(sapply(final_dataset_imputed[numeric_vars], function(x) min(x, na.rm = TRUE)), 2),
-  Max = round(sapply(final_dataset_imputed[numeric_vars], function(x) max(x, na.rm = TRUE)), 2)
-)
+# --- Numeric Variables Descriptives ---
+if (exists("final_numeric_vars")) {
+  numeric_stats <- data.frame(
+    Variable = final_numeric_vars,
+    Mean = round(sapply(final_dataset_imputed[final_numeric_vars], function(x) mean(x, na.rm = TRUE)), 2),
+    SD   = round(sapply(final_dataset_imputed[final_numeric_vars], function(x) sd(x, na.rm = TRUE)), 2),
+    Min  = round(sapply(final_dataset_imputed[final_numeric_vars], function(x) min(x, na.rm = TRUE)), 2),
+    Max  = round(sapply(final_dataset_imputed[final_numeric_vars], function(x) max(x, na.rm = TRUE)), 2)
+  )
+  
+  cat("=== ENTIRE SAMPLE DESCRIPTIVE STATISTICS ===\n")
+  cat("\nNUMERIC VARIABLES:\n")
+  print(numeric_stats)
+} else {
+  cat("No numeric variables found for descriptives.\n")
+}
 
-cat("=== ENTIRE SAMPLE DESCRIPTIVE STATISTICS ===\n")
-print("NUMERIC VARIABLES:")
-print(numeric_stats)
+# --- Categorical Variables Descriptives ---
+categorical_vars <- c("sex", "gender", "prov_terr_region", 
+                      "education_level", "employment_status", 
+                      "driving_freq", "income", "scrn_stopped_bzra")
 
-# Show frequency tables for categorical variables (using grouped versions)
-categorical_vars <- c("sex", "gender", "prov_terr_region", "education_level", "employment_status", "driving_freq", "income", "scrn_stopped_bzra")
-
-print("\nCATEGORICAL VARIABLES:")
-for(var in categorical_vars) {
-  if(var %in% names(final_dataset_imputed)) {
+cat("\nCATEGORICAL VARIABLES:\n")
+for (var in categorical_vars) {
+  if (var %in% names(final_dataset_imputed)) {
     cat("\n", var, ":\n")
     print(table(final_dataset_imputed[[var]], useNA = "ifany"))
     cat("Percentages:\n")
