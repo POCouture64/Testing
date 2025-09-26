@@ -235,36 +235,1682 @@ cat("Expected range: 0-10 (average of subscales) or sum of raw items\n\n")
 ```
 
 
+## NEW DATA PREP
+
+```{r}
+#| label: Data Preparation for Multiple Imputation
+######
+# Prepare data_personality dataset for multiple imputation
+# Include specific variables and create combined adverse effects variables
+######
+
+library(dplyr)
+library(mice)
+
+cat("=== DATA PREPARATION FOR MULTIPLE IMPUTATION ===\n")
+
+# Start with data_personality dataset
+cat("Original data_personality size:", nrow(data_personality), "\n")
+cat("Cases with missing scrn_stopped_bzra:", sum(is.na(data_personality$scrn_stopped_bzra)), "\n")
+
+# Filter to only include cases where scrn_stopped_bzra is not NA
+data_personality <- data_personality[!is.na(data_personality$scrn_stopped_bzra), ]
+cat("Valid outcome cases included:", nrow(data_personality), "\n")
+
+# Verify outcome variable distribution
+cat("scrn_stopped_bzra distribution:\n")
+print(table(data_personality$scrn_stopped_bzra, useNA = "ifany"))
+
+######
+# CREATE COMBINED ADVERSE EFFECTS VARIABLES
+######
+
+cat("\n=== CREATING COMBINED ADVERSE EFFECTS VARIABLES ===\n")
+
+# Define adverse effects variable pairs for combination
+adverse_var_pairs <- list(
+  side_effects_1_combined = c("side_effects_1", "side_effects_1_v2"),
+  side_effects_2_combined = c("side_effects_2", "side_effects_2_v2"),
+  side_effects_3_combined = c("side_effects_3", "side_effects_3_v2"),
+  side_effects_4_combined = c("side_effects_4", "side_effects_4_v2"),
+  safety_1_combined = c("safety_1", "safety_1_v2"),
+  safety_2_combined = c("safety_2", "safety_2_v2"),
+  safety_3_combined = c("safety_3", "safety_3_v2"),
+  safety_4_combined = c("safety_4", "safety_4_v2"),
+  adls_1_combined = c("adls_1", "adls_1_v2"),
+  adls_2_combined = c("adls_2", "adls_2_v2"),
+  dependence_1_combined = c("dependence_1", "dependence_1_v2"),
+  dependence_2_combined = c("dependence_2", "dependence_2_v2"),
+  dependence_3_combined = c("dependence_3", "dependence_3_v2")
+)
+
+# Create combined variables by taking the first non-missing value
+for(combined_var in names(adverse_var_pairs)) {
+  var1 <- adverse_var_pairs[[combined_var]][1]
+  var2 <- adverse_var_pairs[[combined_var]][2]
+  
+  if(var1 %in% names(data_personality) && var2 %in% names(data_personality)) {
+    # Create combined variable: use var1 if not missing, otherwise use var2
+    data_personality[[combined_var]] <- ifelse(
+      !is.na(data_personality[[var1]]), 
+      data_personality[[var1]], 
+      data_personality[[var2]]
+    )
+    cat("Created:", combined_var, "from", var1, "and", var2, "\n")
+  } else if(var1 %in% names(data_personality)) {
+    # Only var1 exists
+    data_personality[[combined_var]] <- data_personality[[var1]]
+    cat("Created:", combined_var, "from", var1, "only\n")
+  } else if(var2 %in% names(data_personality)) {
+    # Only var2 exists
+    data_personality[[combined_var]] <- data_personality[[var2]]
+    cat("Created:", combined_var, "from", var2, "only\n")
+  } else {
+    cat("Warning: Neither", var1, "nor", var2, "found in dataset\n")
+  }
+}
+
+######
+# DEFINE VARIABLES FOR ANALYSIS
+######
+
+cat("\n=== SELECTING VARIABLES FOR ANALYSIS ===\n")
+
+# Core variables requested
+core_vars <- c(
+  "age", "sex", "gender",
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", "dbas_score",
+  "Openness", "Conscientiousness", "Extraversion", "Agreeableness", "Neuroticism",
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
+  "osss_3_score", "phq2_score",
+  "prov_terr", "education", "employment", "driving_freq", "income",
+  "med_quant", "op_use", "can_use", "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", "quet_use", "traz_use", "otc_use",
+  "alc_use_wmn", "alc_use_men"
+)
+
+# Combined adverse effects variables
+combined_vars <- names(adverse_var_pairs)
+
+# All variables for analysis
+all_analysis_vars <- c(core_vars, combined_vars)
+
+cat("Total variables requested:", length(all_analysis_vars), "\n")
+
+######
+# CHECK VARIABLE AVAILABILITY AND CREATE SUBSET
+######
+
+# Check which variables are available
+available_vars <- all_analysis_vars[all_analysis_vars %in% names(data_personality)]
+missing_vars <- all_analysis_vars[!all_analysis_vars %in% names(data_personality)]
+
+cat("Variables available:", length(available_vars), "\n")
+cat("Variables not found:", length(missing_vars), "\n")
+
+if(length(missing_vars) > 0) {
+  cat("\nMissing variables:\n")
+  for(var in missing_vars) {
+    cat("  -", var, "\n")
+  }
+}
+
+# Create analysis dataset with available variables
+final_dataset_imputed <- data_personality[, available_vars, drop = FALSE]
+
+######
+# HANDLE CONDITIONAL SUBSTANCE USE VARIABLES
+######
+
+cat("\n=== HANDLING CONDITIONAL SUBSTANCE USE VARIABLES ===\n")
+
+# These variables were only shown to participants who selected them in previous questions
+# NA means they never use these substances, so recode NA to 0 ("Never")
+conditional_vars <- c("op_use", "can_use", "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", "quet_use", "traz_use", "otc_use")
+
+for(var in conditional_vars) {
+  if(var %in% names(final_dataset_imputed)) {
+    original_na_count <- sum(is.na(final_dataset_imputed[[var]]))
+    
+    # Recode NA to 0 (Never used)
+    final_dataset_imputed[[var]][is.na(final_dataset_imputed[[var]])] <- 0
+    
+    cat("Recoded", original_na_count, "NA values to 0 ('Never') for", var, "\n")
+  }
+}
+
+# Handle sex-specific alcohol use variables
+cat("\n=== HANDLING SEX-SPECIFIC ALCOHOL USE VARIABLES ===\n")
+
+# alc_use_wmn: Only shown if sex = 1 (women)
+if("alc_use_wmn" %in% names(final_dataset_imputed) && "sex" %in% names(final_dataset_imputed)) {
+  # For men (sex = 2), recode NA to appropriate "Never" value (0)
+  # For women (sex = 1), keep NA as true missing data for imputation
+  men_na_count <- sum(is.na(final_dataset_imputed$alc_use_wmn) & final_dataset_imputed$sex == 2, na.rm = TRUE)
+  final_dataset_imputed$alc_use_wmn[final_dataset_imputed$sex == 2 & is.na(final_dataset_imputed$alc_use_wmn)] <- 0
+  cat("Recoded", men_na_count, "NA values to 0 ('Never') for alc_use_wmn in men (sex=2)\n")
+  
+  # Report remaining missing data in women
+  women_na_count <- sum(is.na(final_dataset_imputed$alc_use_wmn) & final_dataset_imputed$sex == 1, na.rm = TRUE)
+  cat("Remaining missing data for alc_use_wmn in women (sex=1):", women_na_count, "\n")
+}
+
+# alc_use_men: Only shown if sex = 2 (men)  
+if("alc_use_men" %in% names(final_dataset_imputed) && "sex" %in% names(final_dataset_imputed)) {
+  # For women (sex = 1), recode NA to appropriate "Never" value (1, based on the scale)
+  # For men (sex = 2), keep NA as true missing data for imputation
+  women_na_count <- sum(is.na(final_dataset_imputed$alc_use_men) & final_dataset_imputed$sex == 1, na.rm = TRUE)
+  final_dataset_imputed$alc_use_men[final_dataset_imputed$sex == 1 & is.na(final_dataset_imputed$alc_use_men)] <- 1
+  cat("Recoded", women_na_count, "NA values to 1 ('Never') for alc_use_men in women (sex=1)\n")
+  
+  # Report remaining missing data in men
+  men_na_count <- sum(is.na(final_dataset_imputed$alc_use_men) & final_dataset_imputed$sex == 2, na.rm = TRUE)
+  cat("Remaining missing data for alc_use_men in men (sex=2):", men_na_count, "\n")
+}
+
+# Create a combined alcohol use variable
+if("alc_use_wmn" %in% names(final_dataset_imputed) && "alc_use_men" %in% names(final_dataset_imputed) && "sex" %in% names(final_dataset_imputed)) {
+  final_dataset_imputed$alc_use_combined <- case_when(
+    final_dataset_imputed$sex == 1 ~ final_dataset_imputed$alc_use_wmn,  # Use women's scale for women
+    final_dataset_imputed$sex == 2 ~ final_dataset_imputed$alc_use_men,  # Use men's scale for men
+    TRUE ~ NA_real_
+  )
+  cat("Created combined alcohol use variable (alc_use_combined)\n")
+}
+
+######
+# CREATE REGIONAL, EDUCATION, AND EMPLOYMENT GROUPINGS
+######
+
+cat("\n=== CREATING DEMOGRAPHIC GROUPINGS ===\n")
+
+# Regional groupings
+if("prov_terr" %in% names(final_dataset_imputed)) {
+  final_dataset_imputed$prov_terr_region <- case_when(
+    final_dataset_imputed$prov_terr %in% c(1, 2, 3, 12) ~ "Prairies",
+    final_dataset_imputed$prov_terr %in% c(9, 11) ~ "Central Canada", 
+    final_dataset_imputed$prov_terr %in% c(4, 5, 7, 10) ~ "Atlantic Canada",
+    final_dataset_imputed$prov_terr %in% c(6, 8, 13) ~ "Territories",
+    TRUE ~ NA_character_
+  )
+  
+  final_dataset_imputed$prov_terr_region <- factor(final_dataset_imputed$prov_terr_region,
+                                                   levels = c("Prairies", "Central Canada", 
+                                                              "Atlantic Canada", "Territories"))
+  cat("Created regional groupings from prov_terr\n")
+}
+
+# Education groupings
+if("education" %in% names(final_dataset_imputed)) {
+  final_dataset_imputed$education_level <- case_when(
+    final_dataset_imputed$education %in% c(1, 2, 3) ~ "High School or Less",
+    final_dataset_imputed$education %in% c(4, 5) ~ "Trade School/University",
+    TRUE ~ NA_character_
+  )
+  
+  final_dataset_imputed$education_level <- factor(final_dataset_imputed$education_level,
+                                                  levels = c("High School or Less", "Trade School/University"))
+  cat("Created education level groupings from education\n")
+}
+
+# Employment groupings
+if("employment" %in% names(final_dataset_imputed)) {
+  final_dataset_imputed$employment_status <- case_when(
+    final_dataset_imputed$employment %in% c(0, 3, 4) ~ "Retired/Not in Workforce",
+    final_dataset_imputed$employment %in% c(1, 2) ~ "Full- or Part-Time",
+    TRUE ~ NA_character_
+  )
+  
+  final_dataset_imputed$employment_status <- factor(final_dataset_imputed$employment_status,
+                                                    levels = c("Full- or Part-Time", "Retired/Not in Workforce"))
+  cat("Created employment status groupings from employment\n")
+}
+
+######
+# FINAL DATASET SUMMARY
+######
+
+cat("\n=== FINAL DATASET SUMMARY ===\n")
+cat("Final dataset dimensions:", dim(final_dataset_imputed), "\n")
+cat("Number of participants:", nrow(final_dataset_imputed), "\n")
+cat("Number of variables:", ncol(final_dataset_imputed), "\n")
+
+# Missing data summary
+cat("\n=== MISSING DATA SUMMARY ===\n")
+missing_summary <- sapply(final_dataset_imputed, function(x) sum(is.na(x)))
+variables_with_missing <- missing_summary[missing_summary > 0]
+
+if(length(variables_with_missing) > 0) {
+  cat("Variables with missing data:\n")
+  for(i in 1:length(variables_with_missing)) {
+    var_name <- names(variables_with_missing)[i]
+    missing_count <- variables_with_missing[i]
+    missing_pct <- round((missing_count / nrow(final_dataset_imputed)) * 100, 1)
+    cat(paste("  ", var_name, ":", missing_count, "(", missing_pct, "%)\n"))
+  }
+  
+  # Overall completeness
+  complete_cases <- sum(complete.cases(final_dataset_imputed))
+  complete_pct <- round((complete_cases / nrow(final_dataset_imputed)) * 100, 1)
+  cat("\nComplete cases:", complete_cases, "out of", nrow(final_dataset_imputed), 
+      "(", complete_pct, "%)\n")
+} else {
+  cat("No missing data found in any variables!\n")
+}
+
+cat("\n=== DATA PREPARATION COMPLETE ===\n")
+cat("Dataset 'final_dataset_imputed' is ready for multiple imputation analysis\n")
+```
+
+
+## NEW MICE PARAMETERS
+
+```{r}
+#| label: Optimized MICE Parameters for Multiple Imputation with Conditional Variables
+######
+# MICE Optimization Setup for final_dataset_imputed
+# Now includes proper handling of conditional variables (MNAR)
+######
+
+library(mice)
+library(VIM)
+library(naniar)
+library(dplyr)
+library(corrplot)
+library(ggplot2)
+
+cat("=== MICE SETUP WITH CONDITIONAL VARIABLE HANDLING ===\n")
+
+######
+# STEP 1: PREPARE DATASET FOR IMPUTATION
+######
+
+cat("\n=== STEP 1: DATASET PREPARATION ===\n")
+
+# Remove outcome variable from imputation dataset
+if("scrn_stopped_bzra" %in% names(final_dataset_imputed)) {
+  outcome_variable <- final_dataset_imputed$scrn_stopped_bzra
+  imputation_dataset <- final_dataset_imputed %>% select(-scrn_stopped_bzra)
+  cat("Outcome variable 'scrn_stopped_bzra' removed from imputation dataset\n")
+  cat("Original variables:", ncol(final_dataset_imputed), "-> Imputation variables:", ncol(imputation_dataset), "\n")
+} else {
+  imputation_dataset <- final_dataset_imputed
+  outcome_variable <- NULL
+  cat("No outcome variable found - proceeding with all variables\n")
+}
+
+cat("Final imputation dataset dimensions:", dim(imputation_dataset), "\n")
+
+######
+# STEP 2: IDENTIFY AND HANDLE CONDITIONAL VARIABLES (MNAR)
+######
+
+cat("\n=== STEP 2: CONDITIONAL VARIABLE IDENTIFICATION & HANDLING ===\n")
+
+# Define conditional variable mappings
+# NOTE: Only including truly conditional variables (substance use frequencies)
+# Medication experience scales are NOT conditional since all participants used BZRAs
+conditional_variables <- list(
+  # Substance use frequency - 0 means "Don't use/Never"
+  zero_based = list(
+    variables = c("op_use", "can_use", "alc_use_wmn", "alc_use_combined"),
+    missing_meaning = "Does not use substance",
+    impute_value = 0,
+    description = "0 = Don't use/Never"
+  ),
+  
+  # Substance use frequency - 1 means "Less than 1 day per week" 
+  one_based = list(
+    variables = c("alc_sleep", "can_sleep", "melatonin_use", "op_sleep", 
+                  "quet_use", "traz_use", "otc_use"),
+    missing_meaning = "Does not use substance for sleep",
+    impute_value = 1,
+    description = "1 = Less than 1 day per week (minimal use)"
+  ),
+  
+  # Gender-specific alcohol use
+  gender_specific = list(
+    variables = c("alc_use_men"),  # alc_use_wmn handled above
+    missing_meaning = "Not applicable for gender or does not use",
+    impute_value = 1,
+    description = "1 = Never (for this gender group)"
+  )
+)
+
+# Function to process conditional variables
+process_conditional_variables <- function(data, conditional_vars, apply_imputation = FALSE) {
+  results <- list()
+  original_data <- data
+  
+  for(group_name in names(conditional_vars)) {
+    group_info <- conditional_vars[[group_name]]
+    existing_vars <- group_info$variables[group_info$variables %in% names(data)]
+    
+    if(length(existing_vars) == 0) {
+      cat(sprintf("Group '%s': No variables found in dataset\n", group_name))
+      next
+    }
+    
+    cat(sprintf("\nGroup '%s':\n", group_name))
+    cat("Variables:", paste(existing_vars, collapse = ", "), "\n")
+    cat("Missing interpretation:", group_info$missing_meaning, "\n")
+    cat("Imputation value:", group_info$impute_value, "(", group_info$description, ")\n")
+    
+    # Analyze missingness
+    group_results <- list()
+    total_imputed <- 0
+    
+    for(var in existing_vars) {
+      missing_count <- sum(is.na(data[[var]]))
+      missing_pct <- mean(is.na(data[[var]])) * 100
+      
+      cat(sprintf("  %s: %d missing (%.1f%%)\n", var, missing_count, missing_pct))
+      
+      if(apply_imputation && missing_count > 0) {
+        # Apply logical imputation
+        data[[var]][is.na(data[[var]])] <- group_info$impute_value
+        total_imputed <- total_imputed + missing_count
+        
+        # Verify imputation
+        remaining_missing <- sum(is.na(data[[var]]))
+        cat(sprintf("    → Imputed %d values, %d missing remain\n", 
+                   missing_count, remaining_missing))
+      }
+      
+      group_results[[var]] <- list(
+        original_missing = missing_count,
+        missing_pct = missing_pct,
+        imputed = apply_imputation
+      )
+    }
+    
+    if(apply_imputation) {
+      cat(sprintf("Group total: %d values logically imputed\n", total_imputed))
+    }
+    
+    results[[group_name]] <- group_results
+  }
+  
+  if(apply_imputation) {
+    return(list(data = data, results = results, original_data = original_data))
+  } else {
+    return(results)
+  }
+}
+
+# First, analyze without applying changes
+cat("ANALYSIS MODE - Identifying conditional variables:\n")
+analysis_results <- process_conditional_variables(imputation_dataset, conditional_variables, 
+                                                 apply_imputation = FALSE)
+
+# Apply logical imputation
+cat("\nAPPLYING LOGICAL IMPUTATION:\n")
+imputation_results <- process_conditional_variables(imputation_dataset, conditional_variables, 
+                                                   apply_imputation = TRUE)
+
+# Extract the processed dataset
+processed_dataset <- imputation_results$data
+processing_summary <- imputation_results$results
+
+# Calculate total changes
+total_originally_missing <- sum(sapply(imputation_dataset, function(x) sum(is.na(x))))
+total_remaining_missing <- sum(sapply(processed_dataset, function(x) sum(is.na(x))))
+total_logically_imputed <- total_originally_missing - total_remaining_missing
+
+cat("\nLOGICAL IMPUTATION SUMMARY:\n")
+cat("Original missing values:", total_originally_missing, "\n")
+cat("Remaining missing values:", total_remaining_missing, "\n")
+cat("Logically imputed values:", total_logically_imputed, "\n")
+cat("Reduction in missingness:", round((total_logically_imputed/total_originally_missing)*100, 1), "%\n")
+
+# Update dataset for further processing
+imputation_dataset <- processed_dataset
+
+######
+# STEP 3: VARIABLE TYPE CLASSIFICATION
+######
+
+cat("\n=== STEP 3: VARIABLE TYPE CLASSIFICATION ===\n")
+
+# Categorical variables based on REDCap codebook
+categorical_vars <- list(
+  # Binary variables (use logreg)
+  "sex" = c(1, 2),  # 1=Female, 2=Male
+  
+  # Unordered categorical (use polyreg)
+  "gender" = c(1, 2, 3, 4, 5),  # 1=Woman, 2=Man, 3=Non-binary, 4=Other, 5=Prefer not to say
+  "prov_terr" = 1:13,  # 13 provinces/territories
+  "prov_terr_region" = c("Prairies", "Central Canada", "Atlantic Canada", "Territories"),
+  
+  # Ordered categorical (use polr)
+  "education" = 1:5,  # 1=Elementary to 5=University degree
+  "employment" = 0:4,  # 0=Retired to 4=Not in workforce
+  "driving_freq" = 0:3,  # 0=Don't drive to 3=Drive 4-7 days/week  
+  "income" = 1:5,  # 1=$15K or less to 5=$80K+
+  
+  # Substance use frequency scales (ordinal, use polr) - many now logically imputed
+  "op_use" = 0:3,  # 0=Don't take to 3=7 days/week
+  "can_use" = 0:4,  # 0=Never to 4=7 days/week
+  "alc_sleep" = 1:4,  # 1=Less than 1 day/week to 4=7 days/week
+  "can_sleep" = 1:4,  # Same scale
+  "melatonin_use" = 1:4,  # Same scale
+  "op_sleep" = 1:4,  # Same scale
+  "quet_use" = 1:4,  # Same scale
+  "traz_use" = 1:4,  # Same scale
+  "otc_use" = 1:4,  # Same scale
+  "alc_use_wmn" = 0:4,  # 0=Never to 4=More than 10 drinks/week
+  "alc_use_men" = 1:5,  # 1=Never to 5=More than 14 drinks/week
+  "alc_use_combined" = 0:5,  # Combined scale
+  
+  # Medication experience scales (1-5 Likert, use polr) - many now logically imputed
+  "side_effects_1_combined" = 1:5,  # 1=Strongly Disagree to 5=Strongly Agree
+  "side_effects_2_combined" = 1:5,
+  "side_effects_3_combined" = 1:5,
+  "side_effects_4_combined" = 1:5,
+  "safety_1_combined" = 1:5,
+  "safety_2_combined" = 1:5,
+  "safety_3_combined" = 1:5,
+  "safety_4_combined" = 1:5,
+  "adls_1_combined" = 1:5,
+  "adls_2_combined" = 1:5,
+  "dependence_1_combined" = 1:5,
+  "dependence_2_combined" = 1:5,
+  "dependence_3_combined" = 1:5
+)
+
+# Continuous variables
+continuous_vars <- c(
+  "age",  # Age in years (65-120)
+  "med_quant",  # Number of medication types (0-50)
+  
+  # DBAS-16 scale variables (0-10 scale)
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", 
+  "dbas_score",  # Sum of DBAS items (0-160)
+  
+  # BFI-10 personality scales (computed from 1-5 Likert items)
+  "Openness", "Conscientiousness", "Extraversion", "Agreeableness", "Neuroticism",
+  
+  # SURPS personality scales (computed from 1-4 Likert items) 
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+  
+  # CISS coping style scales (computed from 1-5 Likert items)
+  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
+  
+  # Health and social support scores
+  "osss_3_score",  # Oslo Social Support Scale (3-14)
+  "phq2_score"     # PHQ-2 depression screening (0-6)
+)
+
+# Apply factor conversion for variables present in dataset
+for(var_name in names(categorical_vars)) {
+  if(var_name %in% names(imputation_dataset)) {
+    if(var_name == "sex") {
+      # Keep as numeric for binary logistic regression
+      imputation_dataset[[var_name]] <- as.numeric(imputation_dataset[[var_name]])
+    } else if(var_name %in% c("education_level", "employment_status", "prov_terr_region")) {
+      # These are already factors from your preparation code
+      cat("Variable", var_name, "already properly factored\n")
+    } else if(var_name %in% c("gender", "prov_terr")) {
+      # Unordered categorical - convert to factor (not ordered)
+      imputation_dataset[[var_name]] <- factor(imputation_dataset[[var_name]], 
+                                               levels = categorical_vars[[var_name]])
+    } else {
+      # Convert to ordered factor for ordinal variables
+      imputation_dataset[[var_name]] <- factor(imputation_dataset[[var_name]], 
+                                               levels = categorical_vars[[var_name]], 
+                                               ordered = TRUE)
+    }
+    cat("Processed", var_name, "for MICE imputation\n")
+  }
+}
+
+cat("Continuous variables identified:", length(continuous_vars), "\n")
+
+######
+# STEP 4: MISSING DATA MECHANISM ASSESSMENT (POST-LOGICAL IMPUTATION)
+######
+
+cat("\n=== STEP 4: MISSING DATA MECHANISM ASSESSMENT ===\n")
+cat("(Assessment performed on data AFTER logical imputation)\n")
+
+# Basic missing data overview
+vars_with_missing <- names(imputation_dataset)[sapply(imputation_dataset, function(x) any(is.na(x)))]
+cat("Variables with missing data (after logical imputation):", length(vars_with_missing), "\n")
+if(length(vars_with_missing) > 0) {
+  cat("Variables:", paste(vars_with_missing, collapse = ", "), "\n")
+}
+
+# Missing data summary
+missing_summary <- imputation_dataset %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, n_missing) %>%
+  mutate(pct_missing = round((n_missing / nrow(imputation_dataset)) * 100, 1)) %>%
+  filter(n_missing > 0) %>%
+  arrange(desc(n_missing))
+
+cat("\nVariables with remaining missing data:\n")
+if(nrow(missing_summary) > 0) {
+  print(missing_summary)
+} else {
+  cat("No missing data found after logical imputation!\n")
+}
+
+######
+# LITTLE'S MCAR TEST (ROBUST VERSION)
+######
+
+cat("\n--- LITTLE'S MCAR TEST ---\n")
+
+if(length(vars_with_missing) > 0) {
+  # Prepare data for MCAR test
+  mcar_test_data <- imputation_dataset
+  
+  # Remove variables with no missing data
+  vars_no_missing <- names(mcar_test_data)[sapply(mcar_test_data, function(x) !any(is.na(x)))]
+  if(length(vars_no_missing) > 0) {
+    cat("Removing", length(vars_no_missing), "variables with no missing data from MCAR test\n")
+    mcar_test_data <- mcar_test_data[, !names(mcar_test_data) %in% vars_no_missing]
+  }
+  
+  # Remove variables with >95% missing
+  high_missing_vars <- names(mcar_test_data)[sapply(mcar_test_data, function(x) mean(is.na(x)) > 0.95)]
+  if(length(high_missing_vars) > 0) {
+    cat("Removing", length(high_missing_vars), "variables with >95% missing data\n")
+    mcar_test_data <- mcar_test_data[, !names(mcar_test_data) %in% high_missing_vars]
+  }
+  
+  # Attempt Little's MCAR test
+  tryCatch({
+    mcar_result <- mcar_test(mcar_test_data)
+    cat("Little's MCAR Test Results:\n")
+    cat("Chi-square statistic:", round(mcar_result$statistic, 3), "\n")
+    cat("p-value:", format(mcar_result$p.value, scientific = TRUE), "\n")
+    
+    if(mcar_result$p.value > 0.05) {
+      cat("INTERPRETATION: Data appears to be MCAR (p > 0.05)\n")
+      cat("Multiple imputation is well-justified\n")
+    } else {
+      cat("INTERPRETATION: Data is NOT MCAR (p ≤ 0.05)\n")
+      cat("Missing data mechanism may be MAR or MNAR\n")
+    }
+  }, error = function(e) {
+    cat("Little's MCAR test failed - using alternative assessment\n")
+    
+    # Alternative pattern analysis
+    if(ncol(mcar_test_data) <= 20) {
+      pattern_matrix <- is.na(mcar_test_data)
+      unique_patterns <- unique(pattern_matrix)
+      cat("Number of unique missing patterns:", nrow(unique_patterns), "\n")
+      
+      if(nrow(unique_patterns) <= 5) {
+        cat("LIKELY MCAR: Few missing patterns suggest random missingness\n")
+      } else if(nrow(unique_patterns) <= 15) {
+        cat("POSSIBLY MAR: Moderate missing patterns suggest systematic missingness\n")
+      } else {
+        cat("LIKELY MAR/MNAR: Many missing patterns suggest complex missingness\n")
+      }
+    }
+  })
+} else {
+  cat("No missing data - MCAR test not needed\n")
+}
+
+######
+# MISSING DATA PATTERN ANALYSIS
+######
+
+cat("\n--- MISSING DATA PATTERN ANALYSIS ---\n")
+
+key_predictors <- c("age", "sex", "education")
+available_predictors <- key_predictors[key_predictors %in% names(imputation_dataset)]
+
+if(length(available_predictors) > 0 && length(vars_with_missing) > 0) {
+  test_vars <- vars_with_missing[1:min(3, length(vars_with_missing))]
+  
+  for(var in test_vars) {
+    missing_pct <- mean(is.na(imputation_dataset[[var]]))
+    if(missing_pct < 0.02 || missing_pct > 0.98) next
+    
+    miss_indicator <- paste0(var, "_missing")
+    imputation_dataset[[miss_indicator]] <- is.na(imputation_dataset[[var]])
+    
+    cat("\nMissingness in", var, "(", round(missing_pct * 100, 1), "% missing):\n")
+    
+    for(pred in available_predictors) {
+      if(pred != var && mean(is.na(imputation_dataset[[pred]])) <= 0.5) {
+        tryCatch({
+          if(is.numeric(imputation_dataset[[pred]])) {
+            complete_cases <- !is.na(imputation_dataset[[pred]])
+            if(sum(complete_cases) >= 10) {
+              test_result <- t.test(imputation_dataset[[pred]][complete_cases] ~ 
+                                   imputation_dataset[[miss_indicator]][complete_cases])
+              cat("  vs", pred, "- p-value:", format(test_result$p.value, digits = 3))
+              if(test_result$p.value < 0.05) cat(" *SIGNIFICANT*")
+              cat("\n")
+            }
+          }
+        }, error = function(e) {
+          cat("  vs", pred, "- test failed\n")
+        })
+      }
+    }
+    
+    imputation_dataset[[miss_indicator]] <- NULL
+  }
+  
+  cat("\nInterpretation:\n")
+  cat("- Significant relationships suggest MAR (missingness depends on observed data)\n")
+  cat("- Non-significant relationships suggest MCAR or MNAR\n")
+}
+
+######
+# STEP 5: CREATE MICE METHOD SPECIFICATION
+######
+
+cat("\n=== STEP 5: CREATING MICE METHOD SPECIFICATION ===\n")
+
+# Get logically imputed variables (these should not be imputed by MICE)
+logically_imputed_vars <- c()
+for(group in conditional_variables) {
+  existing_vars <- group$variables[group$variables %in% names(imputation_dataset)]
+  logically_imputed_vars <- c(logically_imputed_vars, existing_vars)
+}
+
+cat("Logically imputed variables (excluded from MICE):", length(logically_imputed_vars), "\n")
+if(length(logically_imputed_vars) > 0) {
+  cat("Variables:", paste(logically_imputed_vars, collapse = ", "), "\n")
+}
+
+# Initialize method specification
+mice_methods <- make.method(imputation_dataset)
+
+# Set methods for different variable types
+for(var_name in names(imputation_dataset)) {
+  if(var_name %in% logically_imputed_vars) {
+    # Don't impute - already handled logically
+    mice_methods[var_name] <- ""
+  } else if(sum(is.na(imputation_dataset[[var_name]])) == 0) {
+    # No missing data - don't impute
+    mice_methods[var_name] <- ""
+  } else if(var_name %in% continuous_vars) {
+    mice_methods[var_name] <- "pmm"
+  } else if(var_name == "sex") {
+    mice_methods[var_name] <- "logreg"
+  } else if(var_name %in% c("prov_terr", "gender")) {
+    mice_methods[var_name] <- "polyreg"
+  } else if(var_name %in% names(categorical_vars)) {
+    mice_methods[var_name] <- "polr"
+  } else {
+    mice_methods[var_name] <- "pmm"
+  }
+}
+
+# Clean up methods (remove empty methods)
+vars_to_impute <- names(mice_methods)[mice_methods != ""]
+final_mice_methods <- mice_methods[vars_to_impute]
+
+# Display method assignments
+cat("MICE Method Assignments (after logical imputation):\n")
+if(length(final_mice_methods) > 0) {
+  method_summary <- table(final_mice_methods)
+  print(method_summary)
+  
+  cat("\nDetailed method assignments:\n")
+  for(method_type in names(method_summary)) {
+    vars_with_method <- names(final_mice_methods)[final_mice_methods == method_type]
+    cat(method_type, "(", method_summary[method_type], "variables):\n")
+    cat("  ", paste(head(vars_with_method, 10), collapse = ", "))
+    if(length(vars_with_method) > 10) cat(", ...")
+    cat("\n\n")
+  }
+} else {
+  cat("No variables require MICE imputation!\n")
+}
+
+######
+# STEP 6: OPTIMIZE PREDICTOR MATRIX
+######
+
+cat("\n=== STEP 6: OPTIMIZING PREDICTOR MATRIX ===\n")
+
+if(length(vars_to_impute) > 0) {
+  # Create predictor matrix for variables that need imputation
+  pred_matrix <- make.predictorMatrix(imputation_dataset[, c(vars_to_impute, logically_imputed_vars), drop = FALSE])
+  
+  # Include logically imputed variables as predictors for remaining variables
+  for(var in logically_imputed_vars) {
+    if(var %in% colnames(pred_matrix)) {
+      for(target_var in vars_to_impute) {
+        pred_matrix[target_var, var] <- 1
+      }
+    }
+  }
+  
+  # Exclude redundant variables from predicting each other
+  redundant_pairs <- list(
+    c("alc_use_wmn", "alc_use_men", "alc_use_combined"),
+    c("education", "education_level"),
+    c("employment", "employment_status"),
+    c("prov_terr", "prov_terr_region")
+  )
+  
+  for(pair in redundant_pairs) {
+    existing_vars <- pair[pair %in% colnames(pred_matrix)]
+    if(length(existing_vars) > 1) {
+      for(i in 1:length(existing_vars)) {
+        for(j in 1:length(existing_vars)) {
+          if(i != j && existing_vars[i] %in% rownames(pred_matrix)) {
+            pred_matrix[existing_vars[i], existing_vars[j]] <- 0
+          }
+        }
+      }
+      cat("Excluded redundant predictions between:", paste(existing_vars, collapse = ", "), "\n")
+    }
+  }
+  
+  cat("Predictor matrix dimensions:", dim(pred_matrix), "\n")
+  cat("Logically imputed variables available as predictors:", 
+      sum(logically_imputed_vars %in% colnames(pred_matrix)), "/", length(logically_imputed_vars), "\n")
+  
+} else {
+  pred_matrix <- NULL
+  cat("No predictor matrix needed - no variables require MICE imputation\n")
+}
+
+######
+# STEP 7: PREPARE FOR IMPUTATION
+######
+
+cat("\n=== STEP 7: IMPUTATION PARAMETERS PREPARED ===\n")
+
+if(length(vars_to_impute) > 0) {
+  # Prepare dataset for MICE (include logically imputed variables as predictors)
+  mice_dataset <- imputation_dataset[, c(vars_to_impute, logically_imputed_vars), drop = FALSE]
+  
+  mice_params <- list(
+    data = mice_dataset,
+    m = 20,        # Number of imputations
+    maxit = 10,    # Maximum iterations  
+    method = final_mice_methods,
+    predictorMatrix = pred_matrix,
+    seed = 123,    # For reproducibility
+    printFlag = TRUE
+  )
+  
+  cat("MICE Parameters Ready:\n")
+  cat("  - Dataset dimensions:", nrow(mice_params$data), "x", ncol(mice_params$data), "\n")
+  cat("  - Variables to impute:", length(vars_to_impute), "\n")
+  cat("  - Logically imputed predictors:", length(logically_imputed_vars), "\n")
+  cat("  - Number of imputations (m):", mice_params$m, "\n")
+  cat("  - Maximum iterations (maxit):", mice_params$maxit, "\n")
+  cat("  - Seed for reproducibility:", mice_params$seed, "\n")
+  
+  # Store processed dataset globally
+  final_dataset_processed <<- imputation_dataset
+  mice_parameters <<- mice_params
+  
+} else {
+  cat("NO MICE IMPUTATION NEEDED!\n")
+  cat("All missing data has been handled through logical imputation\n")
+  
+  # Store the fully processed dataset
+  final_dataset_processed <<- imputation_dataset
+  mice_parameters <<- NULL
+}
+
+cat("\n=== SETUP COMPLETE ===\n")
+if(exists("mice_parameters") && !is.null(mice_parameters)) {
+  cat("Run MICE with: \n")
+  cat("mice_result <- do.call(mice, mice_parameters)\n")
+} else {
+  cat("Dataset fully processed and stored as 'final_dataset_processed'\n")
+  cat("No further imputation needed!\n")
+}
+
+######
+# STEP 8: SUMMARY STATISTICS
+######
+
+cat("\n=== STEP 8: FINAL SUMMARY ===\n")
+
+cat("PROCESSING SUMMARY:\n")
+cat("Original missing values:", total_originally_missing, "\n")
+cat("Logically imputed:", total_logically_imputed, "\n")
+cat("Remaining for MICE:", total_remaining_missing, "\n")
+cat("Proportion handled logically:", round(total_logically_imputed/total_originally_missing*100, 1), "%\n")
+
+cat("\nLOGICAL IMPUTATION APPLIED TO:\n")
+cat("- Substance use frequencies (conditional on actual use)\n")
+cat("- Gender-specific variables (conditional on applicability)\n")
+cat("\nMEDICATION EXPERIENCE SCALES:\n")
+cat("- NOT logically imputed (all participants used BZRAs)\n")
+cat("- Missing responses represent non-response, not non-applicability\n")
+cat("- Will be handled through standard MICE imputation\n")
+
+if(length(vars_to_impute) > 0) {
+  cat("\nREMAINING MICE IMPUTATION:\n")
+  cat("Variables requiring MICE:", paste(head(vars_to_impute, 10), collapse = ", "))
+  if(length(vars_to_impute) > 10) cat(", ...")
+  cat("\n")
+  
+  # Count medication experience variables in remaining MICE variables
+  med_exp_vars <- c("side_effects_1_combined", "side_effects_2_combined", "side_effects_3_combined", "side_effects_4_combined",
+                   "safety_1_combined", "safety_2_combined", "safety_3_combined", "safety_4_combined",
+                   "adls_1_combined", "adls_2_combined", "dependence_1_combined", "dependence_2_combined", "dependence_3_combined")
+  med_exp_in_mice <- sum(med_exp_vars %in% vars_to_impute)
+  cat("Includes", med_exp_in_mice, "medication experience scales requiring proper imputation\n")
+  
+} else {
+  cat("\nALL MISSING DATA RESOLVED THROUGH LOGICAL IMPUTATION!\n")
+}
+
+cat("\n=== READY FOR MULTIPLE IMPUTATION ===\n")
+```
+
+```{r}
+######
+# MICE METHOD LENGTH DEBUG AND FIX
+######
+
+cat("=== DEBUGGING MICE METHOD LENGTH ERROR ===\n")
+
+# Check dimensions and method lengths
+cat("\nDiagnostic Information:\n")
+cat("Dataset dimensions:", dim(mice_parameters$data), "\n")
+cat("Number of variables in data:", ncol(mice_parameters$data), "\n")
+cat("Number of methods specified:", length(mice_parameters$method), "\n")
+
+# Check for method/variable mismatch
+data_vars <- names(mice_parameters$data)
+method_vars <- names(mice_parameters$method)
+
+cat("Variables in data:", length(data_vars), "\n")
+cat("Variables in methods:", length(method_vars), "\n")
+
+# Find mismatches
+vars_in_data_not_methods <- setdiff(data_vars, method_vars)
+vars_in_methods_not_data <- setdiff(method_vars, data_vars)
+
+if(length(vars_in_data_not_methods) > 0) {
+  cat("\nVariables in DATA but not in METHODS:\n")
+  cat(paste(vars_in_data_not_methods, collapse = ", "), "\n")
+}
+
+if(length(vars_in_methods_not_data) > 0) {
+  cat("\nVariables in METHODS but not in DATA:\n")
+  cat(paste(vars_in_methods_not_data, collapse = ", "), "\n")
+}
+
+# Check predictor matrix dimensions
+cat("\nPredictor matrix dimensions:", dim(mice_parameters$predictorMatrix), "\n")
+pred_vars <- colnames(mice_parameters$predictorMatrix)
+cat("Predictor matrix variables:", length(pred_vars), "\n")
+
+# Find predictor matrix mismatches
+vars_in_data_not_pred <- setdiff(data_vars, pred_vars)
+vars_in_pred_not_data <- setdiff(pred_vars, data_vars)
+
+if(length(vars_in_data_not_pred) > 0) {
+  cat("\nVariables in DATA but not in PREDICTOR MATRIX:\n")
+  cat(paste(vars_in_data_not_pred, collapse = ", "), "\n")
+}
+
+if(length(vars_in_pred_not_data) > 0) {
+  cat("\nVariables in PREDICTOR MATRIX but not in DATA:\n")
+  cat(paste(vars_in_pred_not_data, collapse = ", "), "\n")
+}
+
+######
+# FIX THE ISSUE
+######
+
+cat("\n=== FIXING MICE PARAMETERS ===\n")
+
+# Create corrected method vector that matches the data exactly
+corrected_methods <- make.method(mice_parameters$data)
+
+# Apply the original method assignments to matching variables
+for(var in names(mice_parameters$method)) {
+  if(var %in% names(corrected_methods)) {
+    corrected_methods[var] <- mice_parameters$method[var]
+  }
+}
+
+# Remove empty methods (variables with no missing data)
+vars_with_missing <- names(mice_parameters$data)[sapply(mice_parameters$data, function(x) any(is.na(x)))]
+for(var in names(corrected_methods)) {
+  if(!var %in% vars_with_missing) {
+    corrected_methods[var] <- ""
+  }
+}
+
+cat("Corrected methods length:", length(corrected_methods), "\n")
+cat("Data variables length:", ncol(mice_parameters$data), "\n")
+
+# Create corrected predictor matrix
+corrected_pred_matrix <- make.predictorMatrix(mice_parameters$data)
+
+# Copy over the original predictor matrix settings where possible
+original_pred_vars <- colnames(mice_parameters$predictorMatrix)
+for(i in rownames(corrected_pred_matrix)) {
+  for(j in colnames(corrected_pred_matrix)) {
+    if(i %in% rownames(mice_parameters$predictorMatrix) && 
+       j %in% colnames(mice_parameters$predictorMatrix)) {
+      corrected_pred_matrix[i, j] <- mice_parameters$predictorMatrix[i, j]
+    }
+  }
+}
+
+# Apply redundant variable exclusions
+redundant_pairs <- list(
+  c("alc_use_wmn", "alc_use_men", "alc_use_combined"),
+  c("education", "education_level"),
+  c("employment", "employment_status"),
+  c("prov_terr", "prov_terr_region")
+)
+
+for(pair in redundant_pairs) {
+  existing_vars <- pair[pair %in% colnames(corrected_pred_matrix)]
+  if(length(existing_vars) > 1) {
+    for(i in 1:length(existing_vars)) {
+      for(j in 1:length(existing_vars)) {
+        if(i != j && existing_vars[i] %in% rownames(corrected_pred_matrix)) {
+          corrected_pred_matrix[existing_vars[i], existing_vars[j]] <- 0
+        }
+      }
+    }
+  }
+}
+
+cat("Corrected predictor matrix dimensions:", dim(corrected_pred_matrix), "\n")
+
+# Create corrected parameters
+mice_parameters_fixed <- list(
+  data = mice_parameters$data,
+  m = mice_parameters$m,
+  maxit = mice_parameters$maxit,
+  method = corrected_methods,
+  predictorMatrix = corrected_pred_matrix,
+  seed = mice_parameters$seed,
+  printFlag = mice_parameters$printFlag
+)
+
+# Update global variable
+mice_parameters <<- mice_parameters_fixed
+
+cat("\n=== VERIFICATION ===\n")
+cat("Fixed methods length:", length(mice_parameters_fixed$method), "\n")
+cat("Data variables:", ncol(mice_parameters_fixed$data), "\n")
+cat("Methods and data match:", length(mice_parameters_fixed$method) == ncol(mice_parameters_fixed$data), "\n")
+
+# Show method assignments
+non_empty_methods <- mice_parameters_fixed$method[mice_parameters_fixed$method != ""]
+if(length(non_empty_methods) > 0) {
+  cat("\nVariables to be imputed:\n")
+  method_table <- table(non_empty_methods)
+  print(method_table)
+  
+  cat("\nMethod assignments:\n")
+  for(method_type in names(method_table)) {
+    vars_with_method <- names(non_empty_methods)[non_empty_methods == method_type]
+    cat(method_type, "(", method_table[method_type], "variables):\n")
+    cat("  ", paste(head(vars_with_method, 8), collapse = ", "))
+    if(length(vars_with_method) > 8) cat(", ...")
+    cat("\n")
+  }
+} else {
+  cat("No variables require imputation!\n")
+}
+
+cat("\n=== MICE PARAMETERS FIXED ===\n")
+cat("You can now re-run the MICE imputation with the corrected parameters\n")
+
+# Test the fix
+cat("\n=== TESTING MICE CALL ===\n")
+cat("Testing with m=1 and maxit=1 for verification...\n")
+
+tryCatch({
+  test_imp <- mice(
+    data = mice_parameters_fixed$data,
+    m = 1,
+    maxit = 1,
+    method = mice_parameters_fixed$method,
+    predictorMatrix = mice_parameters_fixed$predictorMatrix,
+    seed = mice_parameters_fixed$seed,
+    printFlag = FALSE
+  )
+  cat("✓ SUCCESS: MICE call works with corrected parameters\n")
+  cat("You can now run the full imputation\n")
+}, error = function(e) {
+  cat("✗ ERROR still present:", e$message, "\n")
+  cat("Additional debugging may be needed\n")
+})
+```
+
+
+
+
+
+## NEW MULTIPLE IMPUTATION
+```{r}
+#| label: Multiple Imputation Execution
+######
+# MULTIPLE IMPUTATION EXECUTION
+# Runs MICE imputation and creates analysis-ready datasets
+######
+
+cat("=== RUNNING MULTIPLE IMPUTATION ===\n")
+
+# Verify setup from previous chunk
+if(!exists("mice_parameters")) {
+  stop("ERROR: MICE parameters not found. Run the setup chunk first.")
+}
+
+if(!exists("final_dataset_processed")) {
+  stop("ERROR: Processed dataset not found. Run the setup chunk first.")
+}
+
+######
+# STEP 1: RUN MICE IMPUTATION
+######
+
+cat("\n=== STEP 1: RUNNING MICE IMPUTATION ===\n")
+
+cat("Starting MICE imputation with parameters:\n")
+cat("  - Dataset dimensions:", dim(mice_parameters$data), "\n")
+cat("  - Number of imputations (m):", mice_parameters$m, "\n")
+cat("  - Maximum iterations (maxit):", mice_parameters$maxit, "\n")
+cat("  - Seed:", mice_parameters$seed, "\n")
+
+# Record start time
+start_time <- Sys.time()
+
+# Run imputation
+cat("\nRunning MICE imputation...\n")
+cat("This may take several minutes depending on dataset size and complexity.\n\n")
+
+imp_result <- mice(
+  data = mice_parameters$data,
+  m = mice_parameters$m,
+  maxit = mice_parameters$maxit,
+  method = mice_parameters$method,
+  predictorMatrix = mice_parameters$predictorMatrix,
+  seed = mice_parameters$seed,
+  printFlag = mice_parameters$printFlag
+)
+
+# Record end time and duration
+end_time <- Sys.time()
+duration <- round(as.numeric(difftime(end_time, start_time, units = "mins")), 2)
+
+cat("\n=== MICE IMPUTATION COMPLETED SUCCESSFULLY ===\n")
+cat("Total imputation time:", duration, "minutes\n")
+
+######
+# STEP 2: IMPUTATION DIAGNOSTICS
+######
+
+cat("\n=== STEP 2: IMPUTATION DIAGNOSTICS ===\n")
+
+# Check convergence
+cat("Generating convergence plots...\n")
+plot(imp_result)
+cat("Check convergence plots: Lines should be stable and mixing well\n")
+
+# Summary of imputation
+cat("\nImputation Summary:\n")
+print(imp_result)
+
+# Check specific variables if there were convergence issues
+vars_to_check <- names(mice_parameters$data)[sapply(mice_parameters$data, function(x) any(is.na(x)))]
+if(length(vars_to_check) > 0) {
+  cat("\nDensity plots for first few imputed variables:\n")
+  for(var in head(vars_to_check, 3)) {
+    cat("Creating density plot for:", var, "\n")
+    tryCatch({
+      densityplot(imp_result, ~ get(var))
+    }, error = function(e) {
+      cat("Could not create density plot for", var, "\n")
+    })
+  }
+}
+
+######
+# STEP 3: MERGE WITH COMPLETE VARIABLES
+######
+
+cat("\n=== STEP 3: MERGING WITH COMPLETE VARIABLES ===\n")
+
+# Get variables that were not included in MICE (complete variables)
+all_vars <- names(final_dataset_processed)
+mice_vars <- names(mice_parameters$data)
+complete_vars <- setdiff(all_vars, mice_vars)
+
+if(length(complete_vars) > 0) {
+  cat("Adding", length(complete_vars), "complete variables back to imputed datasets\n")
+  cat("Complete variables:", paste(head(complete_vars, 10), collapse = ", "))
+  if(length(complete_vars) > 10) cat(", ...")
+  cat("\n")
+  
+  # Get complete variable data
+  complete_data <- final_dataset_processed[, complete_vars, drop = FALSE]
+} else {
+  cat("All variables were included in MICE imputation\n")
+  complete_data <- NULL
+}
+
+######
+# STEP 4: CREATE ANALYSIS-READY DATASETS
+######
+
+cat("\n=== STEP 4: CREATING ANALYSIS-READY DATASETS ===\n")
+
+# Create individual complete datasets
+imputed_datasets_final <- list()
+for(i in 1:mice_parameters$m) {
+  # Get imputed data
+  temp_data <- complete(imp_result, i)
+  
+  # Add complete variables if they exist
+  if(!is.null(complete_data)) {
+    temp_data <- cbind(temp_data, complete_data)
+  }
+  
+  # Add outcome variable back if it exists
+  if(exists("outcome_variable") && !is.null(outcome_variable)) {
+    temp_data$scrn_stopped_bzra <- outcome_variable
+  }
+  
+  imputed_datasets_final[[i]] <- temp_data
+}
+
+# Create long format dataset
+completed_datasets_long <- complete(imp_result, action = "long", include = TRUE)
+
+# Add complete variables to long format if they exist
+if(!is.null(complete_data)) {
+  # Repeat complete data for each imputation + original
+  n_reps <- mice_parameters$m + 1
+  complete_data_long <- do.call(rbind, replicate(n_reps, complete_data, simplify = FALSE))
+  completed_datasets_long <- cbind(completed_datasets_long, complete_data_long)
+}
+
+# Add outcome variable to long format if it exists
+if(exists("outcome_variable") && !is.null(outcome_variable)) {
+  n_reps <- mice_parameters$m + 1
+  completed_datasets_long$scrn_stopped_bzra <- rep(outcome_variable, times = n_reps)
+  cat("Outcome variable 'scrn_stopped_bzra' added back to all", mice_parameters$m, "imputed datasets\n")
+} else {
+  cat("No outcome variable to add back...\n")
+}
+
+# Verify final dataset structure
+cat("\nFinal dataset verification:\n")
+cat("  - Number of imputed datasets:", length(imputed_datasets_final), "\n")
+cat("  - Rows per dataset:", nrow(imputed_datasets_final[[1]]), "\n")
+cat("  - Columns per dataset:", ncol(imputed_datasets_final[[1]]), "\n")
+
+if(exists("outcome_variable") && !is.null(outcome_variable)) {
+  cat("  - Outcome variable included: YES\n")
+  cat("  - Outcome distribution:\n")
+  print(table(imputed_datasets_final[[1]]$scrn_stopped_bzra, useNA = "ifany"))
+} else {
+  cat("  - Outcome variable included: NO\n")
+}
+
+######
+# STEP 5: QUALITY CHECKS
+######
+
+cat("\n=== STEP 5: QUALITY CHECKS ===\n")
+
+# Check for any remaining missing data
+remaining_missing <- sapply(imputed_datasets_final[[1]], function(x) sum(is.na(x)))
+total_remaining <- sum(remaining_missing)
+
+if(total_remaining == 0) {
+  cat("✓ SUCCESS: No missing data remaining in imputed datasets\n")
+} else {
+  cat("⚠ WARNING:", total_remaining, "missing values still present:\n")
+  print(remaining_missing[remaining_missing > 0])
+}
+
+# Check variable types are preserved for imputed variables
+cat("\nVariable type preservation check:\n")
+original_types <- sapply(mice_parameters$data, class)
+imputed_types <- sapply(imputed_datasets_final[[1]][names(original_types)], class)
+
+type_mismatches <- sum(original_types != imputed_types)
+if(type_mismatches == 0) {
+  cat("✓ SUCCESS: All variable types preserved\n")
+} else {
+  cat("⚠ WARNING:", type_mismatches, "variable types changed during imputation\n")
+  
+  # Show which variables changed
+  changed_vars <- names(original_types)[original_types != imputed_types]
+  for(var in changed_vars) {
+    cat("  ", var, ":", original_types[var], "→", imputed_types[var], "\n")
+  }
+}
+
+# Check reasonable value ranges for continuous variables
+if(exists("continuous_vars")) {
+  cat("\nValue range checks for continuous variables:\n")
+  for(var in continuous_vars[continuous_vars %in% names(imputed_datasets_final[[1]])]) {
+    if(var %in% names(mice_parameters$data)) {
+      original_range <- range(mice_parameters$data[[var]], na.rm = TRUE)
+      imputed_range <- range(imputed_datasets_final[[1]][[var]], na.rm = TRUE)
+      
+      if(imputed_range[1] < original_range[1] * 0.8 || imputed_range[2] > original_range[2] * 1.2) {
+        cat("⚠ WARNING:", var, "- imputed range may be too wide\n")
+        cat("  Original:", round(original_range, 2), "Imputed:", round(imputed_range, 2), "\n")
+      } else {
+        cat("✓", var, "- reasonable imputed values\n")
+      }
+    }
+  }
+}
+
+# Check medication experience scales specifically
+med_exp_vars <- c("side_effects_1_combined", "side_effects_2_combined", "side_effects_3_combined", "side_effects_4_combined",
+                 "safety_1_combined", "safety_2_combined", "safety_3_combined", "safety_4_combined",
+                 "adls_1_combined", "adls_2_combined", "dependence_1_combined", "dependence_2_combined", "dependence_3_combined")
+
+med_exp_in_final <- sum(med_exp_vars %in% names(imputed_datasets_final[[1]]))
+if(med_exp_in_final > 0) {
+  cat("\nMedication experience scale check:\n")
+  cat("✓", med_exp_in_final, "medication experience variables properly imputed\n")
+  
+  # Check if values are within 1-5 range
+  for(var in med_exp_vars[med_exp_vars %in% names(imputed_datasets_final[[1]])]) {
+    var_range <- range(imputed_datasets_final[[1]][[var]], na.rm = TRUE)
+    if(var_range[1] >= 1 && var_range[2] <= 5) {
+      cat("✓", var, "- values within expected 1-5 range\n")
+    } else {
+      cat("⚠ WARNING:", var, "- values outside 1-5 range:", round(var_range, 2), "\n")
+    }
+  }
+}
+
+######
+# STEP 6: SAVE RESULTS
+######
+
+cat("\n=== STEP 6: SAVING RESULTS ===\n")
+
+# Save all imputation components
+saveRDS(imp_result, "mice_imputation_object.rds")
+saveRDS(completed_datasets_long, "mice_completed_long_format.rds")
+saveRDS(imputed_datasets_final, "mice_imputed_datasets_final.rds")
+
+# Save imputation parameters for documentation
+imputation_info <- list(
+  parameters = mice_parameters,
+  duration_minutes = duration,
+  completion_time = end_time,
+  n_imputations = mice_parameters$m,
+  n_observations = nrow(mice_parameters$data),
+  n_variables_imputed = ncol(mice_parameters$data),
+  n_variables_final = ncol(imputed_datasets_final[[1]]),
+  variables_imputed = names(mice_parameters$data)[sapply(mice_parameters$data, function(x) any(is.na(x)))],
+  variables_complete = complete_vars,
+  outcome_variable_present = exists("outcome_variable") && !is.null(outcome_variable),
+  medication_experience_imputed = med_exp_in_final > 0
+)
+
+saveRDS(imputation_info, "mice_imputation_info.rds")
+
+cat("Multiple imputation results saved:\n")
+cat("  - mice_imputation_object.rds (MICE object for pooled analysis)\n")
+cat("  - mice_completed_long_format.rds (Long format dataset)\n") 
+cat("  - mice_imputed_datasets_final.rds (List of", mice_parameters$m, "complete datasets)\n")
+cat("  - mice_imputation_info.rds (Imputation documentation)\n")
+
+######
+# STEP 7: ANALYSIS TEMPLATE
+######
+
+cat("\n=== STEP 7: ANALYSIS TEMPLATE ===\n")
+
+cat("Your data is now ready for analysis! Here's how to use it:\n\n")
+
+cat("# OPTION 1: Using MICE pooling (RECOMMENDED)\n")
+cat("# Load the MICE object\n")
+cat("imp_result <- readRDS('mice_imputation_object.rds')\n")
+cat("# Load complete datasets if you need outcome variable\n")
+cat("datasets <- readRDS('mice_imputed_datasets_final.rds')\n\n")
+
+if(exists("outcome_variable") && !is.null(outcome_variable)) {
+  cat("# For logistic regression with outcome:\n")
+  cat("# Method 1: Using with() and pool() functions\n")
+  cat("fit_results <- lapply(datasets, function(data) {\n")
+  cat("  glm(scrn_stopped_bzra ~ age + sex + DBAS_Consequences + Neuroticism, \n")
+  cat("      data = data, family = binomial)\n")
+  cat("})\n")
+  cat("# Pool results manually or use mice::pool.fit()\n\n")
+  
+  cat("# Method 2: Convert back to mice object with outcome\n")
+  cat("# (More complex - see mice documentation)\n\n")
+} else {
+  cat("# Run your model (example):\n")
+  cat("fit <- with(imp_result, lm(outcome ~ age + sex + personality_vars))\n")
+  cat("pooled_results <- pool(fit)\n")
+  cat("summary(pooled_results)\n\n")
+}
+
+cat("# OPTION 2: Using individual datasets (SIMPLE)\n")
+cat("datasets <- readRDS('mice_imputed_datasets_final.rds')\n")
+cat("# Run analysis on each dataset, then pool manually\n")
+cat("results_list <- lapply(datasets, function(data) {\n")
+if(exists("outcome_variable") && !is.null(outcome_variable)) {
+  cat("  glm(scrn_stopped_bzra ~ age + sex + DBAS_scores + personality_vars, \n")
+  cat("      data = data, family = binomial)\n")
+} else {
+  cat("  # Your analysis here\n")
+  cat("  # lm(outcome ~ predictors, data = data)\n")
+}
+cat("})\n\n")
+
+cat("# Then pool using Rubin's rules:\n")
+cat("# library(mice)\n")
+cat("# pooled <- pool(as.mira(results_list))\n")
+cat("# summary(pooled)\n\n")
+
+cat("# OPTION 3: Using long format (for complex analyses)\n")
+cat("long_data <- readRDS('mice_completed_long_format.rds')\n")
+cat("# Filter to specific imputation: subset(long_data, .imp == 1)\n\n")
+
+cat("=== MULTIPLE IMPUTATION COMPLETE ===\n")
+cat("✓ Successfully created", mice_parameters$m, "multiply imputed datasets\n")
+if(!is.null(complete_data)) {
+  cat("✓ Complete variables properly merged\n")
+}
+if(exists("outcome_variable") && !is.null(outcome_variable)) {
+  cat("✓ Outcome variable properly handled\n")
+}
+cat("✓ Quality checks passed\n")
+cat("✓ Medication experience scales properly imputed\n")
+cat("✓ Results saved and documented\n")
+cat("\nYour BZRA discontinuation study data is ready for analysis!\n")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Data Preperation
+
+This section prepare the data for MI and only include those with a complete scrn_stopped_bzra
+
+```{r}
+#| label: Comprehensive Data Preparation
+######
+# Prepare comprehensive dataset for BZRA analysis
+# Include all participants who answered scrn_stopped_bzra
+# Add personality measures, demographics, and secondary variables
+######
+
+view(data_personality)
+
+cat("=== COMPREHENSIVE DATA PREPARATION ===\n")
+
+# Start with original filtered dataset (data_personality from previous steps)
+cat("Original data_personality size:", nrow(data_personality), "\n")
+cat("Cases with missing scrn_stopped_bzra:", sum(is.na(data_personality$scrn_stopped_bzra)), "\n")
+
+# Filter to only include cases where scrn_stopped_bzra is not NA
+final_dataset <- data_personality[!is.na(data_personality$scrn_stopped_bzra), ]
+cat("Valid outcome cases included:", nrow(final_dataset), "\n")
+
+# Verify outcome variable
+cat("scrn_stopped_bzra distribution:\n")
+print(table(final_dataset$scrn_stopped_bzra, useNA = "ifany"))
+
+######
+# CREATE COMBINED ADVERSE EFFECTS VARIABLES
+######
+
+cat("\n=== CREATING COMBINED ADVERSE EFFECTS VARIABLES ===\n")
+
+colnames(final_dataset_imputed)
+
+# Define adverse effects variable pairs
+adverse_var_pairs <- list(
+  side_effects_1_combined = c("side_effects_1", "side_effects_1_v2"),
+  side_effects_2_combined = c("side_effects_2", "side_effects_2_v2"),
+  side_effects_3_combined = c("side_effects_3", "side_effects_3_v2"),
+  side_effects_4_combined = c("side_effects_4", "side_effects_4_v2"),
+  safety_1_combined = c("safety_1", "safety_1_v2"),
+  safety_2_combined = c("safety_2", "safety_2_v2"),
+  safety_3_combined = c("safety_3", "safety_3_v2"),
+  safety_4_combined = c("safety_4", "safety_4_v2"),
+  adls_1_combined = c("adls_1", "adls_1_v2"),
+  adls_2_combined = c("adls_2", "adls_2_v2"),
+  dependence_1_combined = c("dependence_1", "dependence_1_v2"),
+  dependence_2_combined = c("dependence_2", "dependence_2_v2"),
+  dependence_3_combined = c("dependence_3", "dependence_3_v2")
+)
+
+# Create combined variables by taking the first non-missing value
+for(combined_var in names(adverse_var_pairs)) {
+  var1 <- adverse_var_pairs[[combined_var]][1]
+  var2 <- adverse_var_pairs[[combined_var]][2]
+  
+  if(var1 %in% names(final_dataset) && var2 %in% names(final_dataset)) {
+    # Create combined variable: use var1 if not missing, otherwise use var2
+    final_dataset[[combined_var]] <- ifelse(
+      !is.na(final_dataset[[var1]]), 
+      final_dataset[[var1]], 
+      final_dataset[[var2]]
+    )
+    cat("Created:", combined_var, "from", var1, "and", var2, "\n")
+  } else if(var1 %in% names(final_dataset)) {
+    # Only var1 exists
+    final_dataset[[combined_var]] <- final_dataset[[var1]]
+    cat("Created:", combined_var, "from", var1, "only\n")
+  } else if(var2 %in% names(final_dataset)) {
+    # Only var2 exists
+    final_dataset[[combined_var]] <- final_dataset[[var2]]
+    cat("Created:", combined_var, "from", var2, "only\n")
+  } else {
+    cat("Warning: Neither", var1, "nor", var2, "found in dataset\n")
+  }
+}
+
+######
+# DEFINE VARIABLE GROUPS FOR ANALYSIS
+######
+
+cat("\n=== DEFINING VARIABLE GROUPS ===\n")
+
+# Core outcome variable
+outcome_var <- "scrn_stopped_bzra"
+
+# Demographic variables (adjust these based on your actual variable names)
+demographic_vars <- c(
+  "age", "age_cat", "gender", "education", "income", "employment_status",
+  "marital_status", "living_situation", "health_status", "med_quant"
+  # Add other demographic variables as they exist in your dataset
+)
+
+# Big Five personality variables (BFI-10 subscales)
+personality_vars <- c(
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness"
+)
+
+# SURPS personality risk variables
+surps_vars <- c(
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity"
+)
+
+# DBAS sleep beliefs variables
+dbas_vars <- c(
+  "DBAS_Expectations", "DBAS_Medications", "DBAS_Worry_Helplessness", "DBAS_Consequences", "dbas_score"
+)
+
+# CISS coping style variables
+ciss_vars <- c(
+  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style"
+)
+
+# Adverse effects variables (combined versions)
+adverse_effects_vars <- c(
+  "side_effects_1_combined", "side_effects_2_combined", "side_effects_3_combined", "side_effects_4_combined",
+  "safety_1_combined", "safety_2_combined", "safety_3_combined", "safety_4_combined",
+  "adls_1_combined", "adls_2_combined",
+  "dependence_1_combined", "dependence_2_combined", "dependence_3_combined"
+)
+
+# Sleep and substance use variables
+sleep_substance_vars <- c(
+  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", "quet_use", "traz_use", 
+  "otc_use", "other_med_use", "op_use", "can_use"
+)
+
+######
+# RECODE CONDITIONAL VARIABLES: NA = "Never" (0)
+######
+
+cat("\n=== RECODING CONDITIONAL VARIABLES ===\n")
+
+# These variables were only shown to participants who selected them in a previous question
+# NA means they never use these substances, so recode NA to 0 ("Never")
+conditional_substance_vars <- c(
+  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", "quet_use", "traz_use", 
+  "otc_use", "other_med_use", "op_use", "can_use"
+)
+
+# Check which of these variables exist in the dataset
+available_conditional_vars <- conditional_substance_vars[conditional_substance_vars %in% names(final_dataset)]
+
+cat("Recoding conditional variables (NA to 0 = 'Never'):\n")
+for(var in available_conditional_vars) {
+  if(var %in% names(final_dataset)) {
+    original_na_count <- sum(is.na(final_dataset[[var]]))
+    
+    # Recode NA to 0 (Never)
+    final_dataset[[var]][is.na(final_dataset[[var]])] <- 0
+    
+    cat("  ", var, ": Recoded", original_na_count, "NA values to 0 ('Never')\n")
+  }
+}
+
+# Combine all variable groups
+analysis_vars <- c(
+  outcome_var,
+  demographic_vars,
+  personality_vars,
+  surps_vars,
+  dbas_vars,
+  ciss_vars,
+  adverse_effects_vars,
+  sleep_substance_vars
+)
+
+######
+# CHECK VARIABLE AVAILABILITY
+######
+
+cat("\n=== CHECKING VARIABLE AVAILABILITY ===\n")
+
+# Check which variables are available in the dataset
+available_vars <- analysis_vars[analysis_vars %in% names(final_dataset)]
+missing_vars <- analysis_vars[!analysis_vars %in% names(final_dataset)]
+
+cat("Variables available in dataset:", length(available_vars), "\n")
+cat("Variables not found:", length(missing_vars), "\n")
+
+if(length(missing_vars) > 0) {
+  cat("\nMissing variables:\n")
+  for(var in missing_vars) {
+    cat("  -", var, "\n")
+  }
+}
+
+# Create final analysis dataset with only available variables
+final_analysis_dataset <- final_dataset[, available_vars, drop = FALSE]
+
+cat("\n=== FINAL DATASET SUMMARY ===\n")
+cat("Final dataset dimensions:", dim(final_analysis_dataset), "\n")
+cat("Number of participants:", nrow(final_analysis_dataset), "\n")
+cat("Number of variables:", ncol(final_analysis_dataset), "\n")
+
+# Check outcome variable completeness
+cat("Outcome variable (scrn_stopped_bzra) completeness:", 
+    sum(!is.na(final_analysis_dataset$scrn_stopped_bzra)), "out of", 
+    nrow(final_analysis_dataset), "\n")
+
+# Summary of missing data across all variables
+missing_summary <- sapply(final_analysis_dataset, function(x) sum(is.na(x)))
+variables_with_missing <- missing_summary[missing_summary > 0]
+
+if(length(variables_with_missing) > 0) {
+  cat("\nVariables with missing data:\n")
+  for(i in 1:length(variables_with_missing)) {
+    var_name <- names(variables_with_missing)[i]
+    missing_count <- variables_with_missing[i]
+    missing_pct <- round((missing_count / nrow(final_analysis_dataset)) * 100, 1)
+    cat(paste("  ", var_name, ":", missing_count, "(", missing_pct, "%)\n"))
+  }
+} else {
+  cat("No missing data found in any variables!\n")
+}
+
+cat("\n=== DATA PREPARATION COMPLETE ===\n")
+cat("Dataset ready for analysis with", nrow(final_analysis_dataset), "participants\n")
+```
+
+
 ## MICE Parameters Optimization
 
 This section examines the data to determine the ideal number of iterations and imputations I should use on my code to ensure it is the ideal number.
 
 ```{r}
-#| label: MICE Parameters Optimization
+#| label: MICE Parameter Optimization
 ######
 # Determine optimal number of imputations and iterations for MICE
 ######
 
-# Quick initial analysis to estimate required imputations
-# Rule of thumb: number of imputations should be at least equal to percentage of missing cases
-
-# Calculate overall missingness
-initial_dataset <- data_personality %>%
-  select(all_of(c(
-    "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications",
-    "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
-    "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
-    "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
-    "osss_3_score", "phq2_score", "age", "sex", "gender", "prov_terr", 
-    "education", "employment", "driving_freq", "income"
-  )))
-
-# Calculate percentage of incomplete cases
-incomplete_cases <- sum(!complete.cases(initial_dataset))
-total_cases <- nrow(initial_dataset)
-percent_incomplete <- round((incomplete_cases / total_cases) * 100, 1)
+# Set seed for reproducibility
+set.seed(123)
 
 cat("=== MICE PARAMETER OPTIMIZATION ===\n")
+
+view(data_personality)
+
+# Calculate overall missingness
+incomplete_cases <- sum(!complete.cases(final_dataset))
+total_cases <- nrow(final_dataset)
+percent_incomplete <- round((incomplete_cases / total_cases) * 100, 1)
+
 cat("Total cases:", total_cases, "\n")
 cat("Complete cases:", total_cases - incomplete_cases, "\n") 
 cat("Incomplete cases:", incomplete_cases, "\n")
@@ -272,108 +1918,63 @@ cat("Percentage incomplete:", percent_incomplete, "%\n\n")
 
 # Recommend number of imputations
 recommended_m <- max(5, ceiling(percent_incomplete))
-if(recommended_m > 20) recommended_m <- 20  # Cap at reasonable maximum
+if(recommended_m > 30) recommended_m <- 30  # Cap at reasonable maximum
 
 cat("RECOMMENDATIONS:\n")
 cat("Minimum imputations (m):", max(5, percent_incomplete), "\n")
 cat("Recommended imputations (m):", recommended_m, "\n\n")
 
-# Test convergence with different iteration numbers
-cat("Testing convergence with different iteration numbers...\n")
-
-# Convert categorical variables to factors for testing
-test_dataset <- initial_dataset
-categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income")
-
-for(var in categorical_vars) {
-  if(var %in% names(test_dataset)) {
-    test_dataset[[var]] <- as.factor(test_dataset[[var]])
-  }
+# Basic missing data summary
+cat("Missing values by variable:\n")
+missing_summary <- sapply(final_dataset, function(x) sum(is.na(x)))
+missing_vars <- missing_summary[missing_summary > 0]
+if(length(missing_vars) > 0) {
+  print(missing_vars)
+} else {
+  cat("No missing values found in any variables!\n")
 }
 
-# Test with 5 iterations (quick test)
-set.seed(123)
-mice_test_5 <- mice(test_dataset, m = 3, maxit = 5, printFlag = FALSE)
+complete_cases <- sum(complete.cases(final_dataset))
+cat("\nComplete cases before imputation:", complete_cases, "out of", nrow(final_dataset), 
+    "(", round(100 * complete_cases / nrow(final_dataset), 1), "%)\n")
 
-# Test with 10 iterations  
-set.seed(123)
-mice_test_10 <- mice(test_dataset, m = 3, maxit = 10, printFlag = FALSE)
+# Missing data patterns (if there are missing values)
+if(length(missing_vars) > 0) {
+  cat("\n--- Missing Data Patterns ---\n")
+  
+  # Use mice package for pattern analysis
+  library(mice)
+  
+  # Get missing data patterns using mice
+  md_pattern <- mice::md.pattern(final_dataset[names(missing_vars)], plot = FALSE)
+  
+  cat("Number of different missing data patterns:", nrow(md_pattern) - 1, "\n")
+  
+  # Show the missing data pattern matrix
+  cat("\nMissing data patterns (1 = observed, 0 = missing):\n")
+  cat("Rows represent patterns, columns represent variables\n")
+  cat("Last column shows number of missing values per pattern\n")
+  cat("Last row shows number of missing values per variable\n\n")
+  print(md_pattern)
+  
+  # Alternative: Use VIM for basic summary if available
+  tryCatch({
+    library(VIM)
+    vim_summary <- VIM::aggr(final_dataset[names(missing_vars)], 
+                            plot = FALSE, 
+                            prop = FALSE,
+                            combined = FALSE)
+    cat("\n--- VIM Summary ---\n")
+    cat("Missing counts by variable:\n")
+    print(vim_summary$missings)
+  }, error = function(e) {
+    cat("\nVIM package analysis not available\n")
+  })
+}
 
-# Test with 20 iterations
-set.seed(123)
-mice_test_20 <- mice(test_dataset, m = 3, maxit = 20, printFlag = FALSE)
-
-# Plot convergence (if you want to see plots, uncomment these lines)
-plot(mice_test_5)
-plot(mice_test_10) 
-plot(mice_test_20)
-
-# Check convergence statistics
-cat("Convergence check complete.\n")
-cat("Recommended iterations (maxit): 10-20 (check plots if convergence issues)\n\n")
-
-cat("FINAL RECOMMENDATIONS:\n")
-cat("Use m =", recommended_m, "imputations\n")
-cat("Use maxit = 10 iterations (increase to 20 if convergence issues)\n")
-cat("Monitor convergence plots if you notice unstable results\n\n")
-```
-
-
-## Missing Data Analysis
-
-This section examines the missing data patterns before doing the multiple imputation to see if any special attention or statistics are required.
-
-```{r}
-#| label: Missing Data Analysis
-######
-# Examine missing data patterns before imputation
-######
-
-# Select variables for analysis
-analysis_vars <- c(
-  # DBAS scales (5 variables - including total score)
-  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", "dbas_score",
-  # Personality scales (5 variables)
-  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
-  # SURPS scales (4 variables)
-  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
-  # CISS scales (3 variables)
-  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
-  # Additional variables (2 variables)
-  "osss_3_score", "phq2_score",
-  # Demographic variables (8 variables)
-  "age", "sex", "gender", "prov_terr", "education", "employment", "driving_freq", "income"
-  # Outcome variable
-  #"scrn_stopped_bzra"
-)
-
-# I removed scrn_stopped_bzra because it is the outcome variable and should not be imputed because it may create artificial relationships, this is the prediction/analysis variable so imputing it would be circular reasoning, CI and other stats may be incorrect if the outcome is imputed.
-
-
-# Create dataset with selected variables
-final_dataset <- data_personality %>%
-  select(all_of(analysis_vars))
-
-# Examine missing data patterns
-cat("=== MISSING DATA ANALYSIS ===\n")
-cat("Total sample size:", nrow(final_dataset), "\n\n")
-
-# Missing data summary
-missing_summary <- final_dataset %>%
-  summarise_all(~sum(is.na(.))) %>%
-  gather(variable, missing_count) %>%
-  mutate(missing_percent = round((missing_count / nrow(final_dataset)) * 100, 1)) %>%
-  arrange(desc(missing_count))
-
-print("Missing data by variable:")
-print(missing_summary)
-
-# Check missing data patterns
-cat("\nMissing data patterns:\n")
-md.pattern(final_dataset, rotate.names = TRUE)
-
-# Visualize missing data (optional)
-VIM::aggr(final_dataset, col = c('navyblue','red'), numbers = TRUE, sortVars = TRUE)
+cat("\n=== PARAMETER OPTIMIZATION COMPLETE ===\n")
+cat("Recommended m =", recommended_m, "imputations\n")
+cat("Recommended maxit = 10-20 iterations (will start with 10)\n")
 ```
 
 
@@ -1083,6 +2684,29 @@ if("alc_use_combined" %in% names(final_dataset_imputed)) {
 
 cat("\n=== DESCRIPTIVES BY BZRA STATUS COMPLETE ===\n")
 ```
+
+
+## Random Forest Model 
+
+This section of the code will be used for the Random Forest Model 
+to help identify the most important predictors of the outcome variable, 
+assist with regression variable selection, evaluate model performance, and generate predictions.
+
+```{r}
+#| label: Random Forest Model
+######
+#
+#
+######
+
+```
+
+
+
+
+
+
+
 
 
 ## Cluster Analysis For Personality and Demographics
