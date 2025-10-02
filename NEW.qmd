@@ -879,18 +879,27 @@ if(is.list(pilot) && !is.null(pilot$error)) {
     cat("\nLogged events details:\n")
     print(pilot$loggedEvents)}
   
-  # Save convergence plot as PNG in Testing repo
+  # Save convergence plot as PDF in Testing repo
   tryCatch({
-    # Define the path to your Testing GitHub repo
-    output_path <- file.path("~/Testing", "pilot_convergence_plot_use.png")
+    output_path <- "pilot_convergence_plot_use.pdf"
     
-    png(output_path, width = 1400, height = 1000, res = 100)
+    cat("\nAttempting to create PDF file...\n")
+    
+    pdf(output_path, width = 14, height = 10)
     plot(pilot)
     dev.off()
-    cat("\nConvergence plot saved:", output_path, "\n")
+    
+    # Verify it was created
+    if(file.exists(output_path)) {
+      cat("✓ Convergence plot saved:", normalizePath(output_path), "\n")
+      cat("File size:", file.info(output_path)$size, "bytes\n")
+    } else {
+      cat("✗ File was not created successfully\n")
+    }
   }, error = function(e) {
-    cat("\n⚠ Could not save convergence plot as PNG\n")
-    cat("  Error:", e$message, "\n")})
+    cat("\n⚠ Could not save convergence plot as PDF\n")
+    cat("  Error:", e$message, "\n")
+  })
   
   # Display plot interactively
   cat("\nDisplaying convergence plot interactively...\n")
@@ -913,6 +922,48 @@ cat("      Use them as-is in analyses, treating structural NAs appropriately.\n"
 cat("\nDBAS STRATEGY: Subscales predict other variables; total score does not.\n")
 cat("               This provides nuanced information while avoiding redundancy.\n")
 ```
+
+```{r}
+# Save convergence plot as PNG in Testing repo
+tryCatch({
+  # Save directly in current working directory (which is already Testing)
+  output_path <- "pilot_convergence_plot_use.png"
+  
+  cat("\nAttempting to create PNG file...\n")
+  cat("Working directory:", getwd(), "\n")
+  cat("Output path:", output_path, "\n")
+  
+  # Open PNG device
+  png(output_path, width = 1400, height = 1000, res = 100)
+  cat("PNG device opened\n")
+  
+  # Create plot
+  plot(pilot)
+  cat("Plot created\n")
+  
+  # Close device
+  dev_result <- dev.off()
+  cat("Device closed, result:", dev_result, "\n")
+  
+  # Small delay to ensure file system writes
+  Sys.sleep(0.5)
+  
+  # Verify it was created
+  if(file.exists(output_path)) {
+    cat("\n✓ Convergence plot saved:", normalizePath(output_path), "\n")
+    cat("File size:", file.info(output_path)$size, "bytes\n")
+  } else {
+    cat("\n✗ File was not created successfully\n")
+    cat("Checking directory contents...\n")
+    print(list.files(pattern = "pilot.*png"))
+  }
+}, error = function(e) {
+  cat("\n⚠ Could not save convergence plot as PNG\n")
+  cat("  Error:", e$message, "\n")
+  cat("  Call:", deparse(e$call), "\n")
+})
+```
+
 
 
 ## Multiple Imputation
