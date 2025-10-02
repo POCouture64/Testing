@@ -851,72 +851,151 @@ cat("  Not imputed:", sum(meth == ""), "\n")
 # ========== END DIAGNOSTICS ==========
 # --- Pilot run ---
 cat("\n=== PILOT RUN (m=5, maxit=5) ===\n")
-pilot <- tryCatch({
-  mice(
-    analysis_data,
-    m = 5,
-    maxit = 5,
-    method = meth,
-    predictorMatrix = pred,
-    seed = 123,
-    print = FALSE
-  )
-}, error = function(e) {
-  list(error = TRUE, message = e$message)})
 
-if(is.list(pilot) && !is.null(pilot$error)) {
-  cat("✗ PILOT FAILED:\n")
-  cat("  Error:", pilot$message, "\n")
-  cat("\nTroubleshooting:\n")
-  cat("  - Check for variables with too many missing values\n")
-  cat("  - Check for perfect separation in categorical variables\n")
-  cat("  - Consider using PMM for problematic variables\n")
+# First check if there's actually anything to impute
+vars_with_missing <- names(meth[meth != ""])
+n_vars_to_impute <- length(vars_with_missing)
+total_missing_cells <- sum(is.na(analysis_data[, vars_with_missing]))
+
+cat("Variables to impute:", n_vars_to_impute, "\n")
+cat("Total missing cells:", total_missing_cells, "\n")
+
+if(total_missing_cells == 0) {
+  cat("\n⚠ WARNING: No missing data to impute!\n")
+  cat("Skipping imputation - your data is already complete.\n")
+  cat("\nIf you expected missing data, check:\n")
+  cat("  1. Did data preparation already impute values?\n")
+  cat("  2. Are variables correctly identified in the method vector?\n")
+  cat("  3. Did you filter out all missing cases earlier?\n")
 } else {
-  cat("✓ PILOT SUCCESSFUL\n")
-  cat("Logged events:", length(pilot$loggedEvents), "\n")
-  
-  if(length(pilot$loggedEvents) > 0) {
-    cat("\nLogged events details:\n")
-    print(pilot$loggedEvents)}
-  
-  # Save convergence plot as PDF in Testing repo
-  tryCatch({
-    output_path <- "pilot_convergence_plot_use.pdf"
-    
-    cat("\nAttempting to create PDF file...\n")
-    
-    pdf(output_path, width = 14, height = 10)
-    plot(pilot)
-    dev.off()
-    
-    # Verify it was created
-    if(file.exists(output_path)) {
-      cat("✓ Convergence plot saved:", normalizePath(output_path), "\n")
-      cat("File size:", file.info(output_path)$size, "bytes\n")
-    } else {
-      cat("✗ File was not created successfully\n")
-    }
+  # Proceed with imputation
+  pilot <- tryCatch({
+    mice(
+      analysis_data,
+      m = 5,
+      maxit = 5,
+      method = meth,
+      predictorMatrix = pred,
+      seed = 123,
+      print = FALSE
+    )
   }, error = function(e) {
-    cat("\n⚠ Could not save convergence plot as PDF\n")
-    cat("  Error:", e$message, "\n")
+    list(error = TRUE, message = e$message)
   })
   
-  # Display plot interactively
-  cat("\nDisplaying convergence plot interactively...\n")
-  tryCatch({
-    plot(pilot)
-    cat("✓ Interactive plot displayed (check your Plots pane)\n")
-  }, error = function(e) {
-    cat("⚠ Could not display interactive plot\n")
-    cat("  Error:", e$message, "\n")
-  })}
+  if(is.list(pilot) && !is.null(pilot$error)) {
+    cat("✗ PILOT FAILED:\n")
+    cat("  Error:", pilot$message, "\n")
+    cat("\nTroubleshooting:\n")
+    cat("  - Check for variables with too many missing values\n")
+    cat("  - Check for perfect separation in categorical variables\n")
+    cat("  - Consider using PMM for problematic variables\n")
+  } else {
+    cat("✓ PILOT SUCCESSFUL\n")
+    cat("Logged events:", length(pilot$loggedEvents), "\n")
+    
+    if(length(pilot$loggedEvents) > 0) {
+      cat("\nLogged events details:\n")
+      print(pilot$loggedEvents)
+    }
+    
+    # Check if there's actually data to plot
+    n_imputed_values <- sum(sapply(pilot$imp, nrow))
+    cat("\nTotal values imputed:", n_imputed_values, "\n")
+    
+    if(n_imputed_values == 0) {
+      cat("\n⚠ No values were imputed - no convergence plot to create\n")
+      cat("This means all variables with missing data were excluded from imputation.\n")
+    } else {
+      # Check chainMean and chainVar for actual convergence data
+      has_chain_data <- !is.null(pilot$chainMean) && length(pilot$chainMean) > 0
+      cat("\nChainMean data available:", has_chain_data, "\n")
+      
+      if(has_chain_data) {
+        cat("ChainMean structure:\n")
+        print(str(pilot$chainMean))
+      }
+      
+      # Save convergence plot as PDF
+      tryCatch({
+        output_path <- "pilot_convergence_plot_USE.pdf"
+        
+        cat("\nAttempting to create PDF file...\n")
+        cat("Imputed variables:\n")
+        for(var in names(pilot$imp)) {
+          if(nrow(pilot$imp[[var]]) > 0) {
+            cat("  -", var, ":", nrow(pilot$imp[[var]]), "values\n")
+          }
+        }
+        
+        pdf(output_path, width = 14, height = 10)
+        
+        # Try explicit plotting with error handling
+        plot_result <- tryCatch({
+          plot(pilot, layout = c(2, 2))
+          TRUE
+        }, error = function(e) {
+          cat("Standard plot failed:", e$message, "\n")
+          FALSE
+        })
+        
+        if(!plot_result && has_chain_data) {
+          cat("Trying stripplot instead...\n")
+          tryCatch({
+            stripplot(pilot)
+          }, error = function(e) {
+            cat("Stripplot also failed:", e$message, "\n")
+          })
+        }
+        
+        dev.off()
+        
+        # Verify it was created
+        if(file.exists(output_path)) {
+          file_size <- file.info(output_path)$size
+          cat("\n✓ Convergence plot saved:", normalizePath(output_path), "\n")
+          cat("File size:", file_size, "bytes\n")
+          
+          if(file_size < 5000) {
+            cat("⚠ WARNING: File size is very small (", file_size, "bytes)\n")
+            cat("This suggests no convergence data was recorded.\n")
+            cat("Possible reasons:\n")
+            cat("  - maxit may have been 0\n")
+            cat("  - No variables actually needed imputation\n")
+            cat("  - MICE didn't record chain statistics\n")
+          }
+        } else {
+          cat("✗ File was not created successfully\n")
+        }
+      }, error = function(e) {
+        cat("\n⚠ Could not save convergence plot as PDF\n")
+        cat("  Error:", e$message, "\n")
+      })
+      
+      # Display plot interactively
+      cat("\nDisplaying convergence plot interactively...\n")
+      tryCatch({
+        plot(pilot)
+        cat("✓ Interactive plot displayed (check your Plots pane)\n")
+      }, error = function(e) {
+        cat("⚠ Could not display interactive plot\n")
+        cat("  Error:", e$message, "\n")
+      })
+    }
+  }
+}
 
 # --- Recommendations ---
 cat("\n=== NEXT STEPS ===\n")
-cat("If pilot looks good:\n")
-cat("1. Review pilot_convergence.png (saved) or check your Plots pane\n")
-cat("2. Run final imputation with m =", m_impute, ", maxit = 30\n")
-cat("3. Use appropriate methods for each variable type\n")
+if(total_missing_cells == 0) {
+  cat("✓ No imputation needed - your data is complete!\n")
+  cat("You can proceed directly to analysis.\n")
+} else {
+  cat("If pilot looks good:\n")
+  cat("1. Review pilot_convergence_plot_use.pdf (saved) or check your Plots pane\n")
+  cat("2. Run final imputation with m =", m_impute, ", maxit = 30\n")
+  cat("3. Use appropriate methods for each variable type\n")
+}
 cat("\nNOTE: Sex-specific alcohol variables (alc_use_wmn, alc_use_men) are not imputed.\n")
 cat("      Use them as-is in analyses, treating structural NAs appropriately.\n")
 cat("\nDBAS STRATEGY: Subscales predict other variables; total score does not.\n")
@@ -924,44 +1003,39 @@ cat("               This provides nuanced information while avoiding redundancy.
 ```
 
 ```{r}
-# Save convergence plot as PNG in Testing repo
-tryCatch({
-  # Save directly in current working directory (which is already Testing)
-  output_path <- "pilot_convergence_plot_use.png"
+# Check the pilot object
+cat("\n=== DIAGNOSING PILOT OBJECT ===\n")
+cat("Class of pilot:", class(pilot), "\n")
+cat("Is it a mids object?", inherits(pilot, "mids"), "\n")
+
+# Check what was actually imputed
+if(inherits(pilot, "mids")) {
+  cat("\nImputation details:\n")
+  cat("Number of imputations (m):", pilot$m, "\n")
+  cat("Number of iterations (maxit):", pilot$iteration, "\n")
+  cat("Variables imputed:", paste(names(pilot$imp), collapse = ", "), "\n")
   
-  cat("\nAttempting to create PNG file...\n")
-  cat("Working directory:", getwd(), "\n")
-  cat("Output path:", output_path, "\n")
-  
-  # Open PNG device
-  png(output_path, width = 1400, height = 1000, res = 100)
-  cat("PNG device opened\n")
-  
-  # Create plot
-  plot(pilot)
-  cat("Plot created\n")
-  
-  # Close device
-  dev_result <- dev.off()
-  cat("Device closed, result:", dev_result, "\n")
-  
-  # Small delay to ensure file system writes
-  Sys.sleep(0.5)
-  
-  # Verify it was created
-  if(file.exists(output_path)) {
-    cat("\n✓ Convergence plot saved:", normalizePath(output_path), "\n")
-    cat("File size:", file.info(output_path)$size, "bytes\n")
-  } else {
-    cat("\n✗ File was not created successfully\n")
-    cat("Checking directory contents...\n")
-    print(list.files(pattern = "pilot.*png"))
+  # Check if there's actually imputation data
+  cat("\nVariables with missing data that were imputed:\n")
+  for(var in names(pilot$imp)) {
+    if(nrow(pilot$imp[[var]]) > 0) {
+      cat("  ", var, ": ", nrow(pilot$imp[[var]]), " values imputed\n")
+    }
   }
-}, error = function(e) {
-  cat("\n⚠ Could not save convergence plot as PNG\n")
-  cat("  Error:", e$message, "\n")
-  cat("  Call:", deparse(e$call), "\n")
-})
+  
+  # Try creating the plot with more verbose output
+  cat("\n=== ATTEMPTING PLOT ===\n")
+  pdf("pilot_convergence_diagnostic.pdf", width = 14, height = 10)
+  tryCatch({
+    plot(pilot)
+    cat("Plot command executed\n")
+  }, error = function(e) {
+    cat("Error in plot:", e$message, "\n")
+  })
+  dev.off()
+  
+  cat("File size:", file.info("pilot_convergence_diagnostic.pdf")$size, "bytes\n")
+}
 ```
 
 
@@ -969,12 +1043,12 @@ tryCatch({
 ## Multiple Imputation
 
 ```{r}
-#| label: Multiple Imputation Optimization
+#| label: Multiple Imputation
 
 library(mice)
 library(dplyr)
 
-cat("\n=== MULTIPLE IMPUTATION OPTIMIZATION ===\n")
+cat("\n=== MULTIPLE IMPUTATION ===\n")
 
 # --- Use dataset from preparation step ---
 analysis_data <- final_dataset_imputed
