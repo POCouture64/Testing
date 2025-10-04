@@ -24,6 +24,7 @@ SIMOA <- read_csv("SIMOA Report.csv")
 #View(SIMOA)
 ```
 
+
 ## Eligible Participants
 
 The section where I have set out the inclusion criteria to remove people from the dataset that do not meet our criteria.
@@ -63,6 +64,645 @@ cat("After c_sp filtering:", n_after_c_sp, "(removed:", n_after_age - n_after_c_
 cat("After sfrn_stopped_bzra filtering:", n_final, "(removed:", n_after_c_sp - n_final, ")\n")
 cat("Total removed:", n_original - n_final, "\n")
 ```
+
+
+## Data Preperation
+
+This section prepare the data for MI and only include those with a complete scrn_stopped_bzra
+```{r}
+#| label: Data Preparation for Multiple Imputation
+######
+# Prepare data_personality dataset for multiple imputation
+# Combine individual adverse effects items BEFORE imputation
+######
+
+library(dplyr)
+library(mice)
+
+cat("=== DATA PREPARATION FOR MULTIPLE IMPUTATION ===\n")
+
+# Start with SIMOA dataset (the original full dataset)
+# Note: Filtering for valid scrn_stopped_bzra cases was done previously
+cat("SIMOA dataset size:", nrow(SIMOA), "\n")
+
+# Verify outcome variable distribution
+cat("scrn_stopped_bzra distribution:\n")
+print(table(SIMOA$scrn_stopped_bzra, useNA = "ifany"))
+
+######
+# COMBINE ADVERSE EFFECTS ITEMS (v1 and v2 versions)
+######
+
+cat("\n=== COMBINING ADVERSE EFFECTS ITEMS ===\n")
+cat("NOTE: Combining v1 and v2 versions into single variables.\n\n")
+
+# Function to combine v1 and v2 versions (take first non-NA value)
+combine_versions <- function(v1, v2) {
+  ifelse(!is.na(v1), v1, v2)
+}
+
+# Define item pairs to combine
+adverse_item_pairs <- list(
+  # Side effects
+  side_effects_1 = c("side_effects_1", "side_effects_1_v2"),
+  side_effects_2 = c("side_effects_2", "side_effects_2_v2"),
+  side_effects_3 = c("side_effects_3", "side_effects_3_v2"),
+  side_effects_4 = c("side_effects_4", "side_effects_4_v2"),
+  # Safety
+  safety_1 = c("safety_1", "safety_1_v2"),
+  safety_2 = c("safety_2", "safety_2_v2"),
+  safety_3 = c("safety_3", "safety_3_v2"),
+  safety_4 = c("safety_4", "safety_4_v2"),
+  # ADLs
+  adls_1 = c("adls_1", "adls_1_v2"),
+  adls_2 = c("adls_2", "adls_2_v2"),
+  # Dependence
+  dependence_1 = c("dependence_1", "dependence_1_v2"),
+  dependence_2 = c("dependence_2", "dependence_2_v2"),
+  dependence_3 = c("dependence_3", "dependence_3_v2")
+)
+
+# Combine v1 and v2 versions
+for(item_name in names(adverse_item_pairs)) {
+  v1_col <- adverse_item_pairs[[item_name]][1]
+  v2_col <- adverse_item_pairs[[item_name]][2]
+  
+  if(v1_col %in% names(SIMOA) && v2_col %in% names(SIMOA)) {
+    SIMOA[[item_name]] <- combine_versions(
+      SIMOA[[v1_col]], 
+      SIMOA[[v2_col]]
+    )
+    na_count <- sum(is.na(SIMOA[[item_name]]))
+    cat("Combined", v1_col, "and", v2_col, "into", item_name, "- Missing:", na_count, "\n")
+  } else if(v1_col %in% names(SIMOA)) {
+    SIMOA[[item_name]] <- SIMOA[[v1_col]]
+    na_count <- sum(is.na(SIMOA[[item_name]]))
+    cat("Only", v1_col, "found, using as", item_name, "- Missing:", na_count, "\n")
+  } else if(v2_col %in% names(SIMOA)) {
+    SIMOA[[item_name]] <- SIMOA[[v2_col]]
+    na_count <- sum(is.na(SIMOA[[item_name]]))
+    cat("Only", v2_col, "found, using as", item_name, "- Missing:", na_count, "\n")
+  }
+}
+
+######
+# DEFINE VARIABLES FOR ANALYSIS
+######
+
+cat("\n=== SELECTING VARIABLES FOR ANALYSIS ===\n")
+
+# Core variables requested
+core_vars <- c(
+  "age", "sex", "gender",
+  "osss_3_score", "phq2_score",
+  "prov_terr", "education", "employment", "driving_freq", "income",
+  "med_quant", "med_burden_1", "med_burden2", "medburden_3", "med_burden_4",
+  "op_use", "can_use", "caf_use", "nico_use", "alc_sleep", "can_sleep", 
+  "melatonin_use", "op_sleep", "quet_use", "traz_use", "otc_use",
+  "alc_use_wmn", "alc_use_men"
+)
+
+# Combined adverse effects items (individual items, not totals)
+adverse_items_combined <- c(
+  # Side effects (4 items)
+  "side_effects_1", "side_effects_2", "side_effects_3", "side_effects_4",
+  # Safety (4 items)
+  "safety_1", "safety_2", "safety_3", "safety_4",
+  # ADLs (2 items)
+  "adls_1", "adls_2",
+  # Dependence (3 items)
+  "dependence_1", "dependence_2", "dependence_3"
+)
+
+# Individual questionnaire items (to be imputed separately)
+questionnaire_items <- c(
+  # DBAS items (all 16 individual items)
+  "dbas1", "dbas_2", "dbas_3", "dbas_4", "dbas_5", "dbas_6", "dbas_7", "dbas_8",
+  "dbas_9", "dbas_10", "dbas_11", "dbas_12", "dbas_13", "dbas_14", "dbas_15", "dbas_16",
+  # BFI items (all 10 individual items)
+  "reserved", "outgoing", "find_fault", "trusting", "lazy", "thorough", 
+  "relaxed", "nervous", "few_interests", "imagination",
+  # SURPS items (all 23 individual items)
+  "surps1", "surps2", "surps3", "surps4", "surps5", "surps6", "surps7", "surps8",
+  "surps9", "surps10", "surps11", "surps12", "surps13", "surps14", "surps15", "surps16",
+  "surps17", "surps18", "surps19", "surps20", "surps21", "surps22", "surps23",
+  # CISS items (all 21 individual items)
+  "ciss1", "ciss2", "ciss3", "ciss4", "ciss5", "ciss6", "ciss7", "ciss8", "ciss9",
+  "ciss10", "ciss11", "ciss12", "ciss13", "ciss14", "ciss15", "ciss16", "ciss17",
+  "ciss18", "ciss19", "ciss20", "ciss21"
+)
+
+cat("Specified", length(questionnaire_items), "individual questionnaire items\n")
+cat("Found", length(adverse_items_combined), "combined adverse effects items\n")
+
+# All variables for analysis (core + individual questionnaire items + adverse items)
+all_analysis_vars <- unique(c(core_vars, questionnaire_items, adverse_items_combined))
+
+cat("Total variables requested:", length(all_analysis_vars), "\n")
+
+######
+# CHECK VARIABLE AVAILABILITY AND CREATE SUBSET
+######
+
+# Check which variables are available
+available_vars <- all_analysis_vars[all_analysis_vars %in% names(SIMOA)]
+missing_vars <- all_analysis_vars[!all_analysis_vars %in% names(SIMOA)]
+
+cat("Variables available:", length(available_vars), "\n")
+cat("Variables not found:", length(missing_vars), "\n")
+
+if(length(missing_vars) > 0) {
+  cat("\nMissing variables:\n")
+  for(var in missing_vars) {
+    cat("  -", var, "\n")
+  }
+}
+
+# Create analysis dataset with available variables
+final_dataset_imputed <- SIMOA[, available_vars, drop = FALSE]
+
+######
+# HANDLE CONDITIONAL SUBSTANCE USE VARIABLES
+######
+
+cat("\n=== HANDLING CONDITIONAL SUBSTANCE USE VARIABLES ===\n")
+
+# These variables were only shown to participants who selected them in previous questions
+# NA means they never use these substances, so recode NA to 0 ("Never")
+conditional_vars <- c("op_use", "can_use", "caf_use", "nico_use", "alc_sleep", 
+                      "can_sleep", "melatonin_use", "op_sleep", "quet_use", 
+                      "traz_use", "otc_use")
+
+for(var in conditional_vars) {
+  if(var %in% names(final_dataset_imputed)) {
+    original_na_count <- sum(is.na(final_dataset_imputed[[var]]))
+    
+    # Recode NA to 0 (Never used)
+    final_dataset_imputed[[var]][is.na(final_dataset_imputed[[var]])] <- 0
+    
+    cat("Recoded", original_na_count, "NA values to 0 ('Never') for", var, "\n")
+  }
+}
+
+######
+# HANDLE SEX-SPECIFIC ALCOHOL USE VARIABLES - ENFORCE MUTUAL EXCLUSIVITY
+######
+
+cat("\n=== HANDLING SEX-SPECIFIC ALCOHOL USE VARIABLES ===\n")
+
+# CRITICAL: alc_use_wmn should ONLY have values for women (sex = 1)
+#           alc_use_men should ONLY have values for men (sex = 2)
+#           This ensures mutual exclusivity
+
+if("alc_use_wmn" %in% names(final_dataset_imputed) && "sex" %in% names(final_dataset_imputed)) {
+  # For women (sex = 1): Keep their actual values as-is (including true missing data)
+  # For men (sex = 2): Set ALL values to NA (they should never have answered this)
+  
+  men_with_wmn_data <- sum(!is.na(final_dataset_imputed$alc_use_wmn) & final_dataset_imputed$sex == 2, na.rm = TRUE)
+  if(men_with_wmn_data > 0) {
+    cat("⚠ WARNING: Found", men_with_wmn_data, "men with alc_use_wmn data - setting to NA\n")
+  }
+  
+  final_dataset_imputed$alc_use_wmn[final_dataset_imputed$sex == 2] <- NA
+  
+  # Report missing data in women (true missing that needs imputation)
+  women_na_count <- sum(is.na(final_dataset_imputed$alc_use_wmn) & final_dataset_imputed$sex == 1, na.rm = TRUE)
+  women_total <- sum(final_dataset_imputed$sex == 1, na.rm = TRUE)
+  cat("alc_use_wmn - Women (sex=1): ", women_na_count, " missing out of ", women_total, 
+      " (", round(100*women_na_count/women_total, 1), "%)\n", sep="")
+  cat("alc_use_wmn - Men (sex=2): All set to NA (mutually exclusive)\n")
+}
+
+if("alc_use_men" %in% names(final_dataset_imputed) && "sex" %in% names(final_dataset_imputed)) {
+  # For men (sex = 2): Keep their actual values as-is (including true missing data)
+  # For women (sex = 1): Set ALL values to NA (they should never have answered this)
+  
+  women_with_men_data <- sum(!is.na(final_dataset_imputed$alc_use_men) & final_dataset_imputed$sex == 1, na.rm = TRUE)
+  if(women_with_men_data > 0) {
+    cat("⚠ WARNING: Found", women_with_men_data, "women with alc_use_men data - setting to NA\n")
+  }
+  
+  final_dataset_imputed$alc_use_men[final_dataset_imputed$sex == 1] <- NA
+  
+  # Report missing data in men (true missing that needs imputation)
+  men_na_count <- sum(is.na(final_dataset_imputed$alc_use_men) & final_dataset_imputed$sex == 2, na.rm = TRUE)
+  men_total <- sum(final_dataset_imputed$sex == 2, na.rm = TRUE)
+  cat("alc_use_men - Men (sex=2): ", men_na_count, " missing out of ", men_total, 
+      " (", round(100*men_na_count/men_total, 1), "%)\n", sep="")
+  cat("alc_use_men - Women (sex=1): All set to NA (mutually exclusive)\n")
+}
+
+# Verify mutual exclusivity
+if("alc_use_wmn" %in% names(final_dataset_imputed) && "alc_use_men" %in% names(final_dataset_imputed)) {
+  both_present <- sum(!is.na(final_dataset_imputed$alc_use_wmn) & !is.na(final_dataset_imputed$alc_use_men))
+  cat("\n✓ VERIFICATION: Cases with both alc_use_wmn AND alc_use_men:", both_present, "\n")
+  
+  if(both_present > 0) {
+    cat("⚠ ERROR: Mutual exclusivity NOT achieved!\n")
+  } else {
+    cat("✓ SUCCESS: Mutual exclusivity confirmed - no participant has values in both variables\n")
+  }
+}
+
+######
+# FINAL DATASET SUMMARY
+######
+
+cat("\n=== FINAL DATASET SUMMARY ===\n")
+cat("Final dataset dimensions:", dim(final_dataset_imputed), "\n")
+cat("Number of participants:", nrow(final_dataset_imputed), "\n")
+cat("Number of variables:", ncol(final_dataset_imputed), "\n")
+
+# Missing data summary
+cat("\n=== MISSING DATA SUMMARY ===\n")
+missing_summary <- sapply(final_dataset_imputed, function(x) sum(is.na(x)))
+variables_with_missing <- missing_summary[missing_summary > 0]
+
+if(length(variables_with_missing) > 0) {
+  cat("Variables with missing data:\n")
+  for(i in 1:length(variables_with_missing)) {
+    var_name <- names(variables_with_missing)[i]
+    missing_count <- variables_with_missing[i]
+    missing_pct <- round((missing_count / nrow(final_dataset_imputed)) * 100, 1)
+    cat(paste("  ", var_name, ":", missing_count, "(", missing_pct, "%)\n"))
+  }
+  
+  # Overall completeness
+  complete_cases <- sum(complete.cases(final_dataset_imputed))
+  complete_pct <- round((complete_cases / nrow(final_dataset_imputed)) * 100, 1)
+  cat("\nComplete cases:", complete_cases, "out of", nrow(final_dataset_imputed), 
+      "(", complete_pct, "%)\n")
+} else {
+  cat("No missing data found in any variables!\n")
+}
+
+cat("\n=== DATA PREPARATION COMPLETE ===\n")
+cat("Dataset 'final_dataset_imputed' is ready for multiple imputation analysis\n")
+cat("IMPORTANT: Individual questionnaire items (DBAS, BFI, SURPS, CISS) are included for imputation.\n")
+cat("           Create subscale scores AFTER imputation is complete.\n")
+cat("           Adverse effects items (side_effects_1-4, safety_1-4, adls_1-2, dependence_1-3)\n")
+cat("           have been combined from v1 and v2 versions and are ready for imputation.\n")
+```
+
+
+## MI Optimization and Pilot
+
+```{r}
+#| label: Multiple Imputation with Proper Variable Types
+
+library(mice)
+library(dplyr)
+
+cat("\n=== OPTIMIZED MULTIPLE IMPUTATION ===\n")
+
+# ===== DATA PREPARATION =====
+impute_data <- as.data.frame(final_dataset_imputed)
+impute_data$alc_use_wmn <- NULL
+impute_data$alc_use_men <- NULL
+
+cat("Working dimensions:", dim(impute_data), "\n")
+cat("Total missing values:", sum(is.na(impute_data)), "\n")
+
+# ===== STEP 1: SET VARIABLE TYPES =====
+cat("\n=== STEP 1: SETTING VARIABLE TYPES ===\n")
+
+continuous_vars <- c(
+  "age", "med_quant", "osss_3_score", "phq2_score",
+  "dbas1", "dbas_2", "dbas_3", "dbas_4", "dbas_5", "dbas_6", "dbas_7", "dbas_8",
+  "dbas_9", "dbas_10", "dbas_11", "dbas_12", "dbas_13", "dbas_14", "dbas_15", "dbas_16",
+  "reserved", "outgoing", "find_fault", "trusting", "lazy", "thorough", 
+  "relaxed", "nervous", "few_interests", "imagination",
+  "surps1", "surps2", "surps3", "surps4", "surps5", "surps6", "surps7", "surps8",
+  "surps9", "surps10", "surps11", "surps12", "surps13", "surps14", "surps15", "surps16",
+  "surps17", "surps18", "surps19", "surps20", "surps21", "surps22", "surps23",
+  "ciss1", "ciss2", "ciss3", "ciss4", "ciss5", "ciss6", "ciss7", "ciss8", "ciss9",
+  "ciss10", "ciss11", "ciss12", "ciss13", "ciss14", "ciss15", "ciss16", "ciss17",
+  "ciss18", "ciss19", "ciss20", "ciss21"
+)
+
+binary_vars <- c("sex")
+
+unordered_categorical <- c("prov_terr", "gender")
+
+ordered_vars <- c(
+  "education", "income", "driving_freq", "employment",
+  "side_effects_1", "side_effects_2", "side_effects_3", "side_effects_4",
+  "safety_1", "safety_2", "safety_3", "safety_4",
+  "adls_1", "adls_2",
+  "dependence_1", "dependence_2", "dependence_3",
+  "med_burden_1", "med_burden2", "medburden_3", "med_burden_4",
+  "op_use", "can_use", "caf_use", "nico_use", 
+  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", 
+  "quet_use", "traz_use", "otc_use"
+)
+
+# Format variables
+for(var in continuous_vars) {
+  if(var %in% names(impute_data)) {
+    impute_data[[var]] <- as.numeric(impute_data[[var]])
+  }
+}
+
+for(var in binary_vars) {
+  if(var %in% names(impute_data)) {
+    impute_data[[var]] <- factor(impute_data[[var]])
+  }
+}
+
+for(var in unordered_categorical) {
+  if(var %in% names(impute_data)) {
+    impute_data[[var]] <- factor(impute_data[[var]], ordered = FALSE)
+  }
+}
+
+for(var in ordered_vars) {
+  if(var %in% names(impute_data)) {
+    impute_data[[var]] <- factor(impute_data[[var]], ordered = TRUE)
+  }
+}
+
+cat("Continuous:", length(intersect(continuous_vars, names(impute_data))), "\n")
+cat("Binary:", length(intersect(binary_vars, names(impute_data))), "\n")
+cat("Unordered categorical:", length(intersect(unordered_categorical, names(impute_data))), "\n")
+cat("Ordered categorical:", length(intersect(ordered_vars, names(impute_data))), "\n")
+
+# ===== STEP 2: FIND OPTIMAL THRESHOLDS =====
+cat("\n=== STEP 2: TESTING PREDICTOR MATRIX THRESHOLDS ===\n")
+
+test_thresholds <- function(data, mincor_vals, minpuc_vals) {
+  results <- data.frame()
+  
+  for(mc in mincor_vals) {
+    for(mp in minpuc_vals) {
+      pred <- quickpred(data, mincor = mc, minpuc = mp)
+      n_vars_with_predictors <- sum(rowSums(pred) > 0)
+      
+      if(n_vars_with_predictors > 0) {
+        avg_preds <- sum(pred) / n_vars_with_predictors
+      } else {
+        avg_preds <- 0
+      }
+      
+      results <- rbind(results, data.frame(
+        mincor = mc,
+        minpuc = mp,
+        total_predictions = sum(pred),
+        avg_predictors = round(avg_preds, 1),
+        pct_reduction = round((1 - sum(pred)/prod(dim(pred))) * 100, 1)
+      ))
+    }
+  }
+  return(results)
+}
+
+threshold_results <- test_thresholds(
+  impute_data,
+  mincor_vals = c(0.1, 0.2, 0.3, 0.4),
+  minpuc_vals = c(0.2, 0.3, 0.4, 0.5)
+)
+
+print(threshold_results)
+
+# Select threshold with avg_predictors between 10-25
+optimal <- threshold_results[
+  threshold_results$avg_predictors >= 10 & 
+  threshold_results$avg_predictors <= 25, 
+][1,]
+
+if(nrow(optimal) == 0) {
+  cat("\nNo optimal threshold found in 10-25 range, using mincor=0.3, minpuc=0.3\n")
+  mincor_use <- 0.3
+  minpuc_use <- 0.3
+} else {
+  cat("\nOptimal threshold selected:\n")
+  print(optimal)
+  mincor_use <- optimal$mincor
+  minpuc_use <- optimal$minpuc
+}
+
+# ===== STEP 3: CREATE REDUCED PREDICTOR MATRIX =====
+cat("\n=== STEP 3: CREATING OPTIMIZED PREDICTOR MATRIX ===\n")
+
+predMatrix <- quickpred(impute_data, mincor = mincor_use, minpuc = minpuc_use)
+
+# Remove problematic predictors (sparse categories causing convergence issues)
+predMatrix[, "prov_terr"] <- 0
+
+cat("Original predictor matrix:", prod(dim(impute_data)), "potential predictions\n")
+cat("Reduced predictor matrix:", sum(predMatrix), "predictions\n")
+cat("Reduction:", round((1 - sum(predMatrix)/prod(dim(predMatrix))) * 100, 1), "%\n")
+cat("Note: Removed prov_terr as predictor (sparse categories)\n")
+
+# ===== STEP 4: INITIALIZE AND SET METHODS =====
+cat("\n=== STEP 4: INITIALIZING MICE WITH CUSTOM METHODS ===\n")
+
+init <- mice(impute_data, maxit = 0, print = FALSE)
+method <- init$method
+
+# Set methods
+for(var in continuous_vars) {
+  if(var %in% names(method) && method[var] != "") {
+    method[var] <- "pmm"
+  }
+}
+
+for(var in binary_vars) {
+  if(var %in% names(method) && method[var] != "") {
+    method[var] <- "logreg"
+  }
+}
+
+for(var in unordered_categorical) {
+  if(var %in% names(method) && method[var] != "") {
+    method[var] <- "polyreg"
+  }
+}
+
+for(var in ordered_vars) {
+  if(var %in% names(method) && method[var] != "") {
+    method[var] <- "polr"
+  }
+}
+
+cat("Method assignment:\n")
+print(table(method[method != ""]))
+
+# ===== STEP 5: RUN OPTIMIZED PILOT =====
+cat("\n=== STEP 5: RUNNING OPTIMIZED PILOT (m=5, maxit=5) ===\n")
+
+start_time <- Sys.time()
+pilot <- mice(
+  impute_data,
+  method = method,
+  predictorMatrix = predMatrix,
+  m = 5,
+  maxit = 5,
+  seed = 123,
+  printFlag = FALSE
+)
+end_time <- Sys.time()
+
+pilot_time <- round(difftime(end_time, start_time, units="secs"), 2)
+cat("Pilot completed in", pilot_time, "seconds\n")
+
+# ===== STEP 6: VERIFY AND DIAGNOSE =====
+cat("\n=== STEP 6: VERIFICATION & DIAGNOSTICS ===\n")
+
+cat("Logged events:", nrow(pilot$loggedEvents), "\n")
+completed <- complete(pilot, 1)
+remaining_na <- sum(is.na(completed))
+
+if(remaining_na == 0) {
+  cat("SUCCESS: All missing values imputed!\n\n")
+  
+  # Check convergence
+  cat("Checking convergence (visual inspection recommended):\n")
+  cat("Run: plot(pilot) to inspect trace plots\n\n")
+  
+  # Estimate full imputation time
+  overall_missing_pct <- mean(is.na(impute_data)) * 100
+  m_rec <- max(20, min(100, ceiling(overall_missing_pct)))
+  maxit_rec <- max(10, ceiling(overall_missing_pct / 2))
+  
+  estimated_time <- as.numeric(pilot_time) * (m_rec / 5) * (maxit_rec / 5)
+  
+  cat("=== READY FOR FULL IMPUTATION ===\n")
+  cat("Recommended settings:\n")
+  cat("  m =", m_rec, "\n")
+  cat("  maxit =", maxit_rec, "\n")
+  cat("  mincor =", mincor_use, "\n")
+  cat("  minpuc =", minpuc_use, "\n\n")
+  cat("Estimated time:", round(estimated_time / 60, 1), "minutes\n\n")
+  
+  cat("To run full imputation:\n")
+  cat("final_imp <- mice(\n")
+  cat("  impute_data,\n")
+  cat("  method = method,\n")
+  cat("  predictorMatrix = predMatrix,\n")
+  cat("  m =", m_rec, ",\n")
+  cat("  maxit =", maxit_rec, ",\n")
+  cat("  seed = 123,\n")
+  cat("  printFlag = TRUE\n")
+  cat(")\n\n")
+  
+  cat("Save results:\n")
+  cat("saveRDS(final_imp, 'imputed_data.rds')\n")
+  
+} else {
+  cat("WARNING:", remaining_na, "values still missing\n")
+  na_by_var <- colSums(is.na(completed))
+  cat("\nVariables with remaining NAs:\n")
+  print(na_by_var[na_by_var > 0])
+  cat("\nConsider:\n")
+  cat("1. Lowering mincor/minpuc thresholds\n")
+  cat("2. Checking variable types and coding\n")
+  cat("3. Increasing maxit\n")
+}
+
+# Save convergence trace plots
+png("IMP_CONV_PLOT.png", width = 1200, height = 800, res = 120)
+plot(pilot)
+dev.off()
+
+# Get convergence statistics
+install.packages("broom")
+library(broom)
+
+# Extract mean and SD across iterations for each variable
+conv_summary <- pilot$chainMean
+print(conv_summary)
+
+# Or get the full chain variance
+conv_var <- pilot$chainVar
+print(conv_var)
+
+cat("\n=== OPTIMIZATION COMPLETE ===\n")
+```
+
+
+## Multiple Imputation
+
+```{r}
+#| label: MI Execution
+
+library(mice)
+
+cat("\n=== RUNNING FULL IMPUTATION ===\n")
+cat("Start time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n\n")
+
+# You should already have these from your optimization:
+# - impute_data (prepared data)
+# - method (imputation methods)
+# - predMatrix (optimized predictor matrix)
+
+cat("Configuration:\n")
+cat("  Variables to impute:", sum(method != ""), "\n")
+cat("  Predictor relationships:", sum(predMatrix), "\n")
+cat("  m = 20 datasets\n")
+cat("  maxit = 10 iterations\n")
+cat("  Estimated time: ~10-12 minutes\n\n")
+
+# ===== RUN FULL IMPUTATION =====
+start_time <- Sys.time()
+
+final_imp <- mice(
+  impute_data,
+  method = method,
+  predictorMatrix = predMatrix,
+  m = 20,
+  maxit = 10,
+  seed = 123,
+  printFlag = TRUE
+)
+
+end_time <- Sys.time()
+imputation_time <- difftime(end_time, start_time, units = "mins")
+
+# ===== VERIFY AND SAVE =====
+cat("\n=== IMPUTATION COMPLETE ===\n")
+cat("Total time:", round(imputation_time, 2), "minutes\n")
+cat("Logged events:", nrow(final_imp$loggedEvents), "\n\n")
+
+# Check completion
+completed_data <- complete(final_imp, 1)
+remaining_na <- sum(is.na(completed_data))
+
+if(remaining_na == 0) {
+  cat("SUCCESS: All missing values imputed\n\n")
+} else {
+  cat("WARNING:", remaining_na, "values still missing\n\n")
+}
+
+# Save results
+saveRDS(final_imp, "final_imputation.rds")
+cat("Saved: final_imputation.rds\n")
+
+write.csv(completed_data, "imputed_dataset_1.csv", row.names = FALSE)
+cat("Saved: imputed_dataset_1.csv\n\n")
+
+# Save diagnostics
+png("FULL_IMP_CONV.png", width = 1400, height = 1000, res = 120)
+plot(final_imp)
+dev.off()
+cat("Saved: FULL_IMP_CONV.png\n")
+
+# For continuous variables
+png("FULL_IMP_STRIP_CONT.png", width = 1400, height = 1000, res = 120)
+stripplot(final_imp, osss_3_score + dbas1 + surps1 + ciss1 ~ .imp, 
+          pch = 20, cex = 0.8)
+dev.off()
+
+# For categorical variables
+png("FULL_IMP_STRIP_CAT.png", width = 1400, height = 1000, res = 120)
+stripplot(final_imp, education + income + employment ~ .imp, pch = 20, cex = 1.2)
+dev.off()
+
+cat("End time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+cat("\nTo use imputed data:\n")
+cat("fit <- with(final_imp, lm(outcome ~ predictors))\n")
+cat("summary(pool(fit))\n")
+```
+
 
 
 ## Calculating Subscale Scores
@@ -229,541 +869,225 @@ cat("Expected range: 0-10 (average of subscales) or sum of raw items\n\n")
 ```
 
 
-## Data Preperation
 
-This section prepare the data for MI and only include those with a complete scrn_stopped_bzra
-```{r}
-#| label: Data Preparation for Multiple Imputation
-######
-# Prepare data_personality dataset for multiple imputation
-# Include specific variables and create combined adverse effects variables
-######
-
-library(dplyr)
-library(mice)
-
-cat("=== DATA PREPARATION FOR MULTIPLE IMPUTATION ===\n")
-
-# Start with data_personality dataset
-cat("Original data_personality size:", nrow(data_personality), "\n")
-cat("Cases with missing scrn_stopped_bzra:", sum(is.na(data_personality$scrn_stopped_bzra)), "\n")
-
-# Filter to only include cases where scrn_stopped_bzra is not NA
-data_personality <- data_personality[!is.na(data_personality$scrn_stopped_bzra), ]
-cat("Valid outcome cases included:", nrow(data_personality), "\n")
-
-# Verify outcome variable distribution
-cat("scrn_stopped_bzra distribution:\n")
-print(table(data_personality$scrn_stopped_bzra, useNA = "ifany"))
-
-######
-# CREATE COMBINED ADVERSE EFFECTS VARIABLES
-######
-
-cat("\n=== CREATING COMBINED ADVERSE EFFECTS VARIABLES ===\n")
-
-# Define adverse effects variable pairs for combination
-adverse_var_pairs <- list(
-  side_effects_1_combined = c("side_effects_1", "side_effects_1_v2"),
-  side_effects_2_combined = c("side_effects_2", "side_effects_2_v2"),
-  side_effects_3_combined = c("side_effects_3", "side_effects_3_v2"),
-  side_effects_4_combined = c("side_effects_4", "side_effects_4_v2"),
-  safety_1_combined = c("safety_1", "safety_1_v2"),
-  safety_2_combined = c("safety_2", "safety_2_v2"),
-  safety_3_combined = c("safety_3", "safety_3_v2"),
-  safety_4_combined = c("safety_4", "safety_4_v2"),
-  adls_1_combined = c("adls_1", "adls_1_v2"),
-  adls_2_combined = c("adls_2", "adls_2_v2"),
-  dependence_1_combined = c("dependence_1", "dependence_1_v2"),
-  dependence_2_combined = c("dependence_2", "dependence_2_v2"),
-  dependence_3_combined = c("dependence_3", "dependence_3_v2")
-)
-
-# Create combined variables by taking the first non-missing value
-for(combined_var in names(adverse_var_pairs)) {
-  var1 <- adverse_var_pairs[[combined_var]][1]
-  var2 <- adverse_var_pairs[[combined_var]][2]
-  
-  if(var1 %in% names(data_personality) && var2 %in% names(data_personality)) {
-    # Create combined variable: use var1 if not missing, otherwise use var2
-    data_personality[[combined_var]] <- ifelse(
-      !is.na(data_personality[[var1]]), 
-      data_personality[[var1]], 
-      data_personality[[var2]]
-    )
-    cat("Created:", combined_var, "from", var1, "and", var2, "\n")
-  } else if(var1 %in% names(data_personality)) {
-    # Only var1 exists
-    data_personality[[combined_var]] <- data_personality[[var1]]
-    cat("Created:", combined_var, "from", var1, "only\n")
-  } else if(var2 %in% names(data_personality)) {
-    # Only var2 exists
-    data_personality[[combined_var]] <- data_personality[[var2]]
-    cat("Created:", combined_var, "from", var2, "only\n")
-  } else {
-    cat("Warning: Neither", var1, "nor", var2, "found in dataset\n")
-  }
-}
-
-######
-# DEFINE VARIABLES FOR ANALYSIS
-######
-
-cat("\n=== SELECTING VARIABLES FOR ANALYSIS ===\n")
-
-# Core variables requested
-core_vars <- c(
-  "age", "sex", "gender",
-  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications", "dbas_score",
-  "Openness", "Conscientiousness", "Extraversion", "Agreeableness", "Neuroticism",
-  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
-  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
-  "osss_3_score", "phq2_score",
-  "prov_terr", "education", "employment", "driving_freq", "income",
-  "med_quant", "med_burden_1", "med_burden2", "medburden_3", "med_burden_4",
-  "op_use", "can_use", "caf_use", "nico_use", "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", "quet_use", "traz_use", "otc_use",
-  "alc_use_wmn", "alc_use_men"
-)
-
-# Combined adverse effects variables
-combined_vars <- names(adverse_var_pairs)
-
-# All variables for analysis
-all_analysis_vars <- c(core_vars, combined_vars)
-
-cat("Total variables requested:", length(all_analysis_vars), "\n")
-
-######
-# CHECK VARIABLE AVAILABILITY AND CREATE SUBSET
-######
-
-# Check which variables are available
-available_vars <- all_analysis_vars[all_analysis_vars %in% names(data_personality)]
-missing_vars <- all_analysis_vars[!all_analysis_vars %in% names(data_personality)]
-
-cat("Variables available:", length(available_vars), "\n")
-cat("Variables not found:", length(missing_vars), "\n")
-
-if(length(missing_vars) > 0) {
-  cat("\nMissing variables:\n")
-  for(var in missing_vars) {
-    cat("  -", var, "\n")
-  }
-}
-
-# Create analysis dataset with available variables
-final_dataset_imputed <- data_personality[, available_vars, drop = FALSE]
-
-######
-# HANDLE CONDITIONAL SUBSTANCE USE VARIABLES
-######
-
-cat("\n=== HANDLING CONDITIONAL SUBSTANCE USE VARIABLES ===\n")
-
-# These variables were only shown to participants who selected them in previous questions
-# NA means they never use these substances, so recode NA to 0 ("Never")
-conditional_vars <- c("op_use", "can_use", "caf_use", "nico_use", "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", "quet_use", "traz_use", "otc_use")
-
-for(var in conditional_vars) {
-  if(var %in% names(final_dataset_imputed)) {
-    original_na_count <- sum(is.na(final_dataset_imputed[[var]]))
-    
-    # Recode NA to 0 (Never used)
-    final_dataset_imputed[[var]][is.na(final_dataset_imputed[[var]])] <- 0
-    
-    cat("Recoded", original_na_count, "NA values to 0 ('Never') for", var, "\n")
-  }
-}
-
-######
-# HANDLE SEX-SPECIFIC ALCOHOL USE VARIABLES - ENFORCE MUTUAL EXCLUSIVITY
-######
-
-cat("\n=== HANDLING SEX-SPECIFIC ALCOHOL USE VARIABLES ===\n")
-
-# CRITICAL: alc_use_wmn should ONLY have values for women (sex = 1)
-#           alc_use_men should ONLY have values for men (sex = 2)
-#           This ensures mutual exclusivity
-
-if("alc_use_wmn" %in% names(final_dataset_imputed) && "sex" %in% names(final_dataset_imputed)) {
-  # For women (sex = 1): Keep their actual values as-is (including true missing data)
-  # For men (sex = 2): Set ALL values to NA (they should never have answered this)
-  
-  men_with_wmn_data <- sum(!is.na(final_dataset_imputed$alc_use_wmn) & final_dataset_imputed$sex == 2, na.rm = TRUE)
-  if(men_with_wmn_data > 0) {
-    cat("⚠ WARNING: Found", men_with_wmn_data, "men with alc_use_wmn data - setting to NA\n")
-  }
-  
-  final_dataset_imputed$alc_use_wmn[final_dataset_imputed$sex == 2] <- NA
-  
-  # Report missing data in women (true missing that needs imputation)
-  women_na_count <- sum(is.na(final_dataset_imputed$alc_use_wmn) & final_dataset_imputed$sex == 1, na.rm = TRUE)
-  women_total <- sum(final_dataset_imputed$sex == 1, na.rm = TRUE)
-  cat("alc_use_wmn - Women (sex=1): ", women_na_count, " missing out of ", women_total, 
-      " (", round(100*women_na_count/women_total, 1), "%)\n", sep="")
-  cat("alc_use_wmn - Men (sex=2): All set to NA (mutually exclusive)\n")
-}
-
-if("alc_use_men" %in% names(final_dataset_imputed) && "sex" %in% names(final_dataset_imputed)) {
-  # For men (sex = 2): Keep their actual values as-is (including true missing data)
-  # For women (sex = 1): Set ALL values to NA (they should never have answered this)
-  
-  women_with_men_data <- sum(!is.na(final_dataset_imputed$alc_use_men) & final_dataset_imputed$sex == 1, na.rm = TRUE)
-  if(women_with_men_data > 0) {
-    cat("⚠ WARNING: Found", women_with_men_data, "women with alc_use_men data - setting to NA\n")
-  }
-  
-  final_dataset_imputed$alc_use_men[final_dataset_imputed$sex == 1] <- NA
-  
-  # Report missing data in men (true missing that needs imputation)
-  men_na_count <- sum(is.na(final_dataset_imputed$alc_use_men) & final_dataset_imputed$sex == 2, na.rm = TRUE)
-  men_total <- sum(final_dataset_imputed$sex == 2, na.rm = TRUE)
-  cat("alc_use_men - Men (sex=2): ", men_na_count, " missing out of ", men_total, 
-      " (", round(100*men_na_count/men_total, 1), "%)\n", sep="")
-  cat("alc_use_men - Women (sex=1): All set to NA (mutually exclusive)\n")
-}
-
-# Verify mutual exclusivity
-if("alc_use_wmn" %in% names(final_dataset_imputed) && "alc_use_men" %in% names(final_dataset_imputed)) {
-  both_present <- sum(!is.na(final_dataset_imputed$alc_use_wmn) & !is.na(final_dataset_imputed$alc_use_men))
-  cat("\n✓ VERIFICATION: Cases with both alc_use_wmn AND alc_use_men:", both_present, "\n")
-  
-  if(both_present > 0) {
-    cat("⚠ ERROR: Mutual exclusivity NOT achieved!\n")
-  } else {
-    cat("✓ SUCCESS: Mutual exclusivity confirmed - no participant has values in both variables\n")
-  }
-}
-
-# Create a combined alcohol use variable for descriptive purposes only (NOT for imputation)
-if("alc_use_wmn" %in% names(final_dataset_imputed) && "alc_use_men" %in% names(final_dataset_imputed) && "sex" %in% names(final_dataset_imputed)) {
-  final_dataset_imputed$alc_use_combined <- case_when(
-    final_dataset_imputed$sex == 1 ~ final_dataset_imputed$alc_use_wmn,  # Use women's scale for women
-    final_dataset_imputed$sex == 2 ~ final_dataset_imputed$alc_use_men,  # Use men's scale for men
-    TRUE ~ NA_real_
-  )
-  cat("Created combined alcohol use variable (alc_use_combined) for descriptive purposes\n")
-  cat("NOTE: alc_use_combined will be REMOVED before imputation to avoid redundancy\n")
-}
-
-######
-# FINAL DATASET SUMMARY
-######
-
-cat("\n=== FINAL DATASET SUMMARY ===\n")
-cat("Final dataset dimensions:", dim(final_dataset_imputed), "\n")
-cat("Number of participants:", nrow(final_dataset_imputed), "\n")
-cat("Number of variables:", ncol(final_dataset_imputed), "\n")
-
-# Missing data summary
-cat("\n=== MISSING DATA SUMMARY ===\n")
-missing_summary <- sapply(final_dataset_imputed, function(x) sum(is.na(x)))
-variables_with_missing <- missing_summary[missing_summary > 0]
-
-if(length(variables_with_missing) > 0) {
-  cat("Variables with missing data:\n")
-  for(i in 1:length(variables_with_missing)) {
-    var_name <- names(variables_with_missing)[i]
-    missing_count <- variables_with_missing[i]
-    missing_pct <- round((missing_count / nrow(final_dataset_imputed)) * 100, 1)
-    cat(paste("  ", var_name, ":", missing_count, "(", missing_pct, "%)\n"))
-  }
-  
-  # Overall completeness
-  complete_cases <- sum(complete.cases(final_dataset_imputed))
-  complete_pct <- round((complete_cases / nrow(final_dataset_imputed)) * 100, 1)
-  cat("\nComplete cases:", complete_cases, "out of", nrow(final_dataset_imputed), 
-      "(", complete_pct, "%)\n")
-} else {
-  cat("No missing data found in any variables!\n")
-}
-
-cat("\n=== DATA PREPARATION COMPLETE ===\n")
-cat("Dataset 'final_dataset_imputed' is ready for multiple imputation analysis\n")
-cat("Remember: alc_use_combined will be removed before imputation (use sex-specific versions)\n")
-```
-
-
-## MI Optimization and Pilot
+## Cluster Analysis
 
 ```{r}
-#| label: Multiple Imputation Pilot
-
-library(mice)
-library(dplyr)
-
-cat("\n=== MULTIPLE IMPUTATION PILOT RUN ===\n")
-
-# --- Use dataset from preparation step ---
-analysis_data <- final_dataset_imputed
-
-# Remove alc_use_combined if present (redundant)
-if("alc_use_combined" %in% names(analysis_data)) {
-  analysis_data$alc_use_combined <- NULL
-  cat("Removed alc_use_combined (using sex-specific variables instead)\n")
-}
-
-cat("Dataset dimensions:", dim(analysis_data), "\n")
-
-# --- Prepare variable types ---
-cat("\n=== PREPARING VARIABLE TYPES ===\n")
-
-# Continuous variables remain numeric
-continuous_vars <- c(
-  "age", "med_quant",
-  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", 
-  "DBAS_Medications", "dbas_score",
-  "Openness", "Conscientiousness", "Extraversion", "Agreeableness", "Neuroticism",
-  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
-  "SURPS_Anxiety_Sensitivity",
-  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
-  "osss_3_score", "phq2_score"
-)
-cat("Continuous variables:", length(intersect(continuous_vars, names(analysis_data))), "\n")
-
-# Binary variables
-binary_vars <- c("sex")
-for(var in binary_vars) {
-  if(var %in% names(analysis_data)) {
-    analysis_data[[var]] <- factor(analysis_data[[var]])
-  }
-}
-cat("Binary variables prepared:", length(intersect(binary_vars, names(analysis_data))), "\n")
-
-# Unordered categorical (3+ levels)
-unordered_categorical <- c("prov_terr", "gender", "education", "employment")
-for(var in unordered_categorical) {
-  if(var %in% names(analysis_data)) {
-    analysis_data[[var]] <- factor(analysis_data[[var]], ordered = FALSE)
-  }
-}
-cat("Unordered categorical variables prepared:", length(intersect(unordered_categorical, names(analysis_data))), "\n")
-
-# Ordered categorical
-ordered_vars <- c(
-  "education", "income", "driving_freq", "employment",
-  "side_effects_1_combined", "side_effects_2_combined",
-  "side_effects_3_combined", "side_effects_4_combined",
-  "safety_1_combined", "safety_2_combined",
-  "safety_3_combined", "safety_4_combined",
-  "adls_1_combined", "adls_2_combined",
-  "dependence_1_combined", "dependence_2_combined", "dependence_3_combined",
-  "med_burden_1", "med_burden2", "medburden_3", "med_burden_4",
-  "op_use", "can_use", "caf_use", "nico_use", 
-  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", 
-  "quet_use", "traz_use", "otc_use",
-  "alc_use_wmn", "alc_use_men"
-)
-for(var in ordered_vars) {
-  if(var %in% names(analysis_data)) {
-    analysis_data[[var]] <- factor(analysis_data[[var]], ordered = TRUE)
-  }
-}
-cat("Ordered categorical variables prepared:", length(intersect(ordered_vars, names(analysis_data))), "\n")
-
-# --- Missingness & determine optimal m and maxit ---
-cat("\n=== MISSINGNESS ANALYSIS ===\n")
-overall_missing_pct <- mean(is.na(analysis_data)) * 100
-m_impute <- max(20, min(100, ceiling(overall_missing_pct)))   # number of imputations
-maxit_opt <- max(10, ceiling(overall_missing_pct / 2))        # iterations for convergence
-cat("Overall missingness:", round(overall_missing_pct, 2), "%\n")
-cat("Recommended number of imputations (m):", m_impute, "\n")
-cat("Recommended number of iterations (maxit):", maxit_opt, "\n")
-
-# --- Initialize mice ---
-init <- mice(analysis_data, maxit = 0, print = FALSE)
-meth <- init$method
-pred <- init$predictorMatrix
-
-# --- Handle sex-specific alcohol variables ---
-if("alc_use_wmn" %in% names(meth)) {
-  meth["alc_use_wmn"] <- ""  # structural NA for men
-}
-if("alc_use_men" %in% names(meth)) {
-  meth["alc_use_men"] <- ""  # structural NA for women
-}
-
-# --- Assign methods by variable type ---
-for(var in continuous_vars) {
-  if(var %in% names(meth) && meth[var] != "") meth[var] <- "pmm"
-}
-for(var in binary_vars) {
-  if(var %in% names(meth) && meth[var] != "") meth[var] <- "logreg"
-}
-for(var in unordered_categorical) {
-  if(var %in% names(meth) && meth[var] != "") meth[var] <- "polyreg"
-}
-for(var in ordered_vars) {
-  if(var %in% names(meth) && meth[var] != "") meth[var] <- "polr"
-}
-
-cat("\nMethod assignment complete\n")
-cat("  PMM:", sum(meth=="pmm"), "\n")
-cat("  logreg:", sum(meth=="logreg"), "\n")
-cat("  polyreg:", sum(meth=="polyreg"), "\n")
-cat("  polr:", sum(meth=="polr"), "\n")
-cat("  Not imputed:", sum(meth==""), "\n")
-
-# --- Run pilot imputation ---
-vars_with_missing <- names(meth[meth != ""])
-total_missing_cells <- sum(is.na(analysis_data[, vars_with_missing]))
-
-if(total_missing_cells == 0) {
-  cat("\n⚠ No missing data detected. Pilot imputation skipped.\n")
-} else {
-  cat("\n=== RUNNING PILOT IMPUTATION ===\n")
-  pilot <- tryCatch({
-    mice(
-      analysis_data,
-      m = 5,
-      maxit = 5,
-      method = meth,
-      predictorMatrix = pred,
-      seed = 123,
-      print = FALSE
-    )
-  }, error = function(e) list(error=TRUE, message=e$message))
-  
-  if(is.list(pilot) && !is.null(pilot$error)) {
-    cat("✗ Pilot imputation FAILED:\n", pilot$message, "\n")
-  } else {
-    cat("✓ Pilot imputation SUCCESSFUL\n")
-    
-    # Convergence stats
-    cat("\n--- Convergence summary ---\n")
-    conv <- summary(pilot)
-    print(conv)
-    
-    # Log missing value imputations
-    cat("\n--- Variables imputed ---\n")
-    print(names(pilot$imp))
-  }
-}
-
-cat("\n=== Pilot run complete ===\n")
-cat("You can now provide convergence stats to confirm MI is working properly.\n")
-
-```
-
-
-## Multiple Imputation
-
-```{r}
-#| label: MI Execution
+#| label: Cluster Analysis with Multiple Imputation
 
 library(mice)
 library(dplyr)
 library(ggplot2)
+library(cluster)
+library(factoextra)
 
-cat("\n=== FULL MULTIPLE IMPUTATION ===\n")
+cat("\n=== CLUSTER ANALYSIS WITH MULTIPLE IMPUTATION ===\n")
 
-analysis_data <- final_dataset_imputed
-
-if("alc_use_combined" %in% names(analysis_data)) {
-  analysis_data$alc_use_combined <- NULL
-  cat("Removed alc_use_combined\n")
+# Check that full_mi exists
+if(!exists("full_mi")) {
+  stop("Error: 'full_mi' object not found. Please run the MI code chunk first.")
 }
 
-# --- Variable types ---
-binary_vars <- c("sex")
-unordered_categorical <- c("gender")  # removed non-existent variables
-ordered_vars <- c(
-  "education", "income", "driving_freq", "employment",
-  "side_effects_1_combined","side_effects_2_combined","side_effects_3_combined","side_effects_4_combined",
-  "safety_1_combined","safety_2_combined","safety_3_combined","safety_4_combined",
-  "adls_1_combined","adls_2_combined",
-  "dependence_1_combined","dependence_2_combined","dependence_3_combined",
-  "med_burden_1","med_burden2","medburden_3","med_burden_4",
-  "op_use","can_use","caf_use","nico_use",
-  "alc_sleep","can_sleep","melatonin_use","op_sleep","quet_use","traz_use","otc_use",
-  "alc_use_wmn","alc_use_men"
-)
-continuous_vars <- c(
-  "age","med_quant",
-  "DBAS_Consequences","DBAS_Worry_Helplessness","DBAS_Expectations","DBAS_Medications","dbas_score",
-  "Openness","Conscientiousness","Extraversion","Agreeableness","Neuroticism",
-  "SURPS_Impulsivity","SURPS_Sensation_Seeking","SURPS_Hopelessness","SURPS_Anxiety_Sensitivity",
-  "CISS_Avoidance_Style","CISS_Task_Style","CISS_Emotional_Style",
-  "osss_3_score","phq2_score"
+# --- Step 1: Identify successfully imputed clustering variables ---
+
+# Extract first imputed dataset to check
+test_imputed <- mice::complete(full_mi, action = 1)
+
+# Define desired clustering variables
+desired_clustering_vars <- c(
+  "age", "sex", "education", "income", "prov_terr", "employment", "driving_freq",
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications",
+  "Openness", "Conscientiousness", "Extraversion", "Agreeableness", "Neuroticism",
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
+  "osss_3_score", "phq2_score"
 )
 
-for(var in binary_vars) if(var %in% names(analysis_data)) analysis_data[[var]] <- factor(analysis_data[[var]])
-for(var in unordered_categorical) if(var %in% names(analysis_data)) analysis_data[[var]] <- factor(analysis_data[[var]], ordered = FALSE)
-for(var in ordered_vars) if(var %in% names(analysis_data)) analysis_data[[var]] <- factor(analysis_data[[var]], ordered = TRUE)
+# Check NA status and keep only complete variables
+na_status <- sapply(desired_clustering_vars, function(var) sum(is.na(test_imputed[[var]])))
+clustering_vars <- names(na_status[na_status == 0])
 
-# --- Initialize methods and predictor matrix ---
-init <- mice(analysis_data, maxit = 0, print = FALSE)
-meth <- init$method
-pred <- init$predictorMatrix
+cat("Using", length(clustering_vars), "variables for clustering (", length(na_status[na_status > 0]), "excluded due to NAs)\n")
 
-for(var in c("alc_use_wmn","alc_use_men")) if(var %in% names(meth)) meth[var] <- ""
+# --- Step 2: Prepare data from multiple imputations ---
 
-for(var in continuous_vars) if(var %in% names(meth) && meth[var] != "") meth[var] <- "pmm"
-for(var in binary_vars) if(var %in% names(meth) && meth[var] != "") meth[var] <- "logreg"
-for(var in unordered_categorical) if(var %in% names(meth) && meth[var] != "") meth[var] <- "polyreg"
-for(var in ordered_vars) if(var %in% names(meth) && meth[var] != "") meth[var] <- "polr"
+all_imputed <- mice::complete(full_mi, action = "all")
 
-# Optimize DBAS predictors
-dbas_subscales <- c("DBAS_Consequences","DBAS_Worry_Helplessness","DBAS_Expectations","DBAS_Medications")
-if("dbas_score" %in% names(pred)) {
-  pred["dbas_score", dbas_subscales] <- 0
-  pred[dbas_subscales, "dbas_score"] <- 0
-  other_vars <- setdiff(rownames(pred), c("dbas_score", dbas_subscales))
-  pred[other_vars,"dbas_score"] <- 0
+# Function to prepare data for clustering
+prepare_cluster_data <- function(dataset, vars) {
+  # Select only clustering variables
+  cluster_df <- dataset[, vars, drop = FALSE]
+  
+  # Convert ordered factors and factors to numeric
+  cluster_df <- cluster_df %>%
+    mutate(across(where(is.ordered), ~ as.numeric(.))) %>%
+    mutate(across(where(is.factor), ~ as.numeric(.)))
+  
+  # Verify no NAs were created
+  na_count <- sum(is.na(cluster_df))
+  if(na_count > 0) {
+    cat("ERROR:", na_count, "NAs created during conversion!\n")
+    cat("Variables with NAs:\n")
+    print(colSums(is.na(cluster_df)))
+    stop("Data conversion created NAs - check factor levels")
+  }
+  
+  # Standardize all variables (important for clustering!)
+  cluster_df_scaled <- scale(cluster_df)
+  
+  # Check for non-finite values after scaling
+  if(any(!is.finite(cluster_df_scaled))) {
+    non_finite_cols <- colnames(cluster_df_scaled)[colSums(!is.finite(cluster_df_scaled)) > 0]
+    cat("Warning: Non-finite values in:", paste(non_finite_cols, collapse=", "), "\n")
+    cat("This likely means a variable has zero variance (all same value)\n")
+    stop("Check variables with zero variance")
+  }
+  
+  return(cluster_df_scaled)
 }
 
-# Avoid predicting sex-specific alcohol variables from each other
-if(all(c("alc_use_wmn","alc_use_men") %in% rownames(pred))) {
-  pred["alc_use_wmn","alc_use_men"] <- 0
-  pred["alc_use_men","alc_use_wmn"] <- 0
-}
+# Prepare all imputed datasets
+cat("\nPreparing", full_mi$m, "imputed datasets for clustering...\n")
+scaled_data_list <- lapply(all_imputed, prepare_cluster_data, vars = clustering_vars)
 
-# --- Run full imputation with timing ---
-start_time <- Sys.time()
-full_mi <- mice(
-  analysis_data,
-  m = 20,
-  maxit = 10,
-  method = meth,
-  predictorMatrix = pred,
-  seed = 123,
-  printFlag = TRUE
-)
-end_time <- Sys.time()
-cat("\n--- Imputation completed ---\n")
-cat("Total time:", round(difftime(end_time, start_time, units="mins"), 2), "minutes\n")
+# --- Step 3: Determine optimal number of clusters ---
+# We'll use the first imputation to determine k
+# (You can also average across imputations for more robust selection)
 
-# --- Save convergence plots ---
-pdf("convergence_plot.pdf", width=14, height=10)
-plot(full_mi)
+cat("\n=== DETERMINING OPTIMAL NUMBER OF CLUSTERS ===\n")
+
+# Elbow method
+set.seed(123)
+wss <- sapply(2:10, function(k) {
+  kmeans(scaled_data_list[[1]], centers = k, nstart = 25)$tot.withinss
+})
+
+# Silhouette method
+sil_width <- sapply(2:10, function(k) {
+  km <- kmeans(scaled_data_list[[1]], centers = k, nstart = 25)
+  ss <- silhouette(km$cluster, dist(scaled_data_list[[1]]))
+  mean(ss[, 3])
+})
+
+# Plot both methods
+pdf("cluster_optimization.pdf", width = 12, height = 5)
+par(mfrow = c(1, 2))
+
+# Elbow plot
+plot(2:10, wss, type = "b", pch = 19, frame = FALSE,
+     xlab = "Number of Clusters (k)", ylab = "Total Within-Cluster Sum of Squares",
+     main = "Elbow Method")
+
+# Silhouette plot
+plot(2:10, sil_width, type = "b", pch = 19, frame = FALSE,
+     xlab = "Number of Clusters (k)", ylab = "Average Silhouette Width",
+     main = "Silhouette Method")
+
 dev.off()
-cat("Convergence plots saved to convergence_plot.pdf\n")
+cat("Cluster optimization plots saved to cluster_optimization.pdf\n")
 
-# --- Numeric convergence summary (continuous variables only) ---
-numeric_vars <- intersect(continuous_vars, names(full_mi$data))
-conv_mean <- full_mi$chainMean[, numeric_vars, ]
-conv_var  <- full_mi$chainVar[, numeric_vars, ]
+# Print results
+cat("\nWithin-cluster sum of squares by k:\n")
+print(data.frame(k = 2:10, WSS = round(wss, 2)))
+cat("\nAverage silhouette width by k:\n")
+print(data.frame(k = 2:10, Silhouette = round(sil_width, 3)))
 
-cat("\n=== NUMERIC CONVERGENCE SUMMARY (continuous variables only) ===\n")
-print(conv_mean)
-print(conv_var)
+# Suggest optimal k
+optimal_k_sil <- which.max(sil_width) + 1
+cat("\nSuggested optimal k based on silhouette:", optimal_k_sil, "\n")
 
-write.csv(conv_mean, "mi_chainMean_continuous.csv", row.names = TRUE)
-write.csv(conv_var, "mi_chainVar_continuous.csv", row.names = TRUE)
-cat("Continuous variable convergence statistics saved to mi_chainMean_continuous.csv and mi_chainVar_continuous.csv\n")
+# --- Step 4: Perform clustering on each imputation ---
+# Set the number of clusters (adjust based on step 3 results)
+k_clusters <- optimal_k_sil  # or specify manually, e.g., k_clusters <- 3
 
-# --- Optional traceplots for key variables ---
-cat("\n=== TRACEPLOTS FOR KEY VARIABLES ===\n")
-traceplot(full_mi, var = "age")
-traceplot(full_mi, var = "DBAS_Consequences")
+cat("\n=== PERFORMING K-MEANS CLUSTERING (k =", k_clusters, ") ===\n")
 
-# --- Variables actually imputed ---
-cat("\n=== VARIABLES ACTUALLY IMPUTED ===\n")
-print(names(full_mi$imp))
+# Cluster each imputation
+set.seed(123)
+cluster_results_list <- lapply(scaled_data_list, function(data) {
+  kmeans(data, centers = k_clusters, nstart = 25, iter.max = 100)
+})
 
-full_mi
+# Extract cluster assignments for each imputation
+cluster_assignments <- sapply(cluster_results_list, function(res) res$cluster)
+colnames(cluster_assignments) <- paste0("imp_", 1:full_mi$m)
+
+# --- Step 5: Find consensus clustering ---
+# Use majority voting to assign final clusters
+
+cat("\nCreating consensus cluster assignments...\n")
+
+# Function to find mode (most common cluster)
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+# Consensus cluster for each participant
+consensus_clusters <- apply(cluster_assignments, 1, get_mode)
+
+# Calculate agreement (what % of imputations agree with consensus)
+agreement <- apply(cluster_assignments, 1, function(row) {
+  mean(row == get_mode(row))
+})
+
+cat("Mean agreement across participants:", round(mean(agreement), 3), "\n")
+cat("Minimum agreement:", round(min(agreement), 3), "\n")
+
+# --- Step 6: Add consensus clusters to first imputed dataset ---
+imputed_data_1 <- complete(full_mi, action = 1)
+imputed_data_1$cluster <- factor(consensus_clusters)
+imputed_data_1$cluster_agreement <- agreement
+
+# --- Step 7: Summarize clusters ---
+cat("\n=== CLUSTER SIZES ===\n")
+print(table(consensus_clusters))
+
+# Save cluster assignments
+cluster_output <- data.frame(
+  participant_id = 1:nrow(imputed_data_1),
+  consensus_cluster = consensus_clusters,
+  agreement = round(agreement, 3),
+  cluster_assignments
+)
+
+write.csv(cluster_output, "cluster_assignments.csv", row.names = FALSE)
+cat("\nCluster assignments saved to cluster_assignments.csv\n")
+
+# --- Step 8: Visualize clusters (using PCA) ---
+cat("\n=== CREATING CLUSTER VISUALIZATION ===\n")
+
+# PCA for visualization
+pca_result <- prcomp(scaled_data_list[[1]], center = FALSE, scale. = FALSE)
+pca_data <- as.data.frame(pca_result$x[, 1:2])
+pca_data$cluster <- factor(consensus_clusters)
+pca_data$agreement <- agreement
+
+# Variance explained
+var_explained <- summary(pca_result)$importance[2, 1:2] * 100
+
+# Create plot
+p1 <- ggplot(pca_data, aes(x = PC1, y = PC2, color = cluster, size = agreement)) +
+  geom_point(alpha = 0.6) +
+  scale_size_continuous(range = c(1, 4), name = "Agreement") +
+  labs(
+    title = paste("Cluster Solution (k =", k_clusters, ")"),
+    subtitle = "Based on consensus across 20 imputations",
+    x = paste0("PC1 (", round(var_explained[1], 1), "% variance)"),
+    y = paste0("PC2 (", round(var_explained[2], 1), "% variance)"),
+    color = "Cluster"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+ggsave("cluster_visualization.pdf", p1, width = 10, height = 7)
+cat("Cluster visualization saved to cluster_visualization.pdf\n")
+
+# --- Step 9: Cluster profiling (descriptive statistics) ---
+cat("\n=== CLUSTER PROFILING ===\n")
+
+# Calculate means for each cluster
+cluster_profiles
 ```
-
-
 
 
