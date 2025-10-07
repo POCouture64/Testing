@@ -716,156 +716,140 @@ The section where I go about calculating the subscale scores for all the measure
 # All subscale score coding will be found in this chunk but I have      # divided them to make them easy to find. I would rather have 1 chunk   # that way it cuts down on the amount of space being taken up for this  # step.
 ######
 
-# First, let's create a working copy
-data_personality <- SIMOA
+# ===== CREATE SUBSCALES AFTER IMPUTATION =====
+# This must be done AFTER imputation, not before
+# We'll use mice::complete() with "long" format to work with all imputed datasets
 
-######
-# BFI-10 SUBSCALE SCORES
-######
+cat("\n=== CREATING SUBSCALES FOR IMPUTED DATA ===\n")
 
-# Items to reverse: reserved, find_fault, lazy, relaxed, few_interests
-# Formula: reversed_score = 6 - original_score
-data_personality <- data_personality %>%
+# Get all imputed datasets in long format
+imputed_long <- complete(final_imp, "long", include = TRUE)
+
+# ===== BFI-10 SUBSCALE SCORES =====
+cat("Creating BFI-10 subscales...\n")
+
+imputed_long <- imputed_long %>%
   mutate(
+    # Reverse code items (assuming 1-5 scale, adjust if different)
     reserved_rev = 6 - reserved,
     find_fault_rev = 6 - find_fault,
     lazy_rev = 6 - lazy,
     relaxed_rev = 6 - relaxed,
-    few_interests_rev = 6 - few_interests
-  )
-
-# Verifying Reverse-Coding
-data_personality %>%
-  select(reserved, reserved_rev, find_fault, find_fault_rev, lazy, lazy_rev, 
-         relaxed, relaxed_rev, few_interests, few_interests_rev) %>%
-  head(10)
-
-# Verify the math: original + reversed should equal 6
-verification_check <- data_personality %>%
-  mutate(
-    reserved_sum = reserved + reserved_rev,
-    find_fault_sum = find_fault + find_fault_rev,
-    lazy_sum = lazy + lazy_rev,
-    relaxed_sum = relaxed + relaxed_rev,
-    few_interests_sum = few_interests + few_interests_rev
-  ) %>%
-  select(ends_with("_sum"))
-
-cat("BFI-10 Reverse coding verification (all should equal 6):\n")
-summary(verification_check)
-
-# Creating personality total scores
-data_personality <- data_personality %>%
-  mutate(
-    # Extraversion: reserved (reversed) + outgoing
+    few_interests_rev = 6 - few_interests,
+    
+    # Create subscales
     Extraversion = reserved_rev + outgoing,
-    
-    # Agreeableness: trusting + find_fault (reversed)
     Agreeableness = trusting + find_fault_rev,
-    
-    # Conscientiousness: lazy (reversed) + thorough
     Conscientiousness = lazy_rev + thorough,
-    
-    # Neuroticism: relaxed (reversed) + nervous
     Neuroticism = relaxed_rev + nervous,
-    
-    # Openness: few_interests (reversed) + imagination
     Openness = few_interests_rev + imagination
   )
 
-######
-# SURPS SUBSCALE SCORES
-######
+# ===== SURPS SUBSCALE SCORES =====
+cat("Creating SURPS subscales...\n")
 
-# First, reverse code SURPS Hopelessness items (all except surps17)
-# Formula for 1-4 scale: reversed_score = 5 - original_score
-data_personality <- data_personality %>%
+imputed_long <- imputed_long %>%
   mutate(
+    # Reverse code Hopelessness items (1-4 scale)
     surps1_rev = 5 - surps1,
     surps4_rev = 5 - surps4,
     surps7_rev = 5 - surps7,
     surps13_rev = 5 - surps13,
     surps20_rev = 5 - surps20,
-    surps23_rev = 5 - surps23
-    # Note: surps17 is NOT reversed
-  )
-
-# Quick verification - all sums should equal 5
-cat("SURPS reverse coding verification (all should equal 5):\n")
-print(unique(data_personality$surps1 + data_personality$surps1_rev))
-print(unique(data_personality$surps4 + data_personality$surps4_rev))
-print(unique(data_personality$surps7 + data_personality$surps7_rev))
-
-# Create SURPS total scores
-data_personality <- data_personality %>%
-  mutate(
-    # Impulsivity: surps2, surps5, surps11, surps15, surps22
+    surps23_rev = 5 - surps23,
+    
+    # Create subscales
     SURPS_Impulsivity = surps2 + surps5 + surps11 + surps15 + surps22,
-    
-    # Sensation Seeking: surps3, surps6, surps9, surps12, surps16, surps19
     SURPS_Sensation_Seeking = surps3 + surps6 + surps9 + surps12 + surps16 + surps19,
-    
-    # Hopelessness: surps1(rev), surps4(rev), surps7(rev), surps13(rev), surps17, surps20(rev), surps23(rev)
-    SURPS_Hopelessness = surps1_rev + surps4_rev + surps7_rev + surps13_rev + surps17 + surps20_rev + surps23_rev,
-    
-    # Anxiety Sensitivity: surps8, surps10, surps14, surps18, surps21
+    SURPS_Hopelessness = surps1_rev + surps4_rev + surps7_rev + surps13_rev + 
+                         surps17 + surps20_rev + surps23_rev,
     SURPS_Anxiety_Sensitivity = surps8 + surps10 + surps14 + surps18 + surps21
   )
 
-######
-# DBAS SUBSCALE SCORES
-######
+# ===== DBAS SUBSCALE SCORES =====
+cat("Creating DBAS subscales...\n")
 
-# Response scale: 0-10 (0 = Strongly Disagree, 10 = Strongly Agree)
-# No reverse coding needed for DBAS-16
-data_personality <- data_personality %>%
+imputed_long <- imputed_long %>%
   mutate(
-    # Expectations subscale (2 items)
-    DBAS_Expectations = rowMeans(select(., dbas1, dbas_2), na.rm = TRUE),
+    # Using rowMeans for averaging (0-10 scale, no reverse coding)
+    DBAS_Expectations = (dbas1 + dbas_2) / 2,
+    DBAS_Medications = (dbas_6 + dbas_13 + dbas_15) / 3,
+    DBAS_Worry_Helplessness = (dbas_3 + dbas_4 + dbas_8 + dbas_10 + dbas_11 + dbas_14) / 6,
+    DBAS_Consequences = (dbas_5 + dbas_7 + dbas_9 + dbas_12 + dbas_16) / 5,
     
-    # Medications subscale (3 items) 
-    DBAS_Medications = rowMeans(select(., dbas_6, dbas_13, dbas_15), na.rm = TRUE),
-    
-    # Worry/Helplessness subscale (6 items)
-    DBAS_Worry_Helplessness = rowMeans(select(., dbas_3, dbas_4, dbas_8, dbas_10, dbas_11, dbas_14), na.rm = TRUE),
-    
-    # Consequences subscale (5 items)
-    DBAS_Consequences = rowMeans(select(., dbas_5, dbas_7, dbas_9, dbas_12, dbas_16), na.rm = TRUE)
+    # Total DBAS score
+    dbas_score = DBAS_Expectations + DBAS_Medications + 
+                 DBAS_Worry_Helplessness + DBAS_Consequences
   )
 
-# DBAS verification
-cat("DBAS-16 Subscale Summary:\n")
-data_personality %>%
-  select(DBAS_Expectations, DBAS_Medications, DBAS_Worry_Helplessness, DBAS_Consequences) %>%
-  summary()
+# ===== CISS SUBSCALE SCORES =====
+cat("Creating CISS subscales...\n")
 
-######
-# CISS SUBSCALE SCORES
-######
-
-data_personality <- data_personality %>%
+imputed_long <- imputed_long %>%
   mutate(
-    # Avoidance Style: ciss1, ciss4, ciss7, ciss9, ciss15, ciss18, ciss21
     CISS_Avoidance_Style = ciss1 + ciss4 + ciss7 + ciss9 + ciss15 + ciss18 + ciss21,
-    
-    # Task Style: ciss2, ciss6, ciss8, ciss11, ciss13, ciss16, ciss19
     CISS_Task_Style = ciss2 + ciss6 + ciss8 + ciss11 + ciss13 + ciss16 + ciss19,
-    
-    # Emotional Style: ciss3, ciss5, ciss10, ciss12, ciss14, ciss17, ciss20
     CISS_Emotional_Style = ciss3 + ciss5 + ciss10 + ciss12 + ciss14 + ciss17 + ciss20
   )
 
-# Calculate DBAS total score (sum of all subscales)
-data_personality <- data_personality %>%
-  mutate(
-    # Total DBAS score (sum of all 4 subscales)
-    dbas_score = DBAS_Expectations + DBAS_Medications + DBAS_Worry_Helplessness + DBAS_Consequences
-  )
+# ===== CONVERT BACK TO MIDS OBJECT =====
+cat("Converting back to mids object...\n")
 
-# Verification for DBAS total score
-cat("DBAS Total Score Summary:\n")
-summary(data_personality$dbas_score)
-cat("Expected range: 0-10 (average of subscales) or sum of raw items\n\n")
+final_imp <- as.mids(imputed_long)
+
+# ===== VERIFICATION =====
+cat("\n=== SUBSCALE VERIFICATION ===\n")
+
+# Check one imputed dataset
+check_data <- complete(final_imp, 1)
+
+cat("\nBFI-10 Subscales:\n")
+print(summary(check_data[, c("Extraversion", "Agreeableness", "Conscientiousness", 
+                              "Neuroticism", "Openness")]))
+
+cat("\nSURPS Subscales:\n")
+print(summary(check_data[, c("SURPS_Impulsivity", "SURPS_Sensation_Seeking", 
+                              "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity")]))
+
+cat("\nDBAS Subscales:\n")
+print(summary(check_data[, c("DBAS_Expectations", "DBAS_Medications", 
+                              "DBAS_Worry_Helplessness", "DBAS_Consequences", 
+                              "dbas_score")]))
+
+cat("\nCISS Subscales:\n")
+print(summary(check_data[, c("CISS_Avoidance_Style", "CISS_Task_Style", 
+                              "CISS_Emotional_Style")]))
+
+# ===== SAVE UPDATED IMPUTATION OBJECT =====
+saveRDS(final_imp, "final_imputation_with_subscales.rds")
+cat("\nSaved: final_imputation_with_subscales.rds\n")
+
+# Save first imputed dataset with subscales
+write.csv(check_data, "imputed_dataset_1_with_subscales.csv", row.names = FALSE)
+cat("Saved: imputed_dataset_1_with_subscales.csv\n")
+
+# ===== NOW YOU CAN CREATE DIAGNOSTIC PLOTS =====
+cat("\n=== CREATING DIAGNOSTIC PLOTS WITH SUBSCALES ===\n")
+
+# Density plots for subscale scores
+png("FULL_IMP_DENS_SUBSCALES.png", width = 1600, height = 1200, res = 120)
+densityplot(final_imp, ~ DBAS_Expectations + SURPS_Impulsivity + 
+            CISS_Avoidance_Style + Extraversion)
+dev.off()
+cat("Saved: FULL_IMP_DENS_SUBSCALES.png\n")
+
+# Strip plot for subscales
+png("FULL_IMP_STRIP_SUBSCALES.png", width = 1600, height = 1200, res = 120)
+stripplot(final_imp, DBAS_Expectations + SURPS_Impulsivity + 
+          CISS_Avoidance_Style + Neuroticism ~ .imp, 
+          pch = 20, cex = 0.8)
+dev.off()
+cat("Saved: FULL_IMP_STRIP_SUBSCALES.png\n")
+
+cat("\n=== COMPLETE ===\n")
+cat("You can now use subscales in your analyses:\n")
+cat("fit <- with(final_imp, lm(outcome ~ DBAS_Expectations + SURPS_Impulsivity))\n")
+cat("summary(pool(fit))\n")
 ```
 
 
@@ -873,221 +857,458 @@ cat("Expected range: 0-10 (average of subscales) or sum of raw items\n\n")
 ## Cluster Analysis
 
 ```{r}
-#| label: Cluster Analysis with Multiple Imputation
+#| label: Focused Clustering Analysis - 35 Variables
 
+# ===== LOAD REQUIRED PACKAGES =====
 library(mice)
+library(cluster)
 library(dplyr)
 library(ggplot2)
-library(cluster)
-library(factoextra)
+library(tidyr)
 
-cat("\n=== CLUSTER ANALYSIS WITH MULTIPLE IMPUTATION ===\n")
+# ===== LOAD IMPUTED DATA WITH SUBSCALES =====
+cat("\n=== LOADING IMPUTED DATA ===\n")
+final_imp <- readRDS("final_imputation_with_subscales.rds")
 
-# Check that full_mi exists
-if(!exists("full_mi")) {
-  stop("Error: 'full_mi' object not found. Please run the MI code chunk first.")
-}
+# ===== DEFINE FOCUSED VARIABLE SET (35 VARIABLES) =====
+cat("\n=== DEFINING FOCUSED VARIABLE SET ===\n")
 
-# --- Step 1: Identify successfully imputed clustering variables ---
-
-# Extract first imputed dataset to check
-test_imputed <- mice::complete(full_mi, action = 1)
-
-# Define desired clustering variables
-desired_clustering_vars <- c(
-  "age", "sex", "education", "income", "prov_terr", "employment", "driving_freq",
-  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications",
-  "Openness", "Conscientiousness", "Extraversion", "Agreeableness", "Neuroticism",
-  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+clustering_vars <- c(
+  # Demographics (6)
+  "age", "sex", "education", "income", "employment", "med_quant",
+  
+  # Big Five Personality (5)
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  
+  # SURPS Personality (4)
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+  "SURPS_Anxiety_Sensitivity",
+  
+  # DBAS Sleep Beliefs (4)
+  "DBAS_Expectations", "DBAS_Medications", "DBAS_Worry_Helplessness", 
+  "DBAS_Consequences",
+  
+  # CISS Coping Styles (3)
   "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
-  "osss_3_score", "phq2_score"
+  
+  # Side Effects (4)
+  "side_effects_1", "side_effects_2", 
+  "side_effects_3", "side_effects_4",
+  
+  # Safety Concerns (4)
+  "safety_1", "safety_2", 
+  "safety_3", "safety_4",
+  
+  # ADL Impact (2)
+  "adls_1", "adls_2",
+  
+  # Dependence Concerns (3)
+  "dependence_1", "dependence_2", "dependence_3"
 )
 
-# Check NA status and keep only complete variables
-na_status <- sapply(desired_clustering_vars, function(var) sum(is.na(test_imputed[[var]])))
-clustering_vars <- names(na_status[na_status == 0])
+cat("Using", length(clustering_vars), "variables for focused clustering\n")
+cat("\nVariable categories:\n")
+cat("  Demographics: 6\n")
+cat("  Personality (Big Five + SURPS): 9\n")
+cat("  Sleep Beliefs (DBAS): 4\n")
+cat("  Coping (CISS): 3\n")
+cat("  Side Effects: 4\n")
+cat("  Safety Concerns: 4\n")
+cat("  ADL Impact: 2\n")
+cat("  Dependence Concerns: 3\n")
 
-cat("Using", length(clustering_vars), "variables for clustering (", length(na_status[na_status > 0]), "excluded due to NAs)\n")
+# ===== PREPARE DATA FOR CLUSTERING =====
+cat("\n=== PREPARING DATA FOR CLUSTERING ===\n")
 
-# --- Step 2: Prepare data from multiple imputations ---
-
-all_imputed <- mice::complete(full_mi, action = "all")
-
-# Function to prepare data for clustering
-prepare_cluster_data <- function(dataset, vars) {
-  # Select only clustering variables
-  cluster_df <- dataset[, vars, drop = FALSE]
+# Function to prepare clustering data
+prepare_clustering_data <- function(imp_data, vars) {
+  # Get complete data in long format
+  complete_data <- mice::complete(imp_data, "long", include = FALSE)
   
-  # Convert ordered factors and factors to numeric
-  cluster_df <- cluster_df %>%
-    mutate(across(where(is.ordered), ~ as.numeric(.))) %>%
-    mutate(across(where(is.factor), ~ as.numeric(.)))
+  # Select clustering variables
+  cluster_data <- complete_data %>%
+    select(.imp, .id, all_of(vars))
   
-  # Verify no NAs were created
-  na_count <- sum(is.na(cluster_df))
-  if(na_count > 0) {
-    cat("ERROR:", na_count, "NAs created during conversion!\n")
-    cat("Variables with NAs:\n")
-    print(colSums(is.na(cluster_df)))
-    stop("Data conversion created NAs - check factor levels")
-  }
-  
-  # Standardize all variables (important for clustering!)
-  cluster_df_scaled <- scale(cluster_df)
-  
-  # Check for non-finite values after scaling
-  if(any(!is.finite(cluster_df_scaled))) {
-    non_finite_cols <- colnames(cluster_df_scaled)[colSums(!is.finite(cluster_df_scaled)) > 0]
-    cat("Warning: Non-finite values in:", paste(non_finite_cols, collapse=", "), "\n")
-    cat("This likely means a variable has zero variance (all same value)\n")
-    stop("Check variables with zero variance")
-  }
-  
-  return(cluster_df_scaled)
+  return(cluster_data)
 }
 
-# Prepare all imputed datasets
-cat("\nPreparing", full_mi$m, "imputed datasets for clustering...\n")
-scaled_data_list <- lapply(all_imputed, prepare_cluster_data, vars = clustering_vars)
+# Prepare data
+cluster_long <- prepare_clustering_data(final_imp, clustering_vars)
 
-# --- Step 3: Determine optimal number of clusters ---
-# We'll use the first imputation to determine k
-# (You can also average across imputations for more robust selection)
+cat("Data prepared with", nrow(cluster_long), "rows and", 
+    length(clustering_vars), "clustering variables\n")
 
-cat("\n=== DETERMINING OPTIMAL NUMBER OF CLUSTERS ===\n")
-
-# Elbow method
-set.seed(123)
-wss <- sapply(2:10, function(k) {
-  kmeans(scaled_data_list[[1]], centers = k, nstart = 25)$tot.withinss
-})
-
-# Silhouette method
-sil_width <- sapply(2:10, function(k) {
-  km <- kmeans(scaled_data_list[[1]], centers = k, nstart = 25)
-  ss <- silhouette(km$cluster, dist(scaled_data_list[[1]]))
-  mean(ss[, 3])
-})
-
-# Plot both methods
-pdf("cluster_optimization.pdf", width = 12, height = 5)
-par(mfrow = c(1, 2))
-
-# Elbow plot
-plot(2:10, wss, type = "b", pch = 19, frame = FALSE,
-     xlab = "Number of Clusters (k)", ylab = "Total Within-Cluster Sum of Squares",
-     main = "Elbow Method")
-
-# Silhouette plot
-plot(2:10, sil_width, type = "b", pch = 19, frame = FALSE,
-     xlab = "Number of Clusters (k)", ylab = "Average Silhouette Width",
-     main = "Silhouette Method")
-
-dev.off()
-cat("Cluster optimization plots saved to cluster_optimization.pdf\n")
-
-# Print results
-cat("\nWithin-cluster sum of squares by k:\n")
-print(data.frame(k = 2:10, WSS = round(wss, 2)))
-cat("\nAverage silhouette width by k:\n")
-print(data.frame(k = 2:10, Silhouette = round(sil_width, 3)))
-
-# Suggest optimal k
-optimal_k_sil <- which.max(sil_width) + 1
-cat("\nSuggested optimal k based on silhouette:", optimal_k_sil, "\n")
-
-# --- Step 4: Perform clustering on each imputation ---
-# Set the number of clusters (adjust based on step 3 results)
-k_clusters <- optimal_k_sil  # or specify manually, e.g., k_clusters <- 3
-
-cat("\n=== PERFORMING K-MEANS CLUSTERING (k =", k_clusters, ") ===\n")
-
-# Cluster each imputation
-set.seed(123)
-cluster_results_list <- lapply(scaled_data_list, function(data) {
-  kmeans(data, centers = k_clusters, nstart = 25, iter.max = 100)
-})
-
-# Extract cluster assignments for each imputation
-cluster_assignments <- sapply(cluster_results_list, function(res) res$cluster)
-colnames(cluster_assignments) <- paste0("imp_", 1:full_mi$m)
-
-# --- Step 5: Find consensus clustering ---
-# Use majority voting to assign final clusters
-
-cat("\nCreating consensus cluster assignments...\n")
-
-# Function to find mode (most common cluster)
-get_mode <- function(x) {
-  ux <- unique(x)
-  ux[which.max(tabulate(match(x, ux)))]
+# Check for any missing variables
+missing_vars <- setdiff(clustering_vars, names(cluster_long))
+if (length(missing_vars) > 0) {
+  cat("\nWARNING: The following variables are missing from the dataset:\n")
+  print(missing_vars)
+  cat("\nProceeding with available variables only.\n")
+  clustering_vars <- intersect(clustering_vars, names(cluster_long))
 }
 
-# Consensus cluster for each participant
-consensus_clusters <- apply(cluster_assignments, 1, get_mode)
+# ===== RUN PAM CLUSTERING ACROSS ALL IMPUTATIONS =====
+cat("\n=== RUNNING PAM CLUSTERING ===\n")
 
-# Calculate agreement (what % of imputations agree with consensus)
-agreement <- apply(cluster_assignments, 1, function(row) {
-  mean(row == get_mode(row))
-})
+# Function to run PAM on single imputation
+run_pam_single <- function(data, k, vars) {
+  # Recode sex to 0/1 for Gower distance calculation
+  if ("sex" %in% vars) {
+    data$sex_binary <- as.numeric(data$sex) - 1  # Convert factor to 0/1
+  }
+  
+  # Update vars list to use sex_binary
+  vars_for_gower <- vars
+  if ("sex" %in% vars) {
+    vars_for_gower <- c(setdiff(vars, "sex"), "sex_binary")
+  }
+  
+  # Calculate Gower distance
+  # Identify ordered variables
+  ordered_vars_list <- c("education", "income", "employment")
+  ordered_in_data <- intersect(ordered_vars_list, vars_for_gower)
+  
+  # Identify clinical rating scales (likely ordinal)
+  clinical_vars <- vars_for_gower[grepl("side_effects|safety|adls|dependence", vars_for_gower)]
+  all_ordered <- unique(c(ordered_in_data, clinical_vars))
+  
+  gower_dist <- daisy(data[, vars_for_gower], 
+                      metric = "gower",
+                      type = list(
+                        asymm = "sex_binary",
+                        ordratio = all_ordered
+                      ))
+  
+  # Run PAM
+  pam_result <- pam(gower_dist, k = k, diss = TRUE)
+  
+  # Calculate silhouette
+  sil <- silhouette(pam_result$clustering, gower_dist)
+  
+  return(list(
+    clustering = pam_result$clustering,
+    silhouette = mean(sil[, 3]),
+    medoids = pam_result$medoids
+  ))
+}
 
-cat("Mean agreement across participants:", round(mean(agreement), 3), "\n")
-cat("Minimum agreement:", round(min(agreement), 3), "\n")
+# Test multiple k values across all imputations
+k_values <- 2:6
+n_imp <- max(cluster_long$.imp)
 
-# --- Step 6: Add consensus clusters to first imputed dataset ---
-imputed_data_1 <- complete(full_mi, action = 1)
-imputed_data_1$cluster <- factor(consensus_clusters)
-imputed_data_1$cluster_agreement <- agreement
+results_list <- list()
 
-# --- Step 7: Summarize clusters ---
-cat("\n=== CLUSTER SIZES ===\n")
-print(table(consensus_clusters))
+cat("\nTesting k = 2 to 6 across", n_imp, "imputations...\n")
 
-# Save cluster assignments
-cluster_output <- data.frame(
-  participant_id = 1:nrow(imputed_data_1),
-  consensus_cluster = consensus_clusters,
-  agreement = round(agreement, 3),
-  cluster_assignments
+for (k in k_values) {
+  cat("\nTesting k =", k, "...\n")
+  
+  silhouettes <- numeric(n_imp)
+  all_clusterings <- matrix(NA, nrow = nrow(cluster_long)/n_imp, ncol = n_imp)
+  
+  for (imp in 1:n_imp) {
+    imp_data <- cluster_long %>% filter(.imp == imp)
+    
+    result <- run_pam_single(imp_data, k, clustering_vars)
+    
+    silhouettes[imp] <- result$silhouette
+    all_clusterings[, imp] <- result$clustering
+  }
+  
+  results_list[[paste0("k", k)]] <- list(
+    k = k,
+    silhouettes = silhouettes,
+    mean_sil = mean(silhouettes),
+    sd_sil = sd(silhouettes),
+    clusterings = all_clusterings
+  )
+  
+  cat("  Mean silhouette:", round(mean(silhouettes), 3), 
+      "±", round(sd(silhouettes), 3), "\n")
+}
+
+# ===== DETERMINE OPTIMAL K =====
+cat("\n=== DETERMINING OPTIMAL K ===\n")
+
+sil_summary <- data.frame(
+  k = k_values,
+  mean_silhouette = sapply(results_list, function(x) x$mean_sil),
+  sd_silhouette = sapply(results_list, function(x) x$sd_sil)
 )
 
-write.csv(cluster_output, "cluster_assignments.csv", row.names = FALSE)
-cat("\nCluster assignments saved to cluster_assignments.csv\n")
+print(sil_summary)
 
-# --- Step 8: Visualize clusters (using PCA) ---
-cat("\n=== CREATING CLUSTER VISUALIZATION ===\n")
+optimal_k <- sil_summary$k[which.max(sil_summary$mean_silhouette)]
+cat("\nOptimal k =", optimal_k, "with mean silhouette =", 
+    round(max(sil_summary$mean_silhouette), 3), "\n")
 
-# PCA for visualization
-pca_result <- prcomp(scaled_data_list[[1]], center = FALSE, scale. = FALSE)
-pca_data <- as.data.frame(pca_result$x[, 1:2])
-pca_data$cluster <- factor(consensus_clusters)
-pca_data$agreement <- agreement
+# Interpret silhouette width
+sil_interpretation <- ifelse(max(sil_summary$mean_silhouette) > 0.50, "Strong structure",
+                      ifelse(max(sil_summary$mean_silhouette) > 0.25, "Weak structure",
+                      ifelse(max(sil_summary$mean_silhouette) > 0.10, "Very weak structure",
+                             "No substantial structure")))
 
-# Variance explained
-var_explained <- summary(pca_result)$importance[2, 1:2] * 100
+cat("Interpretation:", sil_interpretation, "\n")
 
-# Create plot
-p1 <- ggplot(pca_data, aes(x = PC1, y = PC2, color = cluster, size = agreement)) +
-  geom_point(alpha = 0.6) +
-  scale_size_continuous(range = c(1, 4), name = "Agreement") +
-  labs(
-    title = paste("Cluster Solution (k =", k_clusters, ")"),
-    subtitle = "Based on consensus across 20 imputations",
-    x = paste0("PC1 (", round(var_explained[1], 1), "% variance)"),
-    y = paste0("PC2 (", round(var_explained[2], 1), "% variance)"),
-    color = "Cluster"
-  ) +
+# ===== VISUALIZE SILHOUETTE WIDTHS =====
+sil_plot <- ggplot(sil_summary, aes(x = k, y = mean_silhouette)) +
+  geom_line(size = 1, color = "steelblue") +
+  geom_point(size = 3, color = "steelblue") +
+  geom_errorbar(aes(ymin = mean_silhouette - sd_silhouette,
+                    ymax = mean_silhouette + sd_silhouette),
+                width = 0.2) +
+  geom_vline(xintercept = optimal_k, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = c(0.10, 0.25, 0.50), linetype = "dotted", alpha = 0.5) +
+  annotate("text", x = max(k_values), y = 0.10, label = "Weak", hjust = 1, vjust = -0.5, size = 3) +
+  annotate("text", x = max(k_values), y = 0.25, label = "Fair", hjust = 1, vjust = -0.5, size = 3) +
+  annotate("text", x = max(k_values), y = 0.50, label = "Strong", hjust = 1, vjust = -0.5, size = 3) +
+  labs(title = "Focused Clustering: Silhouette Width by Number of Clusters",
+       subtitle = paste0("Optimal k = ", optimal_k, " | ", sil_interpretation),
+       x = "Number of Clusters (k)",
+       y = "Mean Silhouette Width") +
   theme_minimal() +
-  theme(legend.position = "right")
+  theme(text = element_text(size = 12))
 
-ggsave("cluster_visualization.pdf", p1, width = 10, height = 7)
-cat("Cluster visualization saved to cluster_visualization.pdf\n")
+print(sil_plot)
 
-# --- Step 9: Cluster profiling (descriptive statistics) ---
-cat("\n=== CLUSTER PROFILING ===\n")
+# ===== ASSESS CLUSTER STABILITY =====
+cat("\n=== ASSESSING CLUSTER STABILITY ===\n")
 
-# Calculate means for each cluster
-cluster_profiles
+optimal_clusterings <- results_list[[paste0("k", optimal_k)]]$clusterings
+
+# Calculate stability: % of cases assigned to same cluster across imputations
+mode_cluster <- apply(optimal_clusterings, 1, function(x) {
+  as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+})
+
+agreement <- apply(optimal_clusterings, 1, function(x) {
+  sum(x == mode_cluster[1]) / length(x) * 100
+})
+
+stability_summary <- data.frame(
+  agreement_percent = agreement,
+  modal_cluster = mode_cluster
+)
+
+cat("\nCluster Stability Summary:\n")
+cat("Mean stability:", round(mean(agreement), 1), "%\n")
+cat("Median stability:", round(median(agreement), 1), "%\n")
+cat("% with 100% agreement:", round(sum(agreement == 100)/length(agreement) * 100, 1), "%\n")
+cat("% with ≥80% agreement:", round(sum(agreement >= 80)/length(agreement) * 100, 1), "%\n")
+cat("% with <80% agreement:", round(sum(agreement < 80)/length(agreement) * 100, 1), "%\n")
+
+# Distribution of stability
+stability_plot <- ggplot(stability_summary, aes(x = agreement_percent)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "white") +
+  geom_vline(xintercept = 80, linetype = "dashed", color = "red") +
+  labs(title = "Focused Clustering: Stability Across Imputations",
+       subtitle = paste0("k = ", optimal_k, " | Mean stability = ", 
+                        round(mean(agreement), 1), "%"),
+       x = "Agreement Across Imputations (%)",
+       y = "Number of Participants") +
+  theme_minimal()
+
+print(stability_plot)
+
+# ===== ASSIGN FINAL CLUSTERS =====
+cat("\n=== ASSIGNING FINAL CLUSTERS ===\n")
+
+# Add clusters back to imputed data
+cluster_long_with_clusters <- cluster_long %>%
+  mutate(cluster = rep(mode_cluster, times = n_imp),
+         stability = rep(agreement, times = n_imp))
+
+# Get full imputed data with original included
+full_imputed_long <- complete(final_imp, "long", include = TRUE)
+
+# Add cluster assignments
+cluster_assignments <- cluster_long_with_clusters %>%
+  select(.imp, .id, cluster, stability) %>%
+  distinct()
+
+# Join with full data (excluding .imp = 0 which is original data without clusters)
+final_imp_clustered <- full_imputed_long %>%
+  left_join(cluster_assignments, by = c(".imp", ".id"))
+
+# Convert back to mids object
+final_imp_clustered_mids <- as.mids(final_imp_clustered)
+
+cat("Cluster assignment complete. Mids object created: final_imp_clustered_mids\n")
+
+# ===== COMPARE CLUSTERS ON CLUSTERING VARIABLES =====
+cat("\n=== COMPARING CLUSTERS ON CLUSTERING VARIABLES ===\n")
+
+# Use pooled analyses
+compare_results <- list()
+
+for (var in clustering_vars) {
+  cat("Testing", var, "...\n")
+  
+  if (var %in% c("sex", "education", "income", "employment")) {
+    # Chi-square or Kruskal-Wallis for categorical
+    # Use first imputation for non-poolable tests
+    test_data <- complete(final_imp_clustered_mids, 1)
+    
+    if (var == "sex") {
+      test_result <- chisq.test(table(test_data$cluster, test_data[[var]]))
+      compare_results[[var]] <- list(
+        variable = var,
+        test = "Chi-square",
+        statistic = test_result$statistic,
+        p_value = test_result$p.value
+      )
+    } else {
+      # For ordered categorical
+      test_result <- kruskal.test(as.numeric(test_data[[var]]) ~ test_data$cluster)
+      compare_results[[var]] <- list(
+        variable = var,
+        test = "Kruskal-Wallis",
+        statistic = test_result$statistic,
+        p_value = test_result$p.value
+      )
+    }
+  } else if (grepl("side_effects|safety|adls|dependence", var)) {
+    # For ordinal clinical variables, use Kruskal-Wallis
+    test_data <- complete(final_imp_clustered_mids, 1)
+    test_result <- kruskal.test(as.numeric(test_data[[var]]) ~ test_data$cluster)
+    compare_results[[var]] <- list(
+      variable = var,
+      test = "Kruskal-Wallis",
+      statistic = test_result$statistic,
+      p_value = test_result$p.value
+    )
+  } else {
+    # ANOVA for continuous variables using pooled analysis
+    # Manually pool across imputations
+    p_values <- numeric(n_imp)
+    
+    for (i in 1:n_imp) {
+      imp_data <- complete(final_imp_clustered_mids, i)
+      fit <- lm(as.formula(paste(var, "~ as.factor(cluster)")), data = imp_data)
+      p_values[i] <- anova(fit)$"Pr(>F)"[1]
+    }
+    
+    # Use median p-value as pooled estimate (conservative approach)
+    compare_results[[var]] <- list(
+      variable = var,
+      test = "ANOVA (pooled)",
+      p_value = median(p_values)
+    )
+  }
+}
+
+# Create summary table
+comparison_df <- do.call(rbind, lapply(compare_results, function(x) {
+  data.frame(
+    Variable = x$variable,
+    Test = x$test,
+    P_value = round(x$p_value, 4),
+    Significant = ifelse(x$p_value < 0.05, "Yes", "No")
+  )
+}))
+
+cat("\n=== VARIABLE COMPARISON RESULTS ===\n")
+print(comparison_df)
+
+cat("\n=== SIGNIFICANT DIFFERENCES (p < 0.05) ===\n")
+sig_vars <- comparison_df %>% filter(Significant == "Yes")
+print(sig_vars)
+cat("\nNumber of significant variables:", nrow(sig_vars), "out of", nrow(comparison_df), "\n")
+
+# ===== COMPARE CLUSTERS ON OUTCOME =====
+cat("\n=== COMPARING CLUSTERS ON OUTCOME (scrn_stopped_bzra) ===\n")
+
+# Chi-square test for outcome
+outcome_data <- complete(final_imp_clustered_mids, 1)
+
+if ("scrn_stopped_bzra" %in% names(outcome_data)) {
+  outcome_table <- table(outcome_data$cluster, outcome_data$scrn_stopped_bzra)
+  outcome_test <- chisq.test(outcome_table)
+  
+  cat("\nOutcome by Cluster:\n")
+  print(outcome_table)
+  cat("\nProportions (row percentages):\n")
+  print(round(prop.table(outcome_table, 1) * 100, 1))
+  
+  cat("\nChi-square test: X² =", round(outcome_test$statistic, 2),
+      ", p =", round(outcome_test$p.value, 4), "\n")
+  
+  # Visualize
+  outcome_props <- as.data.frame(prop.table(outcome_table, 1))
+  names(outcome_props) <- c("Cluster", "Outcome", "Proportion")
+  
+  outcome_plot <- ggplot(outcome_props, aes(x = Cluster, y = Proportion * 100, fill = Outcome)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(title = "BZRA Cessation by Cluster",
+         x = "Cluster",
+         y = "Percentage (%)",
+         fill = "Stopped BZRA") +
+    theme_minimal() +
+    theme(text = element_text(size = 12))
+  
+  print(outcome_plot)
+}
+
+# ===== CLUSTER DESCRIPTIONS =====
+cat("\n=== CLUSTER DESCRIPTIONS ===\n")
+
+# Get means/frequencies by cluster for key variables
+cluster_data_complete <- complete(final_imp_clustered_mids, 1)
+
+# Demographic summary
+demo_summary <- cluster_data_complete %>%
+  group_by(cluster) %>%
+  summarise(
+    n = n(),
+    mean_age = round(mean(age, na.rm = TRUE), 1),
+    pct_female = round(mean(sex == "Female", na.rm = TRUE) * 100, 1),
+    mean_med_quant = round(mean(med_quant, na.rm = TRUE), 1),
+    .groups = "drop"
+  )
+
+cat("\nDemographic Summary by Cluster:\n")
+print(demo_summary)
+
+# ===== SUMMARY REPORT =====
+cat("\n========================================\n")
+cat("     FOCUSED CLUSTERING COMPLETE\n")
+cat("========================================\n")
+cat("Variables used:", length(clustering_vars), "\n")
+cat("  - Demographics: 6\n")
+cat("  - Personality: 9\n")
+cat("  - Sleep beliefs: 4\n")
+cat("  - Coping: 3\n")
+cat("  - Medication concerns: 13\n")
+cat("\nOptimal k:", optimal_k, "\n")
+cat("Mean silhouette width:", round(results_list[[paste0("k", optimal_k)]]$mean_sil, 3), "\n")
+cat("Interpretation:", sil_interpretation, "\n")
+cat("\nCluster stability:", round(mean(agreement), 1), "%\n")
+cat("Cases with ≥80% stability:", round(sum(agreement >= 80)/length(agreement) * 100, 1), "%\n")
+cat("\nSignificant variables:", sum(comparison_df$Significant == "Yes"), 
+    "out of", nrow(comparison_df), "\n")
+
+if ("scrn_stopped_bzra" %in% names(outcome_data)) {
+  cat("\nOutcome analysis:\n")
+  cat("  Chi-square p-value:", round(outcome_test$p.value, 4), "\n")
+  if (outcome_test$p.value < 0.05) {
+    cat("  *** Clusters differ significantly on BZRA cessation! ***\n")
+  } else {
+    cat("  Clusters do not differ significantly on BZRA cessation.\n")
+  }
+}
+
+cat("========================================\n")
+
+cat("\nNext steps:\n")
+cat("1. Review silhouette width - did it improve from your initial 0.107?\n")
+cat("2. Check which variables differ significantly between clusters\n")
+cat("3. Examine outcome differences between clusters\n")
+cat("4. If results look good, re-run with file saving enabled\n")
+cat("\nObjects created:\n")
+cat("  - results_list: all clustering results\n")
+cat("  - sil_summary: silhouette summary table\n")
+cat("  - comparison_df: variable comparison results\n")
+cat("  - final_imp_clustered_mids: imputed data with cluster assignments\n")
 ```
 
 
