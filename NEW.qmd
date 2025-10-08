@@ -52,8 +52,13 @@ SIMOA_c_sp_filtered <- SIMOA_age_filtered %>%
   filter(rowSums(select(., starts_with("c_sp___"))[, 1:14] == 1, na.rm = TRUE) > 0)
 n_after_c_sp <- nrow(SIMOA_c_sp_filtered)
 
-# After sfrn_stopped_bzra filtering (only those who answered the question)
-SIMOA <- SIMOA_c_sp_filtered %>%
+# After prov_terr filtering (remove answer 14)
+SIMOA_prov_filtered <- SIMOA_c_sp_filtered %>%
+  filter(prov_terr != 14 | is.na(prov_terr))
+n_after_prov <- nrow(SIMOA_prov_filtered)
+
+# After scrn_stopped_bzra filtering (only those who answered the question)
+SIMOA <- SIMOA_prov_filtered %>%
   filter(!is.na(scrn_stopped_bzra))
 n_final <- nrow(SIMOA)
 
@@ -61,7 +66,8 @@ n_final <- nrow(SIMOA)
 cat("Original sample:", n_original, "\n")
 cat("After age filtering:", n_after_age, "(removed:", n_original - n_after_age, ")\n")
 cat("After c_sp filtering:", n_after_c_sp, "(removed:", n_after_age - n_after_c_sp, ")\n")
-cat("After sfrn_stopped_bzra filtering:", n_final, "(removed:", n_after_c_sp - n_final, ")\n")
+cat("After prov_terr filtering:", n_after_prov, "(removed:", n_after_c_sp - n_after_prov, ")\n")
+cat("After scrn_stopped_bzra filtering:", n_final, "(removed:", n_after_prov - n_final, ")\n")
 cat("Total removed:", n_original - n_final, "\n")
 ```
 
@@ -851,6 +857,248 @@ cat("You can now use subscales in your analyses:\n")
 cat("fit <- with(final_imp, lm(outcome ~ DBAS_Expectations + SURPS_Impulsivity))\n")
 cat("summary(pool(fit))\n")
 ```
+
+
+## Descriptive Stats
+
+```{r}
+#| label: Descriptive Statistics
+
+library(mice)
+library(dplyr)
+library(tidyr)
+
+cat("\n=== DESCRIPTIVE STATISTICS FOR IMPUTED DATA ===\n")
+
+# Load the imputation object with subscales
+final_imp <- readRDS("final_imputation_with_subscales.rds")
+
+# ===== ADD VARIABLES FROM SIMOA =====
+cat("Adding variables from SIMOA dataset...\n")
+
+# Get all imputed datasets in long format
+imputed_long <- complete(final_imp, "long", include = TRUE)
+
+# Check if SIMOA exists
+if (exists("SIMOA")) {
+  # Add scrn_stopped_bzra
+  if ("scrn_stopped_bzra" %in% names(SIMOA)) {
+    imputed_long <- imputed_long %>%
+      group_by(.imp) %>%
+      mutate(scrn_stopped_bzra = SIMOA$scrn_stopped_bzra) %>%
+      ungroup()
+    cat("  - Added scrn_stopped_bzra\n")
+  }
+  
+  # Add alc_use_men
+  if ("alc_use_men" %in% names(SIMOA)) {
+    imputed_long <- imputed_long %>%
+      group_by(.imp) %>%
+      mutate(alc_use_men = SIMOA$alc_use_men) %>%
+      ungroup()
+    cat("  - Added alc_use_men\n")
+  }
+  
+  # Add alc_use_wmn
+  if ("alc_use_wmn" %in% names(SIMOA)) {
+    imputed_long <- imputed_long %>%
+      group_by(.imp) %>%
+      mutate(alc_use_wmn = SIMOA$alc_use_wmn) %>%
+      ungroup()
+    cat("  - Added alc_use_wmn\n")
+  }
+  
+  # Convert back to mids object
+  final_imp <- as.mids(imputed_long)
+  cat("Successfully updated imputation object\n\n")
+} else {
+  cat("Warning: SIMOA dataset not found in environment\n\n")
+}
+
+# ===== DEFINE ALL VARIABLES =====
+
+continuous_vars <- c(
+  "age", "med_quant", "osss_3_score", "phq2_score"
+)
+
+subscale_vars <- c(
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+  "SURPS_Anxiety_Sensitivity",
+  "DBAS_Expectations", "DBAS_Medications", "DBAS_Worry_Helplessness", 
+  "DBAS_Consequences", "dbas_score",
+  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style"
+)
+
+binary_vars <- c("sex", "scrn_stopped_bzra")
+
+unordered_categorical <- c("prov_terr", "gender")
+
+ordered_vars <- c(
+  "education", "income", "driving_freq", "employment",
+  "side_effects_1", "side_effects_2", "side_effects_3", "side_effects_4",
+  "safety_1", "safety_2", "safety_3", "safety_4",
+  "adls_1", "adls_2",
+  "dependence_1", "dependence_2", "dependence_3",
+  "med_burden_1", "med_burden2", "medburden_3", "med_burden_4",
+  "op_use", "can_use", "caf_use", "nico_use", 
+  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", 
+  "quet_use", "traz_use", "otc_use", "alc_use_men", "alc_use_wmn"
+)
+
+# ===== FUNCTIONS FOR POOLING STATISTICS =====
+
+pool_descriptives <- function(mids_obj, vars) {
+  results <- data.frame(
+    Variable = character(),
+    M = numeric(),
+    SD = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  for (var in vars) {
+    # Check if variable exists
+    if (!var %in% names(complete(mids_obj, 1))) {
+      cat(paste0("Warning: Variable '", var, "' not found. Skipping.\n"))
+      next
+    }
+    
+    # Extract variable across all imputations
+    means <- sapply(1:mids_obj$m, function(i) {
+      data <- complete(mids_obj, i)
+      mean(data[[var]], na.rm = TRUE)
+    })
+    
+    sds <- sapply(1:mids_obj$m, function(i) {
+      data <- complete(mids_obj, i)
+      sd(data[[var]], na.rm = TRUE)
+    })
+    
+    # Pool using Rubin's rules
+    pooled_mean <- mean(means)
+    pooled_sd <- sqrt(mean(sds^2))
+    
+    results <- rbind(results, data.frame(
+      Variable = var,
+      M = round(pooled_mean, 2),
+      SD = round(pooled_sd, 2)
+    ))
+  }
+  
+  return(results)
+}
+
+pool_frequencies <- function(mids_obj, vars) {
+  results <- list()
+  
+  for (var in vars) {
+    # Check if variable exists
+    if (!var %in% names(complete(mids_obj, 1))) {
+      cat(paste0("Warning: Variable '", var, "' not found. Skipping.\n"))
+      next
+    }
+    
+    data <- complete(mids_obj, 1)
+    
+    freq_table <- table(data[[var]], useNA = "no")
+    pct_table <- prop.table(freq_table) * 100
+    
+    results[[var]] <- data.frame(
+      Variable = var,
+      Category = names(freq_table),
+      N = as.numeric(freq_table),
+      Percentage = round(as.numeric(pct_table), 1)
+    )
+  }
+  
+  return(results)
+}
+
+# ===== CONTINUOUS VARIABLES =====
+
+cat("\n=== CONTINUOUS VARIABLES (M and SD) ===\n\n")
+
+cat("Demographics & Scale Scores:\n")
+continuous_stats <- pool_descriptives(final_imp, continuous_vars)
+print(continuous_stats, row.names = FALSE)
+
+cat("\n\nSubscale Scores:\n")
+subscale_stats <- pool_descriptives(final_imp, subscale_vars)
+print(subscale_stats, row.names = FALSE)
+
+# ===== BINARY VARIABLES =====
+
+cat("\n\n=== BINARY VARIABLES (N and %) ===\n\n")
+
+binary_stats <- pool_frequencies(final_imp, binary_vars)
+
+for (var in names(binary_stats)) {
+  print(binary_stats[[var]], row.names = FALSE)
+  cat("\n")
+}
+
+# ===== UNORDERED CATEGORICAL VARIABLES =====
+
+cat("\n=== UNORDERED CATEGORICAL VARIABLES (N and %) ===\n\n")
+
+unordered_stats <- pool_frequencies(final_imp, unordered_categorical)
+
+for (var in names(unordered_stats)) {
+  print(unordered_stats[[var]], row.names = FALSE)
+  cat("\n")
+}
+
+# ===== ORDERED CATEGORICAL VARIABLES =====
+
+cat("\n=== ORDERED CATEGORICAL VARIABLES (N and %) ===\n\n")
+
+ordered_stats <- pool_frequencies(final_imp, ordered_vars)
+
+for (var in names(ordered_stats)) {
+  print(ordered_stats[[var]], row.names = FALSE)
+  cat("\n")
+}
+
+# ===== CREATE MANUSCRIPT-READY FORMATTED TABLES =====
+
+cat("\n\n=== FORMATTED TABLES FOR MANUSCRIPT ===\n\n")
+
+# Combine all continuous variables
+all_continuous <- rbind(
+  continuous_stats,
+  subscale_stats
+)
+
+# Continuous variables with M (SD) format
+cat("CONTINUOUS VARIABLES:\n")
+formatted_continuous <- all_continuous %>%
+  mutate(`M (SD)` = paste0(M, " (", SD, ")")) %>%
+  select(Variable, `M (SD)`)
+print(formatted_continuous, row.names = FALSE)
+
+# Combine all categorical variables
+all_categorical_list <- c(binary_stats, unordered_stats, ordered_stats)
+cat_combined <- bind_rows(all_categorical_list, .id = "Variable")
+
+# Categorical variables with N (%) format
+cat("\n\nCATEGORICAL VARIABLES:\n")
+formatted_categorical <- cat_combined %>%
+  mutate(`N (%)` = paste0(N, " (", Percentage, "%)")) %>%
+  select(Variable, Category, `N (%)`)
+print(formatted_categorical, row.names = FALSE)
+
+# ===== SUMMARY STATISTICS =====
+
+cat("\n\n=== SUMMARY ===\n")
+cat(paste0("Total continuous variables: ", nrow(all_continuous), "\n"))
+cat(paste0("Total categorical variables: ", length(all_categorical_list), "\n"))
+cat(paste0("  - Binary: ", length(binary_stats), "\n"))
+cat(paste0("  - Unordered: ", length(unordered_stats), "\n"))
+cat(paste0("  - Ordered: ", length(ordered_stats), "\n"))
+
+cat("\n=== COMPLETE ===\n")
+```
+
 
 
 
