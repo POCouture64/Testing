@@ -1100,6 +1100,285 @@ cat("\n=== COMPLETE ===\n")
 ```
 
 
+## DS by BZRA STATUS
+
+```{r}
+#| label: Descriptive Statistics by BZRA Status
+
+library(mice)
+library(dplyr)
+library(tidyr)
+
+cat("\n=== DESCRIPTIVE STATISTICS BY BZRA STATUS ===\n")
+
+final_imp <- readRDS("final_imputation_with_subscales.rds")
+
+# ===== ADD AND RECODE VARIABLES FROM SIMOA =====
+cat("Adding and recoding variables from SIMOA...\n")
+
+imputed_long <- complete(final_imp, "long", include = TRUE)
+
+if (exists("SIMOA")) {
+  SIMOA <- SIMOA %>%
+    mutate(
+      region = case_when(
+        prov_terr %in% c(1, 2, 3, 12) ~ "Prairies",
+        prov_terr %in% c(9, 11) ~ "Central Canada",
+        prov_terr %in% c(4, 5, 7, 10) ~ "Atlantic",
+        TRUE ~ "Territories"
+      ),
+      education_grouped = case_when(
+        education %in% c(1, 2, 3) ~ "High School or Less",
+        education %in% c(4, 5) ~ "University/Trade School",
+        TRUE ~ NA_character_
+      ),
+      employment_grouped = case_when(
+        employment %in% c(0, 3, 4) ~ "Not in Workforce",
+        employment %in% c(1, 2) ~ "Full- or Part-Time Work",
+        TRUE ~ NA_character_
+      )
+    )
+  
+  for (new_var in c("scrn_stopped_bzra", "alc_use_men", "alc_use_wmn", 
+                     "region", "education_grouped", "employment_grouped")) {
+    if (new_var %in% names(SIMOA)) {
+      imputed_long <- imputed_long %>%
+        group_by(.imp) %>%
+        mutate(!!new_var := SIMOA[[new_var]]) %>%
+        ungroup()
+    }
+  }
+  
+  final_imp <- as.mids(imputed_long)
+  cat("Successfully added and recoded variables\n\n")
+}
+
+# ===== DEFINE VARIABLES =====
+continuous_vars <- c("age", "med_quant", "osss_3_score", "phq2_score")
+subscale_vars <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+                   "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+                   "SURPS_Anxiety_Sensitivity", "DBAS_Expectations", "DBAS_Medications", 
+                   "DBAS_Worry_Helplessness", "DBAS_Consequences", "dbas_score",
+                   "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style")
+binary_vars <- c("sex")
+unordered_categorical <- c("gender", "region", "education_grouped", "employment_grouped")
+ordered_vars <- c("income", "driving_freq", "side_effects_1", "side_effects_2", 
+                  "side_effects_3", "side_effects_4", "safety_1", "safety_2", "safety_3", 
+                  "safety_4", "adls_1", "adls_2", "dependence_1", "dependence_2", 
+                  "dependence_3", "med_burden_1", "med_burden2", "medburden_3", 
+                  "med_burden_4", "op_use", "can_use", "caf_use", "nico_use", 
+                  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", 
+                  "quet_use", "traz_use", "otc_use", "alc_use_men", "alc_use_wmn")
+
+# ===== POOLING FUNCTIONS =====
+pool_desc_by_group <- function(mids_obj, vars, group_var, group_value) {
+  do.call(rbind, lapply(vars, function(var) {
+    if (!var %in% names(complete(mids_obj, 1))) return(NULL)
+    means <- sapply(1:mids_obj$m, function(i) {
+      mean(complete(mids_obj, i)[complete(mids_obj, i)[[group_var]] == group_value, var], na.rm = TRUE)
+    })
+    sds <- sapply(1:mids_obj$m, function(i) {
+      sd(complete(mids_obj, i)[complete(mids_obj, i)[[group_var]] == group_value, var], na.rm = TRUE)
+    })
+    data.frame(Variable = var, M = round(mean(means), 2), SD = round(sqrt(mean(sds^2)), 2))
+  }))
+}
+
+pool_freq_by_group <- function(mids_obj, vars, group_var, group_value) {
+  setNames(lapply(vars, function(var) {
+    if (!var %in% names(complete(mids_obj, 1))) return(NULL)
+    group_data <- complete(mids_obj, 1)[complete(mids_obj, 1)[[group_var]] == group_value, ]
+    freq <- table(group_data[[var]], useNA = "no")
+    pct <- round(prop.table(freq) * 100, 1)
+    data.frame(Variable = var, 
+               Category = names(freq), 
+               N = as.numeric(freq), 
+               Pct = as.numeric(pct), 
+               stringsAsFactors = FALSE)
+  }), vars)
+}
+
+pool_t_test <- function(mids_obj, var, group_var) {
+  t_res <- lapply(1:mids_obj$m, function(i) {
+    data <- complete(mids_obj, i)
+    g1 <- data[data[[group_var]] == 1, var]
+    g0 <- data[data[[group_var]] == 0, var]
+    
+    # Remove NAs
+    g1 <- g1[!is.na(g1)]
+    g0 <- g0[!is.na(g0)]
+    
+    if(length(g1) > 1 && length(g0) > 1 && sd(g1) > 0 && sd(g0) > 0) {
+      t_test <- t.test(g1, g0, var.equal = FALSE)
+      list(
+        mean_diff = mean(g1) - mean(g0),
+        se = t_test$stderr,
+        df = t_test$parameter,
+        ci_lower = t_test$conf.int[1],
+        ci_upper = t_test$conf.int[2]
+      )
+    } else {
+      NULL
+    }
+  })
+  
+  # Remove NULL results
+  t_res <- t_res[!sapply(t_res, is.null)]
+  
+  if(length(t_res) == 0) {
+    return(list(mean_diff = NA, ci_lower = NA, ci_upper = NA, p_value = NA))
+  }
+  
+  mean_diffs <- sapply(t_res, function(x) x$mean_diff)
+  ses <- sapply(t_res, function(x) x$se)
+  
+  pooled_md <- mean(mean_diffs)
+  within_var <- mean(ses^2)
+  between_var <- var(mean_diffs)
+  
+  # Handle case where between_var is 0 or very small
+  if(is.na(between_var) || between_var < 1e-10) {
+    between_var <- 0
+  }
+  
+  total_var <- within_var + between_var + between_var/length(t_res)
+  pooled_se <- sqrt(total_var)
+  
+  # Calculate degrees of freedom
+  if(between_var > 1e-10) {
+    lambda <- (between_var + between_var/length(t_res)) / total_var
+    df_old <- (length(t_res) - 1) / lambda^2
+    df_obs <- mean(sapply(t_res, function(x) x$df))
+    df_adj <- (df_obs + 1) / (df_obs + 3) * df_obs * (1 - lambda)
+    pooled_df <- df_old * df_adj / (df_old + df_adj)
+  } else {
+    # If no between-imputation variance, use average df from t-tests
+    pooled_df <- mean(sapply(t_res, function(x) x$df))
+  }
+  
+  t_stat <- pooled_md / pooled_se
+  p_value <- 2 * pt(-abs(t_stat), df = pooled_df)
+  
+  t_crit <- qt(0.975, df = pooled_df)
+  ci_lower <- pooled_md - t_crit * pooled_se
+  ci_upper <- pooled_md + t_crit * pooled_se
+  
+  list(mean_diff = pooled_md, ci_lower = ci_lower, ci_upper = ci_upper, p_value = p_value)
+}
+
+calc_cohens_d <- function(mids_obj, var, group_var) {
+  mean(sapply(1:mids_obj$m, function(i) {
+    data <- complete(mids_obj, i)
+    g1 <- data[data[[group_var]] == 1, var]
+    g0 <- data[data[[group_var]] == 0, var]
+    (mean(g1, na.rm = TRUE) - mean(g0, na.rm = TRUE)) / 
+      sqrt(((length(g1) - 1) * var(g1, na.rm = TRUE) + (length(g0) - 1) * var(g0, na.rm = TRUE)) / 
+           (length(g1) + length(g0) - 2))
+  }))
+}
+
+calc_cramers_v <- function(mids_obj, var, group_var) {
+  data <- complete(mids_obj, 1)
+  chi <- chisq.test(table(data[[group_var]], data[[var]]))
+  list(cramers_v = as.numeric(sqrt(chi$statistic / (sum(table(data[[group_var]], data[[var]])) * 
+       (min(dim(table(data[[group_var]], data[[var]]))) - 1)))), p_value = chi$p.value)
+}
+
+# ===== SAMPLE SIZES =====
+first_imp <- complete(final_imp, 1)
+n_yes <- sum(first_imp$scrn_stopped_bzra == 1, na.rm = TRUE)
+n_no <- sum(first_imp$scrn_stopped_bzra == 0, na.rm = TRUE)
+
+cat("\n=== SAMPLE SIZES ===\n")
+cat("No Longer Taking BZRA (Yes = 1):", n_yes, "\n")
+cat("Still Using BZRA (No = 0):", n_no, "\n")
+cat("Total:", n_yes + n_no, "\n\n")
+
+# ===== CALCULATE STATISTICS FOR BOTH GROUPS =====
+cat("Calculating descriptive statistics...\n")
+
+all_cont_vars <- c(continuous_vars, subscale_vars)
+all_cat_vars <- c(binary_vars, unordered_categorical, ordered_vars)
+
+cont_yes <- pool_desc_by_group(final_imp, all_cont_vars, "scrn_stopped_bzra", 1)
+cont_no <- pool_desc_by_group(final_imp, all_cont_vars, "scrn_stopped_bzra", 0)
+
+cat_yes <- pool_freq_by_group(final_imp, all_cat_vars, "scrn_stopped_bzra", 1)
+cat_no <- pool_freq_by_group(final_imp, all_cat_vars, "scrn_stopped_bzra", 0)
+
+# ===== CONTINUOUS VARIABLES COMPARISON =====
+cat("\n========================================\n")
+cat("CONTINUOUS VARIABLES COMPARISON\n")
+cat("========================================\n\n")
+
+effect_cont <- do.call(rbind, lapply(all_cont_vars, function(var) {
+  if (var %in% names(complete(final_imp, 1))) {
+    t_res <- pool_t_test(final_imp, var, "scrn_stopped_bzra")
+    data.frame(Variable = var, Mean_Diff = round(t_res$mean_diff, 2),
+               CI_Lower = round(t_res$ci_lower, 2), CI_Upper = round(t_res$ci_upper, 2),
+               Cohens_d = round(calc_cohens_d(final_imp, var, "scrn_stopped_bzra"), 2),
+               p_value = round(t_res$p_value, 4))
+  }
+}))
+
+comparison_cont <- cont_yes %>%
+  mutate(`No Longer Taking M (SD)` = paste0(M, " (", SD, ")")) %>%
+  select(Variable, `No Longer Taking M (SD)`) %>%
+  left_join(cont_no %>% mutate(`Still Using M (SD)` = paste0(M, " (", SD, ")")) %>%
+            select(Variable, `Still Using M (SD)`), by = "Variable") %>%
+  left_join(effect_cont, by = "Variable") %>%
+  mutate(`Mean Diff [95% CI]` = paste0(Mean_Diff, " [", CI_Lower, ", ", CI_Upper, "]"),
+         p = ifelse(p_value < 0.001, "<.001", as.character(p_value))) %>%
+  select(Variable, `No Longer Taking M (SD)`, `Still Using M (SD)`, 
+         `Mean Diff [95% CI]`, Cohens_d, p)
+
+print(comparison_cont, row.names = FALSE)
+
+# ===== CATEGORICAL VARIABLES COMPARISON =====
+cat("\n========================================\n")
+cat("CATEGORICAL VARIABLES COMPARISON\n")
+cat("========================================\n\n")
+
+effect_cat <- do.call(rbind, lapply(all_cat_vars, function(var) {
+  if (var %in% names(complete(final_imp, 1))) {
+    tryCatch({
+      cv <- calc_cramers_v(final_imp, var, "scrn_stopped_bzra")
+      data.frame(Variable = var, Cramers_V = round(cv$cramers_v, 3), 
+                 p_value = round(cv$p_value, 4))
+    }, error = function(e) NULL)
+  }
+}))
+
+for (var in all_cat_vars) {
+  if (var %in% names(cat_yes) && var %in% names(cat_no) && 
+      !is.null(cat_yes[[var]]) && !is.null(cat_no[[var]])) {
+    cat(paste0("\n", var, ":\n"))
+    
+    if (var %in% effect_cat$Variable) {
+      eff <- effect_cat[effect_cat$Variable == var, ]
+      cat(paste0("  Cramers V = ", eff$Cramers_V, ", p ", 
+                 ifelse(eff$p_value < 0.001, "< .001", paste0("= ", eff$p_value)), "\n\n"))
+    }
+    
+    # Fix: Add Variable column to the table
+    yes_data <- cat_yes[[var]]
+    yes_data$Variable <- var
+    yes_data$`No Longer Taking N (%)` <- paste0(yes_data$N, " (", yes_data$Pct, "%)")
+    yes_data <- yes_data[, c("Variable", "Category", "No Longer Taking N (%)")]
+    
+    no_data <- cat_no[[var]]
+    no_data$`Still Using N (%)` <- paste0(no_data$N, " (", no_data$Pct, "%)")
+    no_data <- no_data[, c("Category", "Still Using N (%)")]
+    
+    comp <- full_join(yes_data, no_data, by = "Category")
+    
+    print(comp, row.names = FALSE)
+    cat("\n")
+  }
+}
+
+cat("\n=== COMPLETE ===\n")
+```
 
 
 ## Cluster Analysis
