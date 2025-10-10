@@ -1380,6 +1380,538 @@ for (var in all_cat_vars) {
 cat("\n=== COMPLETE ===\n")
 ```
 
+## Random Forest Model
+
+```{r}
+#| label: Complete Random Forest Analysis - Updated Variable Names
+
+library(mice)
+library(dplyr)
+library(randomForest)
+library(ggplot2)
+library(caret)
+library(pROC)
+library(gridExtra)
+library(viridis)
+
+cat("\n=== COMPLETE RANDOM FOREST ANALYSIS ===\n")
+
+# ===== LOAD DATA AND PREPARE VARIABLES =====
+cat("Loading imputed data...\n")
+final_imp <- readRDS("final_imputation_with_subscales.rds")
+
+cat("Adding and recoding variables from SIMOA...\n")
+
+imputed_long <- complete(final_imp, "long", include = TRUE)
+
+if (exists("SIMOA")) {
+  SIMOA <- SIMOA %>%
+    mutate(
+      region = case_when(
+        prov_terr %in% c(1, 2, 3, 12) ~ "Prairies",
+        prov_terr %in% c(9, 11) ~ "Central Canada",
+        prov_terr %in% c(4, 5, 7, 10) ~ "Atlantic",
+        TRUE ~ "Territories"
+      ),
+      education_grouped = case_when(
+        education %in% c(1, 2, 3) ~ "High School or Less",
+        education %in% c(4, 5) ~ "University/Trade School",
+        TRUE ~ NA_character_
+      ),
+      employment_grouped = case_when(
+        employment %in% c(0, 3, 4) ~ "Not in Workforce",
+        employment %in% c(1, 2) ~ "Full- or Part-Time Work",
+        TRUE ~ NA_character_
+      )
+    )
+  
+  for (new_var in c("scrn_stopped_bzra", "alc_use_men", "alc_use_wmn", 
+                     "region", "education_grouped", "employment_grouped")) {
+    if (new_var %in% names(SIMOA)) {
+      imputed_long <- imputed_long %>%
+        group_by(.imp) %>%
+        mutate(!!new_var := SIMOA[[new_var]]) %>%
+        ungroup()
+    }
+  }
+  
+  final_imp <- as.mids(imputed_long)
+  cat("Successfully added and recoded variables\n\n")
+} else {
+  stop("SIMOA dataset not found. Please load it first.")
+}
+
+# ===== DEFINE VARIABLES (FROM DESCRIPTIVE STATS) =====
+continuous_vars <- c("age", "med_quant", "osss_3_score", "phq2_score")
+
+subscale_vars <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+                   "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+                   "SURPS_Anxiety_Sensitivity", "DBAS_Expectations", "DBAS_Medications", 
+                   "DBAS_Worry_Helplessness", "DBAS_Consequences", "dbas_score",
+                   "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style")
+
+binary_vars <- c("sex")
+
+unordered_categorical <- c("gender", "region", "education_grouped", "employment_grouped")
+
+ordered_vars <- c("income", "driving_freq", "side_effects_1", "side_effects_2", 
+                  "side_effects_3", "side_effects_4", "safety_1", "safety_2", "safety_3", 
+                  "safety_4", "adls_1", "adls_2", "dependence_1", "dependence_2", 
+                  "dependence_3", "med_burden_1", "med_burden2", "medburden_3", 
+                  "med_burden_4", "op_use", "can_use", "caf_use", "nico_use", 
+                  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", 
+                  "quet_use", "traz_use", "otc_use")
+
+# Note: alc_use_men and alc_use_wmn are sex-specific and will be combined
+
+predictor_vars <- c(continuous_vars, subscale_vars, binary_vars, 
+                    unordered_categorical, ordered_vars)
+
+# Check which variables actually exist in the data
+temp_data <- complete(final_imp, 1)
+missing_vars <- predictor_vars[!predictor_vars %in% names(temp_data)]
+available_vars <- predictor_vars[predictor_vars %in% names(temp_data)]
+
+if (length(missing_vars) > 0) {
+  cat("\n⚠ Warning: The following variables are not in the dataset:\n")
+  cat(paste("  -", missing_vars, collapse = "\n"), "\n\n")
+}
+
+predictor_vars <- available_vars
+
+cat("✓ Variables defined\n")
+cat("  Total predictors available:", length(predictor_vars), "\n")
+cat("  Variables excluded:", length(missing_vars), "\n\n")
+
+# Diagnostic: Check missing data patterns
+cat("Checking data completeness...\n")
+temp_check <- complete(final_imp, 1) %>%
+  select(all_of(c("scrn_stopped_bzra", predictor_vars)))
+
+cat("  Total rows in dataset:", nrow(temp_check), "\n")
+cat("  Rows with scrn_stopped_bzra:", sum(!is.na(temp_check$scrn_stopped_bzra)), "\n")
+
+# Check missingness by variable
+miss_count <- colSums(is.na(temp_check))
+if (any(miss_count > 0)) {
+  cat("\n  Variables with missing data:\n")
+  miss_vars <- miss_count[miss_count > 0]
+  for (v in names(miss_vars)) {
+    cat(sprintf("    %s: %d missing (%.1f%%)\n", 
+                v, miss_vars[v], 100 * miss_vars[v] / nrow(temp_check)))
+  }
+}
+
+cat("\n  Complete cases after na.omit():", sum(complete.cases(temp_check)), "\n\n")
+
+# ===== CHECK FOR EXISTING RESULTS =====
+if (file.exists("random_forest_results.rds")) {
+  cat("✓ Found existing results. Loading...\n")
+  results <- readRDS("random_forest_results.rds")
+  rf_models <- results$models_full
+  optimal_split <- results$optimal_split
+  pooled_importance <- results$pooled_importance
+  run_full_analysis <- FALSE
+} else {
+  cat("⚠ No existing results found. Running full analysis...\n\n")
+  run_full_analysis <- TRUE
+}
+
+# ===== PREPARE OUTCOME VARIABLE =====
+imputed_long <- complete(final_imp, "long", include = TRUE)
+
+# Create combined alcohol use variable (sex-agnostic)
+if ("alc_use_men" %in% names(imputed_long) && "alc_use_wmn" %in% names(imputed_long)) {
+  imputed_long <- imputed_long %>%
+    mutate(alc_use_combined = coalesce(alc_use_men, alc_use_wmn))
+  cat("✓ Created combined alcohol use variable\n")
+  
+  # Add to predictor list
+  predictor_vars <- c(predictor_vars, "alc_use_combined")
+}
+
+imputed_long$scrn_stopped_bzra <- factor(imputed_long$scrn_stopped_bzra, 
+                                         levels = c(0, 1), 
+                                         labels = c("Still_Using", "No_Longer_Taking"))
+
+# Convert categorical variables to factors
+for (var in c(binary_vars, unordered_categorical, ordered_vars)) {
+  if (var %in% names(imputed_long)) {
+    imputed_long[[var]] <- as.factor(imputed_long[[var]])
+  }
+}
+
+final_imp <- as.mids(imputed_long)
+
+# ===== IF NEEDED: RUN FULL RANDOM FOREST ANALYSIS =====
+if (run_full_analysis) {
+  cat("\n========================================\n")
+  cat("STEP 1: FINDING OPTIMAL TRAIN/TEST SPLIT\n")
+  cat("========================================\n\n")
+  
+  split_ratios <- c(0.7, 0.75, 0.8)
+  split_results <- list()
+  
+  # Check overall class distribution first
+  temp_data <- complete(final_imp, 1) %>%
+    select(all_of(c("scrn_stopped_bzra", predictor_vars))) %>%
+    na.omit()
+  
+  cat("Overall class distribution:\n")
+  print(table(temp_data$scrn_stopped_bzra))
+  cat("\n")
+  
+  for (ratio in split_ratios) {
+    cat("Testing", ratio*100, "/", (1-ratio)*100, "split...\n")
+    temp_aucs <- numeric(final_imp$m)
+    
+    for (i in 1:final_imp$m) {
+      data_imp <- complete(final_imp, i) %>%
+        select(all_of(c("scrn_stopped_bzra", predictor_vars))) %>%
+        na.omit()
+      
+      # Check if we have enough data
+      if (nrow(data_imp) < 10) {
+        cat("  ⚠ Warning: Only", nrow(data_imp), "complete cases in imputation", i, "\n")
+        next
+      }
+      
+      # Check class balance
+      class_counts <- table(data_imp$scrn_stopped_bzra)
+      if (min(class_counts) < 5) {
+        cat("  ⚠ Warning: Insufficient samples in minority class for imputation", i, "\n")
+        next
+      }
+      
+      set.seed(123 + i)
+      train_idx <- createDataPartition(data_imp$scrn_stopped_bzra, p = ratio, list = FALSE)
+      train_data <- data_imp[train_idx, ]
+      
+      # Use balanced sampling: both classes get minority class size
+      minority_n <- min(sum(train_data$scrn_stopped_bzra == "Still_Using"),
+                       sum(train_data$scrn_stopped_bzra == "No_Longer_Taking"))
+      
+      temp_rf <- randomForest(
+        scrn_stopped_bzra ~ .,
+        data = train_data,
+        ntree = 100,
+        sampsize = c(minority_n, minority_n)
+      )
+      
+      test_data <- data_imp[-train_idx, ]
+      pred_prob <- predict(temp_rf, test_data, type = "prob")[, "No_Longer_Taking"]
+      temp_aucs[i] <- auc(roc(test_data$scrn_stopped_bzra, pred_prob, quiet = TRUE))
+    }
+    
+    split_results[[as.character(ratio)]] <- mean(temp_aucs)
+    cat("  Mean AUC:", round(mean(temp_aucs), 4), "\n")
+  }
+  
+  optimal_split <- as.numeric(names(which.max(split_results)))
+  cat("\n✓ Optimal split:", optimal_split*100, "/", (1-optimal_split)*100, "\n")
+  
+  cat("\n========================================\n")
+  cat("STEP 2: FITTING RANDOM FOREST MODELS\n")
+  cat("========================================\n\n")
+  
+  rf_models <- list()
+  rf_importance <- list()
+  
+  for (i in 1:final_imp$m) {
+    cat("  Fitting model for imputation", i, "of", final_imp$m, "...\n")
+    
+    data_imp <- complete(final_imp, i) %>%
+      select(all_of(c("scrn_stopped_bzra", predictor_vars))) %>%
+      na.omit()
+    
+    cat("    Complete cases:", nrow(data_imp), "\n")
+    
+    set.seed(123 + i)
+    train_idx <- createDataPartition(data_imp$scrn_stopped_bzra, p = optimal_split, list = FALSE)
+    train_data <- data_imp[train_idx, ]
+    
+    minority_n <- sum(train_data$scrn_stopped_bzra == "No_Longer_Taking")
+    
+    rf_models[[i]] <- randomForest(
+      scrn_stopped_bzra ~ .,
+      data = train_data,
+      ntree = 500,
+      mtry = floor(sqrt(length(predictor_vars))),
+      importance = TRUE,
+      sampsize = c(minority_n, minority_n),
+      replace = TRUE
+    )
+    
+    rf_importance[[i]] <- importance(rf_models[[i]])
+  }
+  
+  cat("\n✓ All models fitted!\n")
+  
+  # Pool importance
+  mda_list <- lapply(rf_importance, function(x) x[, "MeanDecreaseAccuracy"])
+  mdg_list <- lapply(rf_importance, function(x) x[, "MeanDecreaseGini"])
+  
+  pooled_importance <- data.frame(
+    Variable = rownames(rf_importance[[1]]),
+    MeanDecreaseAccuracy = rowMeans(do.call(cbind, mda_list)),
+    MeanDecreaseGini = rowMeans(do.call(cbind, mdg_list)),
+    SD_MDA = apply(do.call(cbind, mda_list), 1, sd),
+    stringsAsFactors = FALSE
+  ) %>%
+    arrange(desc(MeanDecreaseAccuracy))
+  
+  # Save basic results
+  results <- list(
+    models_full = rf_models,
+    pooled_importance = pooled_importance,
+    optimal_split = optimal_split
+  )
+  
+  saveRDS(results, "random_forest_results.rds")
+  cat("\n✓ Basic results saved\n")
+}
+
+cat("\n========================================\n")
+cat("ENHANCED ANALYSIS: VARIABLE STABILITY\n")
+cat("========================================\n\n")
+
+# Extract importance from all models
+all_importance <- lapply(rf_models, function(model) {
+  imp <- importance(model)
+  data.frame(
+    Variable = rownames(imp),
+    MDA = imp[, "MeanDecreaseAccuracy"],
+    MDG = imp[, "MeanDecreaseGini"],
+    stringsAsFactors = FALSE
+  )
+})
+
+# Calculate ranks
+importance_ranks <- lapply(all_importance, function(df) {
+  df %>%
+    arrange(desc(MDA)) %>%
+    mutate(Rank = row_number()) %>%
+    select(Variable, Rank)
+})
+
+# Merge ranks
+rank_matrix <- importance_ranks[[1]]
+for (i in 2:length(importance_ranks)) {
+  rank_matrix <- merge(rank_matrix, importance_ranks[[i]], 
+                       by = "Variable", 
+                       suffixes = c("", paste0("_", i)))
+}
+
+# Stability metrics
+rank_cols <- grep("Rank", names(rank_matrix), value = TRUE)
+rank_matrix$Mean_Rank <- rowMeans(rank_matrix[, rank_cols])
+rank_matrix$SD_Rank <- apply(rank_matrix[, rank_cols], 1, sd)
+rank_matrix$CV_Rank <- rank_matrix$SD_Rank / rank_matrix$Mean_Rank
+
+stability_df <- rank_matrix %>%
+  select(Variable, Mean_Rank, SD_Rank, CV_Rank) %>%
+  arrange(Mean_Rank)
+
+pooled_importance_enhanced <- pooled_importance %>%
+  left_join(stability_df, by = "Variable") %>%
+  arrange(desc(MeanDecreaseAccuracy))
+
+cat("Top 10 Variables with Stability:\n")
+print(head(pooled_importance_enhanced, 10), row.names = FALSE)
+
+cat("\n========================================\n")
+cat("ENHANCED ANALYSIS: POOLED PREDICTIONS\n")
+cat("========================================\n\n")
+
+# Get predictor names from first model
+predictor_names <- names(rf_models[[1]]$forest$xlevels)
+
+pooled_predictions_list <- list()
+
+for (i in 1:final_imp$m) {
+  data_imp <- complete(final_imp, i) %>%
+    select(all_of(c("scrn_stopped_bzra", predictor_names))) %>%
+    na.omit()
+  
+  set.seed(123 + i)
+  train_idx <- createDataPartition(data_imp$scrn_stopped_bzra, p = optimal_split, list = FALSE)
+  test_data <- data_imp[-train_idx, ]
+  
+  pred_prob <- predict(rf_models[[i]], test_data, type = "prob")[, "No_Longer_Taking"]
+  
+  pooled_predictions_list[[i]] <- data.frame(
+    row_id = rownames(test_data),
+    prob = pred_prob,
+    actual = test_data$scrn_stopped_bzra
+  )
+}
+
+pooled_df <- bind_rows(pooled_predictions_list, .id = "imputation") %>%
+  group_by(row_id) %>%
+  summarise(
+    pooled_prob = mean(prob),
+    actual = first(actual),
+    prob_sd = sd(prob),
+    .groups = "drop"
+  )
+
+cat("✓ Predictions pooled across", final_imp$m, "imputations\n")
+cat("  Mean prediction SD:", round(mean(pooled_df$prob_sd, na.rm = TRUE), 4), "\n")
+
+cat("\n========================================\n")
+cat("OPTIMAL THRESHOLD SELECTION\n")
+cat("========================================\n\n")
+
+roc_pooled <- roc(pooled_df$actual, pooled_df$pooled_prob, quiet = TRUE)
+
+# Youden's J method
+coords_all <- coords(roc_pooled, x = "all", ret = "all")
+youden_j <- coords_all$sensitivity + coords_all$specificity - 1
+youden_idx <- which.max(youden_j)
+youden_threshold <- coords_all$threshold[youden_idx]
+
+cat("Optimal Threshold (Youden's J):", round(youden_threshold, 4), "\n")
+cat("  Sensitivity:", round(coords_all$sensitivity[youden_idx], 4), "\n")
+cat("  Specificity:", round(coords_all$specificity[youden_idx], 4), "\n")
+cat("  AUC:", round(auc(roc_pooled), 4), "\n\n")
+
+# Performance with optimal threshold
+pooled_df$pred_class_optimal <- ifelse(pooled_df$pooled_prob > youden_threshold,
+                                       "No_Longer_Taking", "Still_Using")
+pooled_df$pred_class_optimal <- factor(pooled_df$pred_class_optimal, 
+                                       levels = levels(pooled_df$actual))
+
+cm_optimal <- confusionMatrix(pooled_df$pred_class_optimal, 
+                              pooled_df$actual, 
+                              positive = "No_Longer_Taking")
+
+cat("Performance Metrics:\n")
+cat("  Accuracy:", round(cm_optimal$overall["Accuracy"], 4), "\n")
+cat("  Precision:", round(cm_optimal$byClass["Precision"], 4), "\n")
+cat("  F1-Score:", round(cm_optimal$byClass["F1"], 4), "\n")
+
+cat("\n========================================\n")
+cat("CREATING VISUALIZATIONS\n")
+cat("========================================\n\n")
+
+# 1. Variable Importance with Stability
+top15 <- head(pooled_importance_enhanced, 15)
+
+p1 <- ggplot(top15, aes(x = reorder(Variable, MeanDecreaseAccuracy), 
+                        y = MeanDecreaseAccuracy,
+                        fill = CV_Rank)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = MeanDecreaseAccuracy - SD_MDA,
+                    ymax = MeanDecreaseAccuracy + SD_MDA),
+                width = 0.3, alpha = 0.6) +
+  scale_fill_viridis(option = "plasma", direction = -1,
+                     name = "Rank\nVariability") +
+  coord_flip() +
+  labs(title = "Top 15 Most Predictive Variables",
+       subtitle = "Error bars show SD; darker = more stable",
+       x = NULL,
+       y = "Mean Decrease in Accuracy") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+print(p1)
+
+# 2. ROC Curve
+roc_data <- data.frame(
+  FPR = 1 - roc_pooled$specificities,
+  TPR = roc_pooled$sensitivities
+)
+
+p2 <- ggplot(roc_data, aes(x = FPR, y = TPR)) +
+  geom_line(color = "steelblue", linewidth = 1.2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(aes(x = 1 - coords_all$specificity[youden_idx],
+                 y = coords_all$sensitivity[youden_idx]),
+             color = "red", size = 4, shape = 18) +
+  annotate("text", 
+           x = 1 - coords_all$specificity[youden_idx] + 0.15,
+           y = coords_all$sensitivity[youden_idx],
+           label = paste0("Optimal\n(", round(youden_threshold, 3), ")"),
+           color = "red", size = 3.5, fontface = "bold") +
+  labs(title = "ROC Curve",
+       subtitle = paste0("AUC = ", round(auc(roc_pooled), 3)),
+       x = "False Positive Rate",
+       y = "True Positive Rate") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+print(p2)
+
+# 3. Prediction Distribution
+p3 <- ggplot(pooled_df, aes(x = pooled_prob, fill = actual)) +
+  geom_histogram(bins = 30, alpha = 0.7, position = "identity") +
+  geom_vline(xintercept = youden_threshold, linetype = "dashed", 
+             color = "red", linewidth = 1) +
+  scale_fill_manual(values = c("Still_Using" = "coral", 
+                               "No_Longer_Taking" = "skyblue"),
+                   name = "Actual Status") +
+  labs(title = "Distribution of Predicted Probabilities",
+       x = "Predicted Probability (No Longer Taking)",
+       y = "Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.position = "top")
+
+print(p3)
+
+# 4. Confusion Matrix
+cm_df <- as.data.frame(cm_optimal$table)
+names(cm_df) <- c("Predicted", "Actual", "Count")
+
+p4 <- ggplot(cm_df, aes(x = Actual, y = Predicted, fill = Count)) +
+  geom_tile(color = "white", linewidth = 1) +
+  geom_text(aes(label = Count), size = 8, fontface = "bold") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Confusion Matrix",
+       subtitle = paste0("Threshold = ", round(youden_threshold, 3))) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.position = "none")
+
+print(p4)
+
+cat("\n========================================\n")
+cat("SAVING RESULTS\n")
+cat("========================================\n\n")
+
+enhanced_results <- list(
+  pooled_importance_enhanced = pooled_importance_enhanced,
+  pooled_predictions = pooled_df,
+  optimal_threshold = youden_threshold,
+  confusion_matrix = cm_optimal,
+  roc_object = roc_pooled,
+  models = rf_models,
+  optimal_split = optimal_split
+)
+
+saveRDS(enhanced_results, "enhanced_random_forest_results.rds")
+
+cat("✓ Results saved to 'enhanced_random_forest_results.rds'\n")
+cat("\n=== ANALYSIS COMPLETE ===\n\n")
+
+# Summary
+cat("SUMMARY:\n")
+cat("  AUC:", round(auc(roc_pooled), 3), "\n")
+cat("  Optimal Threshold:", round(youden_threshold, 3), "\n")
+cat("  Accuracy:", round(cm_optimal$overall["Accuracy"], 3), "\n")
+cat("  Top Predictor:", pooled_importance_enhanced$Variable[1], "\n")
+```
+
+
+## Logistic Regression Confirmation
+
+```{r}
+
+```
+
+
+
+
 
 ## Cluster Analysis
 
