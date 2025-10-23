@@ -1906,468 +1906,2075 @@ cat("  Top Predictor:", pooled_importance_enhanced$Variable[1], "\n")
 ## Logistic Regression Confirmation
 
 ```{r}
+#| label: Logistic Regression Validation of Random Forest Results
 
+library(mice)
+library(dplyr)
+library(pROC)
+library(caret)
+library(ggplot2)
+library(gridExtra)
+library(broom)
+
+cat("\n=== LOGISTIC REGRESSION VALIDATION ===\n\n")
+
+# Load data
+cat("Loading imputed data and RF results...\n")
+final_imp <- readRDS("final_imputation_with_subscales.rds")
+rf_results <- readRDS("enhanced_random_forest_results.rds")
+top_predictors <- head(rf_results$pooled_importance_enhanced, 15)$Variable
+cat("Top 15 RF predictors identified\n\n")
+
+# Prepare data
+cat("Preparing data with outcome variable...\n")
+imputed_long <- complete(final_imp, "long", include = TRUE)
+
+if (exists("SIMOA")) {
+  if ("scrn_stopped_bzra" %in% names(SIMOA)) {
+    imputed_long <- imputed_long %>%
+      group_by(.imp) %>%
+      mutate(scrn_stopped_bzra = SIMOA$scrn_stopped_bzra) %>%
+      ungroup()
+    
+    if ("alc_use_men" %in% names(SIMOA) && "alc_use_wmn" %in% names(SIMOA)) {
+      imputed_long <- imputed_long %>%
+        group_by(.imp) %>%
+        mutate(alc_use_men = SIMOA$alc_use_men, alc_use_wmn = SIMOA$alc_use_wmn) %>%
+        ungroup() %>%
+        mutate(alc_use_combined = coalesce(alc_use_men, alc_use_wmn))
+      cat("✓ Created combined alcohol use variable\n")
+    }
+    
+    imputed_long$scrn_stopped_bzra <- factor(imputed_long$scrn_stopped_bzra,
+                                            levels = c(0, 1),
+                                            labels = c("Still_Using", "No_Longer_Taking"))
+    cat("✓ Outcome variable added\n")
+    
+    test_imp1 <- imputed_long %>% filter(.imp == 1)
+    cat("  Class distribution:\n")
+    print(table(test_imp1$scrn_stopped_bzra))
+    
+    missing_predictors <- top_predictors[!top_predictors %in% names(test_imp1)]
+    if (length(missing_predictors) > 0) {
+      cat("\n⚠ Removing missing predictors:", paste(missing_predictors, collapse = ", "), "\n")
+      top_predictors <- top_predictors[top_predictors %in% names(test_imp1)]
+    }
+    cat("\n")
+  }
+}
+
+# Pooling function
+pool_glm_results <- function(fit_list) {
+  coefs <- lapply(fit_list, coef)
+  vcovs <- lapply(fit_list, vcov)
+  m <- length(fit_list)
+  Q_bar <- Reduce("+", coefs) / m
+  U_bar <- Reduce("+", vcovs) / m
+  B <- Reduce("+", lapply(coefs, function(q) (q - Q_bar) %*% t(q - Q_bar))) / (m - 1)
+  T_total <- U_bar + (1 + 1/m) * B
+  se <- sqrt(diag(T_total))
+  lambda <- (1 + 1/m) * diag(B) / diag(T_total)
+  df_old <- (m - 1) / lambda^2
+  n_obs <- nrow(fit_list[[1]]$model)
+  p <- length(Q_bar)
+  df_obs <- n_obs - p
+  df <- (df_old * df_obs) / (df_old + df_obs)
+  t_stat <- Q_bar / se
+  p_values <- 2 * pt(abs(t_stat), df = df, lower.tail = FALSE)
+  ci_lower <- Q_bar - qt(0.975, df) * se
+  ci_upper <- Q_bar + qt(0.975, df) * se
+  data.frame(term = names(Q_bar), estimate = Q_bar, std.error = se,
+             statistic = t_stat, p.value = p_values,
+             `2.5 %` = ci_lower, `97.5 %` = ci_upper,
+             check.names = FALSE, row.names = NULL)
+}
+
+# MODEL 1: Top 15
+cat("========================================\n")
+cat("MODEL 1: TOP 15 RF PREDICTORS\n")
+cat("========================================\n\n")
+formula_top15 <- as.formula(paste("scrn_stopped_bzra ~", paste(top_predictors, collapse = " + ")))
+fit_list_top15 <- list()
+for (i in 1:final_imp$m) {
+  cat("  Fitting model", i, "...\n")
+  data_imp <- imputed_long %>% filter(.imp == i) %>% select(-c(.imp, .id))
+  fit_list_top15[[i]] <- glm(formula_top15, data = data_imp, family = binomial())
+}
+cat("\n✓ Models fitted\n")
+pooled_top15 <- pool_glm_results(fit_list_top15)
+summary_top15 <- pooled_top15
+cat("\nCoefficients:\n")
+print(summary_top15, digits = 3)
+summary_top15$OR <- exp(summary_top15$estimate)
+summary_top15$OR_lower <- exp(summary_top15$`2.5 %`)
+summary_top15$OR_upper <- exp(summary_top15$`97.5 %`)
+cat("\nOdds Ratios:\n")
+print(summary_top15[, c("term", "OR", "OR_lower", "OR_upper", "p.value")], digits = 3, row.names = FALSE)
+
+# MODEL 2: Top 10
+cat("\n========================================\n")
+cat("MODEL 2: TOP 10 RF PREDICTORS\n")
+cat("========================================\n\n")
+top10_predictors <- head(rf_results$pooled_importance_enhanced, 10)$Variable
+formula_top10 <- as.formula(paste("scrn_stopped_bzra ~", paste(top10_predictors, collapse = " + ")))
+fit_list_top10 <- list()
+for (i in 1:final_imp$m) {
+  data_imp <- imputed_long %>% filter(.imp == i) %>% select(-c(.imp, .id))
+  fit_list_top10[[i]] <- glm(formula_top10, data = data_imp, family = binomial())
+}
+pooled_top10 <- pool_glm_results(fit_list_top10)
+summary_top10 <- pooled_top10
+cat("Coefficients:\n")
+print(summary_top10, digits = 3)
+
+# MODEL 3: Parsimonious
+cat("\n========================================\n")
+cat("MODEL 3: PARSIMONIOUS (p < 0.10)\n")
+cat("========================================\n\n")
+sig_predictors <- summary_top15$term[summary_top15$p.value < 0.10 & summary_top15$term != "(Intercept)"]
+if (length(sig_predictors) > 0) {
+  sig_predictors_clean <- unique(gsub("\\.(L|Q|C|\\^[0-9]+)$", "", sig_predictors))
+  cat("Significant predictors:", paste(sig_predictors_clean, collapse = ", "), "\n\n")
+  formula_sig <- as.formula(paste("scrn_stopped_bzra ~", paste(sig_predictors_clean, collapse = " + ")))
+  fit_list_sig <- list()
+  for (i in 1:final_imp$m) {
+    data_imp <- imputed_long %>% filter(.imp == i) %>% select(-c(.imp, .id))
+    fit_list_sig[[i]] <- glm(formula_sig, data = data_imp, family = binomial())
+  }
+  pooled_sig <- pool_glm_results(fit_list_sig)
+  summary_sig <- pooled_sig
+  cat("Coefficients:\n")
+  print(summary_sig, digits = 3)
+  summary_sig$OR <- exp(summary_sig$estimate)
+  summary_sig$OR_lower <- exp(summary_sig$`2.5 %`)
+  summary_sig$OR_upper <- exp(summary_sig$`97.5 %`)
+  cat("\nOdds Ratios:\n")
+  print(summary_sig[, c("term", "OR", "OR_lower", "OR_upper", "p.value")], digits = 3, row.names = FALSE)
+} else {
+  cat("No predictors significant at p < 0.10\n")
+  fit_list_sig <- NULL
+}
+
+# Performance evaluation
+cat("\n========================================\n")
+cat("MODEL PERFORMANCE\n")
+cat("========================================\n\n")
+evaluate_model <- function(model_fit_list, model_name) {
+  results_list <- list()
+  for (i in 1:final_imp$m) {
+    data_imp <- imputed_long %>% filter(.imp == i) %>% select(-c(.imp, .id)) %>%
+      select(scrn_stopped_bzra, all_of(all.vars(model_fit_list[[i]]$formula)[-1])) %>% na.omit()
+    set.seed(123 + i)
+    train_idx <- createDataPartition(data_imp$scrn_stopped_bzra, p = 0.8, list = FALSE)
+    test_data <- data_imp[-train_idx, ]
+    pred_prob <- predict(model_fit_list[[i]], newdata = test_data, type = "response")
+    roc_obj <- roc(test_data$scrn_stopped_bzra, pred_prob, quiet = TRUE)
+    auc_val <- as.numeric(auc(roc_obj))
+    coords_all <- coords(roc_obj, x = "all", ret = "all")
+    youden_j <- coords_all$sensitivity + coords_all$specificity - 1
+    optimal_thresh <- coords_all$threshold[which.max(youden_j)]
+    pred_class <- factor(ifelse(pred_prob > optimal_thresh, "No_Longer_Taking", "Still_Using"),
+                        levels = levels(test_data$scrn_stopped_bzra))
+    cm <- confusionMatrix(pred_class, test_data$scrn_stopped_bzra, positive = "No_Longer_Taking")
+    results_list[[i]] <- data.frame(imputation = i, auc = auc_val,
+                                    accuracy = cm$overall["Accuracy"],
+                                    sensitivity = cm$byClass["Sensitivity"],
+                                    specificity = cm$byClass["Specificity"],
+                                    precision = cm$byClass["Precision"],
+                                    f1 = cm$byClass["F1"])
+  }
+  results_df <- bind_rows(results_list)
+  data.frame(Model = model_name, AUC = mean(results_df$auc), AUC_SD = sd(results_df$auc),
+             Accuracy = mean(results_df$accuracy), Sensitivity = mean(results_df$sensitivity),
+             Specificity = mean(results_df$specificity),
+             Precision = mean(results_df$precision, na.rm = TRUE),
+             F1 = mean(results_df$f1, na.rm = TRUE))
+}
+
+perf_top15 <- evaluate_model(fit_list_top15, "Top 15")
+perf_top10 <- evaluate_model(fit_list_top10, "Top 10")
+if (!is.null(fit_list_sig)) {
+  perf_sig <- evaluate_model(fit_list_sig, "Parsimonious")
+  performance_comparison <- bind_rows(perf_top15, perf_top10, perf_sig)
+} else {
+  performance_comparison <- bind_rows(perf_top15, perf_top10)
+}
+
+cat("Performance Metrics:\n")
+print(performance_comparison, digits = 3, row.names = FALSE)
+cat("\nRF Performance:\n")
+cat("  AUC:", round(auc(rf_results$roc_object), 3), "\n")
+cat("  Accuracy:", round(rf_results$confusion_matrix$overall["Accuracy"], 3), "\n")
+
+# Visualizations
+cat("\n========================================\n")
+cat("CREATING VISUALIZATIONS\n")
+cat("========================================\n\n")
+
+or_plot_data <- summary_top15 %>% filter(term != "(Intercept)") %>%
+  mutate(significant = ifelse(p.value < 0.05, "p < 0.05", ifelse(p.value < 0.10, "p < 0.10", "NS")))
+p1 <- ggplot(or_plot_data, aes(x = reorder(term, OR), y = OR, color = significant)) +
+  geom_point(size = 3) + geom_errorbar(aes(ymin = OR_lower, ymax = OR_upper), width = 0.3, linewidth = 0.8) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray40") +
+  scale_color_manual(values = c("p < 0.05" = "red", "p < 0.10" = "orange", "NS" = "gray60")) +
+  coord_flip() + scale_y_log10() + labs(title = "Odds Ratios: Top 15 RF Predictors", x = NULL, y = "OR (log)") +
+  theme_minimal(base_size = 11) + theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "top")
+print(p1)
+
+perf_long <- performance_comparison %>% select(Model, AUC, Accuracy, Sensitivity, Specificity, F1) %>%
+  tidyr::pivot_longer(cols = -Model, names_to = "Metric", values_to = "Value")
+p2 <- ggplot(perf_long, aes(x = Metric, y = Value, fill = Model)) +
+  geom_col(position = "dodge") + geom_hline(yintercept = 0.5, linetype = "dashed") +
+  scale_fill_brewer(palette = "Set2") + labs(title = "Model Comparison", y = "Performance", x = NULL) +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+                         legend.position = "top", axis.text.x = element_text(angle = 45, hjust = 1))
+print(p2)
+
+comparison_data <- data.frame(
+  Method = c("Random Forest", "LR (Top 15)", "LR (Top 10)"),
+  AUC = c(auc(rf_results$roc_object), perf_top15$AUC, perf_top10$AUC),
+  Accuracy = c(rf_results$confusion_matrix$overall["Accuracy"], perf_top15$Accuracy, perf_top10$Accuracy))
+if (!is.null(fit_list_sig)) {
+  comparison_data <- rbind(comparison_data, data.frame(Method = "LR (Parsimonious)",
+                                                       AUC = perf_sig$AUC, Accuracy = perf_sig$Accuracy))
+}
+comp_long <- comparison_data %>% tidyr::pivot_longer(cols = c(AUC, Accuracy), names_to = "Metric", values_to = "Value")
+p3 <- ggplot(comp_long, aes(x = Method, y = Value, fill = Metric)) +
+  geom_col(position = "dodge") + geom_text(aes(label = round(Value, 3)), position = position_dodge(0.9), vjust = -0.5, size = 3) +
+  scale_fill_manual(values = c("AUC" = "steelblue", "Accuracy" = "coral")) +
+  labs(title = "RF vs LR", y = "Performance", x = NULL) + ylim(0, 1) + theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "top",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+print(p3)
+
+# Save
+cat("\n========================================\n")
+cat("SAVING RESULTS\n")
+cat("========================================\n\n")
+logistic_results <- list(
+  model_top15 = list(fit = fit_list_top15, pooled = pooled_top15, summary = summary_top15),
+  model_top10 = list(fit = fit_list_top10, pooled = pooled_top10, summary = summary_top10),
+  model_parsimonious = if (!is.null(fit_list_sig)) list(fit = fit_list_sig, pooled = pooled_sig, summary = summary_sig) else NULL,
+  performance_comparison = performance_comparison,
+  rf_comparison = comparison_data,
+  significant_predictors = if (!is.null(fit_list_sig)) sig_predictors_clean else NULL
+)
+saveRDS(logistic_results, "logistic_regression_validation.rds")
+cat("✓ Results saved\n\n=== COMPLETE ===\n\n")
+cat("SUMMARY:\n")
+cat("RF AUC:", round(auc(rf_results$roc_object), 3), "\n")
+cat("LR (Top 15) AUC:", round(perf_top15$AUC, 3), "\n")
+cat("LR (Top 10) AUC:", round(perf_top10$AUC, 3), "\n")
+if (!is.null(fit_list_sig)) {
+  cat("LR (Parsimonious) AUC:", round(perf_sig$AUC, 3), "\n")
+  cat("\nSignificant predictors (p < 0.10):", length(sig_predictors_clean), "\n")
+}
+cat("\n✓ Key predictors validated!\n")
 ```
 
 
+## Post-Modeling Diagnostics
 
+```{r}
+#| label: Post-Modeling Diagnostics
+
+library(mice)
+library(dplyr)
+library(pROC)
+library(caret)
+library(ggplot2)
+library(gridExtra)
+library(car)
+library(MASS)
+
+cat("\n=== POST-MODELING DIAGNOSTICS ===\n\n")
+
+# Load results
+cat("Loading results...\n")
+logistic_results <- readRDS("logistic_regression_validation.rds")
+rf_results <- readRDS("enhanced_random_forest_results.rds")
+final_imp <- readRDS("final_imputation_with_subscales.rds")
+
+# Recreate data
+imputed_long <- complete(final_imp, "long", include = TRUE)
+if (exists("SIMOA")) {
+  imputed_long <- imputed_long %>%
+    group_by(.imp) %>%
+    mutate(scrn_stopped_bzra = SIMOA$scrn_stopped_bzra) %>%
+    ungroup()
+  
+  if ("alc_use_men" %in% names(SIMOA) && "alc_use_wmn" %in% names(SIMOA)) {
+    imputed_long <- imputed_long %>%
+      group_by(.imp) %>%
+      mutate(alc_use_men = SIMOA$alc_use_men, alc_use_wmn = SIMOA$alc_use_wmn) %>%
+      ungroup() %>%
+      mutate(alc_use_combined = coalesce(alc_use_men, alc_use_wmn))
+  }
+  
+  imputed_long$scrn_stopped_bzra <- factor(imputed_long$scrn_stopped_bzra,
+                                          levels = c(0, 1),
+                                          labels = c("Still_Using", "No_Longer_Taking"))
+}
+
+# ===== 1. MULTICOLLINEARITY (VIF) =====
+cat("========================================\n")
+cat("1. MULTICOLLINEARITY CHECK (VIF)\n")
+cat("========================================\n\n")
+
+# Use first imputation for VIF (use dplyr::select to avoid conflict with MASS)
+data_imp1 <- imputed_long %>% filter(.imp == 1) %>% dplyr::select(-c(.imp, .id))
+
+# Fit model for VIF (using top 15)
+fit_vif <- logistic_results$model_top15$fit[[1]]
+
+# Calculate VIF
+cat("Variance Inflation Factors (VIF):\n")
+cat("Rule of thumb: VIF > 5 suggests multicollinearity, VIF > 10 is serious\n\n")
+
+# Get VIF (handles both regular VIF and GVIF for categorical variables)
+vif_raw <- vif(fit_vif)
+
+# Process VIF output
+if (is.matrix(vif_raw)) {
+  # GVIF output (categorical variables present)
+  cat("Note: Model contains categorical variables with multiple levels\n")
+  cat("Using GVIF^(1/(2*Df)) for interpretation\n\n")
+  vif_values <- vif_raw[, "GVIF^(1/(2*Df))"]
+  names(vif_values) <- rownames(vif_raw)
+} else {
+  # Regular VIF output (all numeric predictors)
+  vif_values <- vif_raw
+}
+
+# Create VIF dataframe
+vif_df <- data.frame(
+  Variable = names(vif_values),
+  VIF = as.numeric(vif_values),
+  Status = ifelse(vif_values > 10, "Serious",
+                 ifelse(vif_values > 5, "Moderate", "OK")),
+  row.names = NULL
+)
+vif_df <- vif_df[order(-vif_df$VIF), ]
+print(vif_df, digits = 3, row.names = FALSE)
+
+cat("\nInterpretation:\n")
+if (any(vif_df$VIF > 10)) {
+  cat("⚠ WARNING: Serious multicollinearity detected!\n")
+  cat("  Variables with VIF > 10:\n")
+  high_vif <- vif_df$Variable[vif_df$VIF > 10]
+  cat(paste("  -", high_vif, collapse = "\n"), "\n")
+} else if (any(vif_df$VIF > 5)) {
+  cat("⚠ Moderate multicollinearity present\n")
+  cat("  Variables with VIF > 5:\n")
+  mod_vif <- vif_df$Variable[vif_df$VIF > 5]
+  cat(paste("  -", mod_vif, collapse = "\n"), "\n")
+} else {
+  cat("✓ No concerning multicollinearity detected\n")
+}
+
+# VIF plot
+p_vif <- ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF, fill = Status)) +
+  geom_col() +
+  geom_hline(yintercept = 5, linetype = "dashed", color = "orange", linewidth = 1) +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "red", linewidth = 1) +
+  scale_fill_manual(values = c("OK" = "steelblue", "Moderate" = "orange", "Serious" = "red")) +
+  coord_flip() +
+  labs(title = "Multicollinearity Assessment (VIF)",
+       subtitle = "Dashed lines at VIF = 5 (moderate) and 10 (serious)",
+       x = NULL, y = "Variance Inflation Factor") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.position = "top")
+print(p_vif)
+
+# ===== 2. CALIBRATION PLOT =====
+cat("\n========================================\n")
+cat("2. CALIBRATION ANALYSIS\n")
+cat("========================================\n\n")
+
+cat("Generating calibration plot across imputations...\n")
+
+calibration_data_list <- list()
+
+for (i in 1:final_imp$m) {
+  data_imp <- imputed_long %>% filter(.imp == i) %>% dplyr::select(-c(.imp, .id))
+  
+  # Use same train/test split as performance evaluation
+  set.seed(123 + i)
+  train_idx <- createDataPartition(data_imp$scrn_stopped_bzra, p = 0.8, list = FALSE)
+  test_data <- data_imp[-train_idx, ]
+  
+  # Get predictions
+  pred_prob <- predict(logistic_results$model_top15$fit[[i]], 
+                      newdata = test_data, 
+                      type = "response")
+  
+  # Create bins
+  test_data$pred_prob <- pred_prob
+  test_data$pred_bin <- cut(pred_prob, 
+                           breaks = seq(0, 1, by = 0.1),
+                           include.lowest = TRUE,
+                           labels = FALSE)
+  
+  # Calculate observed proportions per bin
+  calib_summary <- test_data %>%
+    group_by(pred_bin) %>%
+    summarise(
+      n = n(),
+      predicted = mean(pred_prob),
+      observed = mean(as.numeric(scrn_stopped_bzra) - 1),
+      .groups = "drop"
+    ) %>%
+    filter(n >= 5)  # Only bins with sufficient data
+  
+  calib_summary$imputation <- i
+  calibration_data_list[[i]] <- calib_summary
+}
+
+calibration_data <- bind_rows(calibration_data_list) %>%
+  group_by(pred_bin) %>%
+  summarise(
+    predicted = mean(predicted),
+    observed = mean(observed),
+    n_total = sum(n),
+    .groups = "drop"
+  )
+
+cat("Calibration summary:\n")
+print(calibration_data, digits = 3)
+
+# Hosmer-Lemeshow-like statistic
+cal_chi_sq <- sum((calibration_data$observed - calibration_data$predicted)^2 / 
+                 (calibration_data$predicted * (1 - calibration_data$predicted) / calibration_data$n_total))
+cat("\nCalibration chi-square:", round(cal_chi_sq, 3), "\n")
+cat("(Lower values indicate better calibration)\n")
+
+# Calibration plot
+p_calib <- ggplot(calibration_data, aes(x = predicted, y = observed)) +
+  geom_point(aes(size = n_total), alpha = 0.6, color = "steelblue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red", linewidth = 1) +
+  geom_smooth(method = "loess", se = TRUE, color = "darkblue", fill = "lightblue") +
+  scale_size_continuous(name = "N", range = c(3, 10)) +
+  coord_fixed(ratio = 1, xlim = c(0, 1), ylim = c(0, 1)) +
+  labs(title = "Calibration Plot: Top 15 Logistic Regression",
+       subtitle = "Perfect calibration = dashed red line",
+       x = "Predicted Probability",
+       y = "Observed Proportion") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.position = "right")
+print(p_calib)
+
+# ===== 3. MODEL COMPARISON (DeLong Test) =====
+cat("\n========================================\n")
+cat("3. STATISTICAL MODEL COMPARISON\n")
+cat("========================================\n\n")
+
+cat("Comparing Random Forest vs Logistic Regression (DeLong test)...\n\n")
+
+# Get RF ROC
+rf_roc <- rf_results$roc_object
+
+# Get LR ROC (from first imputation for simplicity)
+data_imp1 <- imputed_long %>% filter(.imp == 1) %>% dplyr::select(-c(.imp, .id))
+set.seed(124)
+train_idx <- createDataPartition(data_imp1$scrn_stopped_bzra, p = 0.8, list = FALSE)
+test_data <- data_imp1[-train_idx, ]
+lr_pred <- predict(logistic_results$model_top15$fit[[1]], 
+                   newdata = test_data, 
+                   type = "response")
+lr_roc <- roc(test_data$scrn_stopped_bzra, lr_pred, quiet = TRUE)
+
+# DeLong test
+delong_test <- roc.test(rf_roc, lr_roc, method = "delong")
+
+cat("AUC Comparison:\n")
+cat("  Random Forest AUC:", round(auc(rf_roc), 4), "\n")
+cat("  Logistic Regression AUC:", round(auc(lr_roc), 4), "\n")
+cat("  Difference:", round(auc(lr_roc) - auc(rf_roc), 4), "\n\n")
+
+cat("DeLong Test Results:\n")
+cat("  Z-statistic:", round(delong_test$statistic, 4), "\n")
+cat("  p-value:", format.pval(delong_test$p.value, digits = 4), "\n")
+
+if (delong_test$p.value < 0.05) {
+  cat("\n✓ The difference in AUC is statistically significant (p < 0.05)\n")
+  if (auc(lr_roc) > auc(rf_roc)) {
+    cat("  Logistic Regression performs significantly better than Random Forest\n")
+  } else {
+    cat("  Random Forest performs significantly better than Logistic Regression\n")
+  }
+} else {
+  cat("\n  The difference in AUC is not statistically significant (p ≥ 0.05)\n")
+}
+
+# ROC comparison plot
+roc_comparison <- data.frame(
+  FPR = c(1 - rf_roc$specificities, 1 - lr_roc$specificities),
+  TPR = c(rf_roc$sensitivities, lr_roc$sensitivities),
+  Model = rep(c("Random Forest", "Logistic Regression"), 
+              c(length(rf_roc$sensitivities), length(lr_roc$sensitivities)))
+)
+
+p_roc_comp <- ggplot(roc_comparison, aes(x = FPR, y = TPR, color = Model)) +
+  geom_line(linewidth = 1.2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  annotate("text", x = 0.7, y = 0.3, 
+           label = paste0("RF AUC = ", round(auc(rf_roc), 3)), 
+           color = "#F8766D", size = 4, fontface = "bold") +
+  annotate("text", x = 0.7, y = 0.2, 
+           label = paste0("LR AUC = ", round(auc(lr_roc), 3)), 
+           color = "#00BFC4", size = 4, fontface = "bold") +
+  annotate("text", x = 0.7, y = 0.1,
+           label = paste0("p = ", format.pval(delong_test$p.value, digits = 2)),
+           size = 4, fontface = "italic") +
+  labs(title = "ROC Curve Comparison",
+       subtitle = "Random Forest vs Logistic Regression",
+       x = "False Positive Rate",
+       y = "True Positive Rate") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.position.inside = c(0.8, 0.2))
+print(p_roc_comp)
+
+# ===== 4. PREDICTED PROBABILITY PLOTS =====
+cat("\n========================================\n")
+cat("4. PREDICTED PROBABILITY INTERPRETATION\n")
+cat("========================================\n\n")
+
+cat("Creating predicted probability plots for top predictors...\n\n")
+
+# Get top 3 significant predictors
+top_preds <- logistic_results$significant_predictors[1:min(3, length(logistic_results$significant_predictors))]
+cat("Top predictors:", paste(top_preds, collapse = ", "), "\n\n")
+
+prob_plots <- list()
+
+for (pred in top_preds) {
+  tryCatch({
+    # Get data - include all variables from the model
+    data_plot <- imputed_long %>% 
+      filter(.imp == 1) %>% 
+      dplyr::select(-c(.imp, .id))
+    
+    # Check if predictor is numeric
+    if (is.numeric(data_plot[[pred]])) {
+      # Create prediction grid
+      pred_range <- seq(min(data_plot[[pred]], na.rm = TRUE),
+                       max(data_plot[[pred]], na.rm = TRUE),
+                       length.out = 100)
+      
+      # Get all predictors from the top15 model (not parsimonious)
+      model_vars <- names(logistic_results$model_top15$fit[[1]]$model)[-1]  # Exclude outcome
+      
+      # Create newdata with all required variables
+      newdata <- data_plot[1:100, model_vars, drop = FALSE]
+      
+      # Set the focal predictor to its range
+      newdata[[pred]] <- pred_range
+      
+      # Set other predictors to their means/modes
+      for (v in model_vars) {
+        if (v != pred) {
+          if (is.numeric(data_plot[[v]])) {
+            newdata[[v]] <- mean(data_plot[[v]], na.rm = TRUE)
+          } else if (is.factor(data_plot[[v]])) {
+            # Get most common level
+            mode_val <- names(sort(table(data_plot[[v]]), decreasing = TRUE))[1]
+            newdata[[v]] <- factor(mode_val, levels = levels(data_plot[[v]]))
+          } else {
+            newdata[[v]] <- data_plot[[v]][1]
+          }
+        }
+      }
+      
+      # Get predictions using top15 model
+      newdata$pred_prob <- predict(logistic_results$model_top15$fit[[1]], 
+                                  newdata = newdata, 
+                                  type = "response")
+      newdata$focal_var <- newdata[[pred]]
+      
+      # Create plot
+      p <- ggplot(newdata, aes(x = focal_var, y = pred_prob)) +
+        geom_line(color = "steelblue", linewidth = 1.2) +
+        geom_ribbon(aes(ymin = pmax(pred_prob - 0.1, 0), 
+                       ymax = pmin(pred_prob + 0.1, 1)),
+                   alpha = 0.2, fill = "steelblue") +
+        labs(title = paste("Predicted Probability by", pred),
+             x = pred,
+             y = "P(Discontinuation)") +
+        ylim(0, 1) +
+        theme_minimal() +
+        theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+      
+      prob_plots[[pred]] <- p
+      
+    } else {
+      cat("  Skipping", pred, "(not numeric)\n")
+    }
+  }, error = function(e) {
+    cat("  Could not create plot for", pred, ":", e$message, "\n")
+  })
+}
+
+if (length(prob_plots) > 0) {
+  cat("\nGenerating", length(prob_plots), "probability plot(s)...\n")
+  do.call(grid.arrange, c(prob_plots, ncol = min(2, length(prob_plots))))
+} else {
+  cat("\nNo numeric predictors available for probability plots.\n")
+}
+
+# ===== 5. SAVE DIAGNOSTIC RESULTS =====
+cat("\n========================================\n")
+cat("SAVING DIAGNOSTIC RESULTS\n")
+cat("========================================\n\n")
+
+diagnostic_results <- list(
+  vif = vif_df,
+  calibration = calibration_data,
+  delong_test = list(
+    statistic = delong_test$statistic,
+    p.value = delong_test$p.value,
+    rf_auc = auc(rf_roc),
+    lr_auc = auc(lr_roc)
+  )
+)
+
+saveRDS(diagnostic_results, "model_diagnostics.rds")
+
+cat("✓ Diagnostic results saved to 'model_diagnostics.rds'\n")
+cat("\n=== DIAGNOSTICS COMPLETE ===\n\n")
+
+# Summary
+cat("SUMMARY:\n")
+cat("1. Multicollinearity:\n")
+if (any(vif_df$VIF > 10)) {
+  cat("   ⚠ Serious issues detected - consider removing correlated predictors\n")
+} else if (any(vif_df$VIF > 5)) {
+  cat("   ⚠ Moderate issues - interpret coefficients cautiously\n")
+} else {
+  cat("   ✓ No major concerns\n")
+}
+cat("\n2. Calibration:\n")
+cat("   Chi-square =", round(cal_chi_sq, 3), 
+    ifelse(cal_chi_sq < 15, "(Good)", "(Check calibration)"), "\n")
+cat("\n3. Model Comparison:\n")
+cat("   LR AUC:", round(auc(lr_roc), 3), "vs RF AUC:", round(auc(rf_roc), 3), "\n")
+cat("   p-value:", format.pval(delong_test$p.value, digits = 3), 
+    ifelse(delong_test$p.value < 0.05, "(Significant difference)", "(Not significant)"), "\n")
+cat("\n✓ All diagnostics complete! Review plots and results.\n")
+```
 
 
 ## Cluster Analysis
 
+## DEM+PERS
+
 ```{r}
-#| label: Focused Clustering Analysis - 35 Variables
+#| label: CLUSTER ANALYSIS: PERSONALITY & DEMOGRAPHICS (POOLED IMPUTATION)
+# Comprehensive Cluster Analysis with Multiple Imputation
 
-# ===== LOAD REQUIRED PACKAGES =====
-library(mice)
+# Load required libraries
+library(tidyverse)
 library(cluster)
-library(dplyr)
+library(factoextra)
+library(NbClust)
 library(ggplot2)
-library(tidyr)
+library(tableone)
+library(mice)  # For handling multiple imputation
 
-# ===== LOAD IMPUTED DATA WITH SUBSCALES =====
-cat("\n=== LOADING IMPUTED DATA ===\n")
+# ============================================================================
+# STEP 1: DATA PREPARATION WITH MULTIPLE IMPUTATION
+# ============================================================================
+
+# Load the imputed dataset (should be a mids or mira object, or list of imputations)
 final_imp <- readRDS("final_imputation_with_subscales.rds")
 
-# ===== DEFINE FOCUSED VARIABLE SET (35 VARIABLES) =====
-cat("\n=== DEFINING FOCUSED VARIABLE SET ===\n")
+# Check the structure of your imputation object
+cat("=== IMPUTATION OBJECT STRUCTURE ===\n")
+cat("Class:", class(final_imp), "\n")
 
-clustering_vars <- c(
-  # Demographics (6)
-  "age", "sex", "education", "income", "employment", "med_quant",
+# If it's a mids object from mice:
+if (inherits(final_imp, "mids")) {
+  n_imputations <- final_imp$m
+  cat("Number of imputations:", n_imputations, "\n")
   
-  # Big Five Personality (5)
+  # Extract all imputed datasets and add outcome variable
+  cat("\n=== ADDING OUTCOME VARIABLE ===\n")
+  if (exists("SIMOA") && "scrn_stopped_bzra" %in% names(SIMOA)) {
+    cat("✓ Adding scrn_stopped_bzra from SIMOA object (observations in same order)\n")
+    cat("Number of observations in SIMOA:", nrow(SIMOA), "\n")
+    cat("Outcome variable distribution:\n")
+    print(table(SIMOA$scrn_stopped_bzra, useNA = "ifany"))
+    
+    imputed_list <- lapply(1:n_imputations, function(i) {
+      imp_data <- complete(final_imp, action = i)
+      # Add scrn_stopped_bzra directly (same order)
+      imp_data$scrn_stopped_bzra <- SIMOA$scrn_stopped_bzra
+      return(imp_data)
+    })
+  } else {
+    cat("⚠ WARNING: SIMOA object or scrn_stopped_bzra not found\n")
+    imputed_list <- lapply(1:n_imputations, function(i) complete(final_imp, action = i))
+  }
+  cat("\n")
+  
+} else if (is.list(final_imp) && !inherits(final_imp, "data.frame")) {
+  # If it's already a list of data frames
+  n_imputations <- length(imputed_list)
+  cat("Number of imputations:", n_imputations, "\n")
+  
+  cat("\n=== ADDING OUTCOME VARIABLE ===\n")
+  if (exists("SIMOA") && "scrn_stopped_bzra" %in% names(SIMOA)) {
+    cat("✓ Adding scrn_stopped_bzra from SIMOA object (observations in same order)\n")
+    imputed_list <- lapply(final_imp, function(imp_data) {
+      imp_data$scrn_stopped_bzra <- SIMOA$scrn_stopped_bzra
+      return(imp_data)
+    })
+  } else {
+    cat("⚠ WARNING: SIMOA object or scrn_stopped_bzra not found\n")
+    imputed_list <- final_imp
+  }
+  cat("\n")
+  
+} else {
+  # If it's a single data frame, treat as single imputation
+  cat("Single imputation detected\n")
+  
+  cat("\n=== ADDING OUTCOME VARIABLE ===\n")
+  if (exists("SIMOA") && "scrn_stopped_bzra" %in% names(SIMOA)) {
+    cat("✓ Adding scrn_stopped_bzra from SIMOA object (observations in same order)\n")
+    imp_data <- final_imp
+    imp_data$scrn_stopped_bzra <- SIMOA$scrn_stopped_bzra
+    imputed_list <- list(imp_data)
+  } else {
+    cat("⚠ WARNING: SIMOA object or scrn_stopped_bzra not found\n")
+    imputed_list <- list(final_imp)
+  }
+  n_imputations <- 1
+  cat("\n")
+}
+
+# Define all personality variables for clustering
+personality_vars <- c(
+  # BFI-10 Big Five personality traits
   "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
-  
-  # SURPS Personality (4)
+  # SURPS substance use risk personality
   "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
   "SURPS_Anxiety_Sensitivity",
-  
-  # DBAS Sleep Beliefs (4)
-  "DBAS_Expectations", "DBAS_Medications", "DBAS_Worry_Helplessness", 
-  "DBAS_Consequences",
-  
-  # CISS Coping Styles (3)
-  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style",
-  
-  # Side Effects (4)
-  "side_effects_1", "side_effects_2", 
-  "side_effects_3", "side_effects_4",
-  
-  # Safety Concerns (4)
-  "safety_1", "safety_2", 
-  "safety_3", "safety_4",
-  
-  # ADL Impact (2)
-  "adls_1", "adls_2",
-  
-  # Dependence Concerns (3)
-  "dependence_1", "dependence_2", "dependence_3"
+  # DBAS dysfunctional beliefs about sleep
+  "DBAS_Expectations", "DBAS_Medications", "DBAS_Worry_Helplessness", "DBAS_Consequences",
+  # CISS coping styles
+  "CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style"
 )
 
-cat("Using", length(clustering_vars), "variables for focused clustering\n")
-cat("\nVariable categories:\n")
-cat("  Demographics: 6\n")
-cat("  Personality (Big Five + SURPS): 9\n")
-cat("  Sleep Beliefs (DBAS): 4\n")
-cat("  Coping (CISS): 3\n")
-cat("  Side Effects: 4\n")
-cat("  Safety Concerns: 4\n")
-cat("  ADL Impact: 2\n")
-cat("  Dependence Concerns: 3\n")
+# Define demographic variables
+demographic_vars <- c(
+  "age", "sex", "gender", "prov_terr",
+  "education", "income", "employment", "driving_freq", "med_quant", 
+  "osss_3_score", "phq2_score"
+)
 
-# ===== PREPARE DATA FOR CLUSTERING =====
-cat("\n=== PREPARING DATA FOR CLUSTERING ===\n")
+# ===== SPECIFY OUTCOME VARIABLE =====
+# Set the outcome variable name (from SIMOA dataset)
+outcome_var <- "scrn_stopped_bzra"
+cat("Outcome variable set to:", outcome_var, "\n\n")
 
-# Function to prepare clustering data
-prepare_clustering_data <- function(imp_data, vars) {
-  # Get complete data in long format
-  complete_data <- mice::complete(imp_data, "long", include = FALSE)
+# ============================================================================
+# STEP 2: PERFORM CLUSTERING ON EACH IMPUTED DATASET
+# ============================================================================
+
+cat("=== PERFORMING CLUSTERING ON EACH IMPUTATION ===\n\n")
+
+# Verify outcome variable is in the data
+if (outcome_var %in% names(imputed_list[[1]])) {
+  cat("✓ Outcome variable '", outcome_var, "' confirmed in imputed data\n\n", sep = "")
+} else {
+  cat("✗ WARNING: Outcome variable '", outcome_var, "' not found in imputed data\n", sep = "")
+  cat("Available variables:", paste(head(names(imputed_list[[1]]), 20), collapse = ", "), "...\n\n")
+}
+
+# Function to perform clustering on one imputed dataset
+cluster_one_imputation <- function(data, imp_num, optimal_k = NULL) {
+  
+  cat("Processing imputation", imp_num, "...\n")
   
   # Select clustering variables
-  cluster_data <- complete_data %>%
-    select(.imp, .id, all_of(vars))
-  
-  return(cluster_data)
-}
-
-# Prepare data
-cluster_long <- prepare_clustering_data(final_imp, clustering_vars)
-
-cat("Data prepared with", nrow(cluster_long), "rows and", 
-    length(clustering_vars), "clustering variables\n")
-
-# Check for any missing variables
-missing_vars <- setdiff(clustering_vars, names(cluster_long))
-if (length(missing_vars) > 0) {
-  cat("\nWARNING: The following variables are missing from the dataset:\n")
-  print(missing_vars)
-  cat("\nProceeding with available variables only.\n")
-  clustering_vars <- intersect(clustering_vars, names(cluster_long))
-}
-
-# ===== RUN PAM CLUSTERING ACROSS ALL IMPUTATIONS =====
-cat("\n=== RUNNING PAM CLUSTERING ===\n")
-
-# Function to run PAM on single imputation
-run_pam_single <- function(data, k, vars) {
-  # Recode sex to 0/1 for Gower distance calculation
-  if ("sex" %in% vars) {
-    data$sex_binary <- as.numeric(data$sex) - 1  # Convert factor to 0/1
+  if (!is.null(outcome_var)) {
+    clustering_data <- data %>%
+      dplyr::select(all_of(c(personality_vars, outcome_var, demographic_vars))) %>%
+      drop_na(all_of(personality_vars), all_of(outcome_var))
+  } else {
+    clustering_data <- data %>%
+      dplyr::select(all_of(c(personality_vars, demographic_vars))) %>%
+      drop_na(all_of(personality_vars))
   }
   
-  # Update vars list to use sex_binary
-  vars_for_gower <- vars
-  if ("sex" %in% vars) {
-    vars_for_gower <- c(setdiff(vars, "sex"), "sex_binary")
-  }
+  # Prepare data for clustering (personality variables only)
+  cluster_input <- clustering_data %>%
+    dplyr::select(all_of(personality_vars))
   
-  # Calculate Gower distance
-  # Identify ordered variables
-  ordered_vars_list <- c("education", "income", "employment")
-  ordered_in_data <- intersect(ordered_vars_list, vars_for_gower)
+  # Standardize the data
+  cluster_scaled <- scale(cluster_input)
   
-  # Identify clinical rating scales (likely ordinal)
-  clinical_vars <- vars_for_gower[grepl("side_effects|safety|adls|dependence", vars_for_gower)]
-  all_ordered <- unique(c(ordered_in_data, clinical_vars))
-  
-  gower_dist <- daisy(data[, vars_for_gower], 
-                      metric = "gower",
-                      type = list(
-                        asymm = "sex_binary",
-                        ordratio = all_ordered
-                      ))
-  
-  # Run PAM
-  pam_result <- pam(gower_dist, k = k, diss = TRUE)
-  
-  # Calculate silhouette
-  sil <- silhouette(pam_result$clustering, gower_dist)
-  
-  return(list(
-    clustering = pam_result$clustering,
-    silhouette = mean(sil[, 3]),
-    medoids = pam_result$medoids
-  ))
-}
-
-# Test multiple k values across all imputations
-k_values <- 2:6
-n_imp <- max(cluster_long$.imp)
-
-results_list <- list()
-
-cat("\nTesting k = 2 to 6 across", n_imp, "imputations...\n")
-
-for (k in k_values) {
-  cat("\nTesting k =", k, "...\n")
-  
-  silhouettes <- numeric(n_imp)
-  all_clusterings <- matrix(NA, nrow = nrow(cluster_long)/n_imp, ncol = n_imp)
-  
-  for (imp in 1:n_imp) {
-    imp_data <- cluster_long %>% filter(.imp == imp)
+  # Determine optimal k if not provided (only for first imputation)
+  if (is.null(optimal_k)) {
+    cat("  Determining optimal k...\n")
+    set.seed(123)
     
-    result <- run_pam_single(imp_data, k, clustering_vars)
+    # Use silhouette method (faster than NbClust for multiple imputations)
+    sil_results <- sapply(2:8, function(k) {
+      km <- kmeans(cluster_scaled, centers = k, nstart = 25)
+      ss <- silhouette(km$cluster, dist(cluster_scaled))
+      mean(ss[, 3])
+    })
     
-    silhouettes[imp] <- result$silhouette
-    all_clusterings[, imp] <- result$clustering
+    optimal_k <- which.max(sil_results) + 1
+    cat("  Optimal k =", optimal_k, "\n")
   }
   
-  results_list[[paste0("k", k)]] <- list(
-    k = k,
-    silhouettes = silhouettes,
-    mean_sil = mean(silhouettes),
-    sd_sil = sd(silhouettes),
-    clusterings = all_clusterings
+  # Perform k-means clustering
+  set.seed(123 + imp_num)  # Different seed for each imputation
+  kmeans_result <- kmeans(cluster_scaled, centers = optimal_k, nstart = 50, iter.max = 100)
+  
+  # Calculate quality metrics
+  sil <- silhouette(kmeans_result$cluster, dist(cluster_scaled))
+  avg_sil <- mean(sil[, 3])
+  
+  # Return results
+  list(
+    cluster_assignments = kmeans_result$cluster,
+    kmeans_obj = kmeans_result,
+    data = clustering_data,
+    scaled_data = cluster_scaled,
+    optimal_k = optimal_k,
+    silhouette = avg_sil,
+    between_ss_ratio = kmeans_result$betweenss / kmeans_result$totss
+  )
+}
+
+# Cluster all imputations
+cluster_results <- list()
+optimal_k_first <- NULL
+
+for (i in 1:n_imputations) {
+  cluster_results[[i]] <- cluster_one_imputation(
+    imputed_list[[i]], 
+    imp_num = i,
+    optimal_k = optimal_k_first
   )
   
-  cat("  Mean silhouette:", round(mean(silhouettes), 3), 
-      "±", round(sd(silhouettes), 3), "\n")
+  # Use the same k for all imputations
+  if (i == 1) {
+    optimal_k_first <- cluster_results[[1]]$optimal_k
+  }
 }
 
-# ===== DETERMINE OPTIMAL K =====
-cat("\n=== DETERMINING OPTIMAL K ===\n")
+cat("\n=== CLUSTERING QUALITY METRICS (ACROSS IMPUTATIONS) ===\n")
+cat("Optimal k:", optimal_k_first, "\n")
+cat("Average silhouette width:", 
+    round(mean(sapply(cluster_results, function(x) x$silhouette)), 3), "\n")
+cat("Average between SS / Total SS:", 
+    round(mean(sapply(cluster_results, function(x) x$between_ss_ratio)) * 100, 2), "%\n\n")
 
-sil_summary <- data.frame(
-  k = k_values,
-  mean_silhouette = sapply(results_list, function(x) x$mean_sil),
-  sd_silhouette = sapply(results_list, function(x) x$sd_sil)
-)
+# ============================================================================
+# STEP 3: POOL CLUSTER ASSIGNMENTS
+# ============================================================================
 
-print(sil_summary)
+cat("=== POOLING CLUSTER ASSIGNMENTS ===\n\n")
 
-optimal_k <- sil_summary$k[which.max(sil_summary$mean_silhouette)]
-cat("\nOptimal k =", optimal_k, "with mean silhouette =", 
-    round(max(sil_summary$mean_silhouette), 3), "\n")
+# Create a matrix of cluster assignments (rows = observations, cols = imputations)
+n_obs <- nrow(cluster_results[[1]]$data)
+cluster_matrix <- matrix(NA, nrow = n_obs, ncol = n_imputations)
 
-# Interpret silhouette width
-sil_interpretation <- ifelse(max(sil_summary$mean_silhouette) > 0.50, "Strong structure",
-                      ifelse(max(sil_summary$mean_silhouette) > 0.25, "Weak structure",
-                      ifelse(max(sil_summary$mean_silhouette) > 0.10, "Very weak structure",
-                             "No substantial structure")))
+for (i in 1:n_imputations) {
+  cluster_matrix[, i] <- cluster_results[[i]]$cluster_assignments
+}
 
-cat("Interpretation:", sil_interpretation, "\n")
-
-# ===== VISUALIZE SILHOUETTE WIDTHS =====
-sil_plot <- ggplot(sil_summary, aes(x = k, y = mean_silhouette)) +
-  geom_line(size = 1, color = "steelblue") +
-  geom_point(size = 3, color = "steelblue") +
-  geom_errorbar(aes(ymin = mean_silhouette - sd_silhouette,
-                    ymax = mean_silhouette + sd_silhouette),
-                width = 0.2) +
-  geom_vline(xintercept = optimal_k, linetype = "dashed", color = "red") +
-  geom_hline(yintercept = c(0.10, 0.25, 0.50), linetype = "dotted", alpha = 0.5) +
-  annotate("text", x = max(k_values), y = 0.10, label = "Weak", hjust = 1, vjust = -0.5, size = 3) +
-  annotate("text", x = max(k_values), y = 0.25, label = "Fair", hjust = 1, vjust = -0.5, size = 3) +
-  annotate("text", x = max(k_values), y = 0.50, label = "Strong", hjust = 1, vjust = -0.5, size = 3) +
-  labs(title = "Focused Clustering: Silhouette Width by Number of Clusters",
-       subtitle = paste0("Optimal k = ", optimal_k, " | ", sil_interpretation),
-       x = "Number of Clusters (k)",
-       y = "Mean Silhouette Width") +
-  theme_minimal() +
-  theme(text = element_text(size = 12))
-
-print(sil_plot)
-
-# ===== ASSESS CLUSTER STABILITY =====
-cat("\n=== ASSESSING CLUSTER STABILITY ===\n")
-
-optimal_clusterings <- results_list[[paste0("k", optimal_k)]]$clusterings
-
-# Calculate stability: % of cases assigned to same cluster across imputations
-mode_cluster <- apply(optimal_clusterings, 1, function(x) {
+# Method 1: Most frequent cluster assignment (mode)
+pooled_clusters <- apply(cluster_matrix, 1, function(x) {
   as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
 })
 
-agreement <- apply(optimal_clusterings, 1, function(x) {
-  sum(x == mode_cluster[1]) / length(x) * 100
+# Calculate cluster stability (proportion of times assigned to modal cluster)
+cluster_stability <- apply(cluster_matrix, 1, function(x) {
+  max(table(x)) / length(x)
 })
 
-stability_summary <- data.frame(
-  agreement_percent = agreement,
-  modal_cluster = mode_cluster
+cat("Mean cluster stability:", round(mean(cluster_stability), 3), "\n")
+cat("Interpretation: Higher values indicate more consistent assignments\n\n")
+
+# Add pooled clusters to the first imputation's data
+pooled_data <- cluster_results[[1]]$data
+pooled_data$Cluster <- as.factor(pooled_clusters)
+pooled_data$Cluster_Stability <- cluster_stability
+
+cat("Cluster sizes (pooled):\n")
+print(table(pooled_clusters))
+cat("\n")
+
+# ============================================================================
+# STEP 4: PROFILE CLUSTERS - POOLED ESTIMATES
+# ============================================================================
+
+cat("=== CLUSTER PROFILING (POOLED) ===\n\n")
+
+# Pool cluster profiles across imputations using Rubin's rules
+pool_cluster_profiles <- function(cluster_results, personality_vars, pooled_clusters) {
+  
+  n_clusters <- length(unique(pooled_clusters))
+  profile_list <- list()
+  
+  for (i in 1:length(cluster_results)) {
+    data_temp <- cluster_results[[i]]$data
+    data_temp$Cluster <- pooled_clusters  # Use pooled assignments
+    
+    profile <- data_temp %>%
+      group_by(Cluster) %>%
+      summarise(
+        across(all_of(personality_vars), 
+               list(mean = ~mean(., na.rm = TRUE)),
+               .names = "{.col}")
+      )
+    
+    profile_list[[i]] <- profile
+  }
+  
+  # Average means across imputations
+  pooled_profile <- profile_list[[1]]
+  
+  for (var in personality_vars) {
+    for (k in 1:n_clusters) {
+      means <- sapply(profile_list, function(p) p[[var]][k])
+      pooled_profile[[var]][k] <- mean(means, na.rm = TRUE)
+    }
+  }
+  
+  return(pooled_profile)
+}
+
+cluster_profiles <- pool_cluster_profiles(cluster_results, personality_vars, pooled_clusters)
+cluster_profiles$N <- table(pooled_clusters)[as.numeric(cluster_profiles$Cluster)]
+
+print(cluster_profiles)
+
+# ============================================================================
+# STEP 5: STATISTICAL TESTS (POOLED)
+# ============================================================================
+
+cat("\n=== POOLED ANOVA TESTS FOR CLUSTER DIFFERENCES ===\n\n")
+
+# For each variable, pool F-statistics and p-values across imputations
+pool_anova <- function(cluster_results, personality_vars, pooled_clusters) {
+  
+  results_list <- list()
+  
+  for (var in personality_vars) {
+    f_stats <- numeric(length(cluster_results))
+    p_values <- numeric(length(cluster_results))
+    eta2_values <- numeric(length(cluster_results))
+    
+    for (i in 1:length(cluster_results)) {
+      data_temp <- cluster_results[[i]]$data
+      data_temp$Cluster <- as.factor(pooled_clusters)
+      
+      formula_str <- paste(var, "~ Cluster")
+      anova_test <- aov(as.formula(formula_str), data = data_temp)
+      anova_summary <- summary(anova_test)
+      
+      f_stats[i] <- anova_summary[[1]]["Cluster", "F value"]
+      p_values[i] <- anova_summary[[1]]["Cluster", "Pr(>F)"]
+      
+      ss_between <- anova_summary[[1]]["Cluster", "Sum Sq"]
+      ss_total <- sum(anova_summary[[1]][, "Sum Sq"])
+      eta2_values[i] <- ss_between / ss_total
+    }
+    
+    # Pool results (simple averaging for exploratory analysis)
+    results_list[[var]] <- data.frame(
+      Variable = var,
+      F_statistic = mean(f_stats, na.rm = TRUE),
+      p_value = mean(p_values, na.rm = TRUE),
+      Effect_size_eta2 = mean(eta2_values, na.rm = TRUE)
+    )
+  }
+  
+  do.call(rbind, results_list)
+}
+
+anova_results <- pool_anova(cluster_results, personality_vars, pooled_clusters)
+
+# Add significance markers
+anova_results$Significance <- case_when(
+  anova_results$p_value < 0.001 ~ "***",
+  anova_results$p_value < 0.01 ~ "**",
+  anova_results$p_value < 0.05 ~ "*",
+  TRUE ~ "ns"
 )
 
-cat("\nCluster Stability Summary:\n")
-cat("Mean stability:", round(mean(agreement), 1), "%\n")
-cat("Median stability:", round(median(agreement), 1), "%\n")
-cat("% with 100% agreement:", round(sum(agreement == 100)/length(agreement) * 100, 1), "%\n")
-cat("% with ≥80% agreement:", round(sum(agreement >= 80)/length(agreement) * 100, 1), "%\n")
-cat("% with <80% agreement:", round(sum(agreement < 80)/length(agreement) * 100, 1), "%\n")
+anova_results$Effect_Size_Interpretation <- case_when(
+  anova_results$Effect_size_eta2 >= 0.14 ~ "Large",
+  anova_results$Effect_size_eta2 >= 0.06 ~ "Medium",
+  anova_results$Effect_size_eta2 >= 0.01 ~ "Small",
+  TRUE ~ "Negligible"
+)
 
-# Distribution of stability
-stability_plot <- ggplot(stability_summary, aes(x = agreement_percent)) +
-  geom_histogram(binwidth = 5, fill = "steelblue", color = "white") +
-  geom_vline(xintercept = 80, linetype = "dashed", color = "red") +
-  labs(title = "Focused Clustering: Stability Across Imputations",
-       subtitle = paste0("k = ", optimal_k, " | Mean stability = ", 
-                        round(mean(agreement), 1), "%"),
-       x = "Agreement Across Imputations (%)",
-       y = "Number of Participants") +
-  theme_minimal()
+anova_results <- anova_results %>% arrange(desc(Effect_size_eta2))
 
-print(stability_plot)
+cat("=== POOLED ANOVA RESULTS (sorted by effect size) ===\n")
+print(anova_results)
 
-# ===== ASSIGN FINAL CLUSTERS =====
-cat("\n=== ASSIGNING FINAL CLUSTERS ===\n")
+# ============================================================================
+# STEP 6: VISUALIZATIONS
+# ============================================================================
 
-# Add clusters back to imputed data
-cluster_long_with_clusters <- cluster_long %>%
-  mutate(cluster = rep(mode_cluster, times = n_imp),
-         stability = rep(agreement, times = n_imp))
+cat("\n=== CREATING VISUALIZATIONS ===\n\n")
 
-# Get full imputed data with original included
-full_imputed_long <- complete(final_imp, "long", include = TRUE)
+# Cluster visualization (PCA projection)
+set.seed(123)
+cluster_viz <- fviz_cluster(
+  list(data = cluster_results[[1]]$scaled_data, cluster = pooled_clusters),
+  palette = "jco",
+  ellipse.type = "convex",
+  repel = TRUE,
+  ggtheme = theme_minimal(),
+  main = paste("Pooled K-means Clustering (k =", optimal_k_first, ")")
+)
+print(cluster_viz)
 
-# Add cluster assignments
-cluster_assignments <- cluster_long_with_clusters %>%
-  select(.imp, .id, cluster, stability) %>%
-  distinct()
-
-# Join with full data (excluding .imp = 0 which is original data without clusters)
-final_imp_clustered <- full_imputed_long %>%
-  left_join(cluster_assignments, by = c(".imp", ".id"))
-
-# Convert back to mids object
-final_imp_clustered_mids <- as.mids(final_imp_clustered)
-
-cat("Cluster assignment complete. Mids object created: final_imp_clustered_mids\n")
-
-# ===== COMPARE CLUSTERS ON CLUSTERING VARIABLES =====
-cat("\n=== COMPARING CLUSTERS ON CLUSTERING VARIABLES ===\n")
-
-# Use pooled analyses
-compare_results <- list()
-
-for (var in clustering_vars) {
-  cat("Testing", var, "...\n")
+# Cluster profiles by domain
+plot_cluster_profiles <- function(data, vars, title) {
+  long_data <- data %>%
+    dplyr::select(Cluster, all_of(vars)) %>%
+    pivot_longer(cols = all_of(vars), names_to = "Variable", values_to = "Value")
   
-  if (var %in% c("sex", "education", "income", "employment")) {
-    # Chi-square or Kruskal-Wallis for categorical
-    # Use first imputation for non-poolable tests
-    test_data <- complete(final_imp_clustered_mids, 1)
+  ggplot(long_data, aes(x = Variable, y = Value, fill = Cluster)) +
+    geom_boxplot() +
+    facet_wrap(~ Variable, scales = "free_x") +
+    theme_minimal() +
+    theme(axis.text.x = element_blank()) +
+    labs(title = title, x = "Trait", y = "Score") +
+    scale_fill_brewer(palette = "Set2")
+}
+
+# NEO-FFI profile
+neo_vars <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness")
+print(plot_cluster_profiles(pooled_data, neo_vars, "NEO-FFI Big Five by Cluster"))
+
+# SURPS profile
+surps_vars <- c("SURPS_Impulsivity", "SURPS_Sensation_Seeking", 
+                "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity")
+print(plot_cluster_profiles(pooled_data, surps_vars, "SURPS by Cluster"))
+
+# DBAS profile
+dbas_vars <- c("DBAS_Expectations", "DBAS_Medications", 
+               "DBAS_Worry_Helplessness", "DBAS_Consequences")
+print(plot_cluster_profiles(pooled_data, dbas_vars, "DBAS by Cluster"))
+
+# CISS profile
+ciss_vars <- c("CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style")
+print(plot_cluster_profiles(pooled_data, ciss_vars, "CISS by Cluster"))
+
+# ============================================================================
+# STEP 7: BENZODIAZEPINE CESSATION ANALYSIS (POOLED)
+# ============================================================================
+
+if (!is.null(outcome_var)) {
+  cat("\n=== BENZODIAZEPINE CESSATION ANALYSIS (POOLED) ===\n\n")
+  
+  # Cross-tabulation
+  cessation_table <- table(pooled_data$Cluster, pooled_data[[outcome_var]])
+  cat("Benzodiazepine Cessation by Cluster:\n")
+  print(cessation_table)
+  cat("\n")
+  
+  # Proportions
+  cessation_props <- prop.table(cessation_table, margin = 1)
+  cat("Proportions (by cluster):\n")
+  print(round(cessation_props, 3))
+  cat("\n")
+  
+  # Chi-square test
+  chi_test <- chisq.test(cessation_table)
+  cat("Chi-square test:\n")
+  cat("X-squared =", round(chi_test$statistic, 3), "\n")
+  cat("p-value =", format.pval(chi_test$p.value, digits = 3), "\n\n")
+  
+  # Visualization
+  cessation_viz <- pooled_data %>%
+    group_by(Cluster, !!sym(outcome_var)) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    group_by(Cluster) %>%
+    mutate(prop = n / sum(n))
+  
+  cessation_plot <- ggplot(cessation_viz, aes(x = Cluster, y = prop, fill = as.factor(!!sym(outcome_var)))) +
+    geom_bar(stat = "identity", position = "fill") +
+    geom_text(aes(label = paste0(round(prop * 100, 1), "%")), 
+              position = position_fill(vjust = 0.5), size = 3) +
+    scale_y_continuous(labels = scales::percent) +
+    labs(title = "Benzodiazepine Cessation by Cluster (Pooled)",
+         y = "Percentage", x = "Cluster", fill = "SIMOA Status") +
+    theme_minimal() +
+    scale_fill_brewer(palette = "Set1")
+  print(cessation_plot)
+} else {
+  cat("\n=== OUTCOME VARIABLE NOT AVAILABLE ===\n")
+  cat("Skipping cessation analysis.\n\n")
+} +
+  labs(title = "Benzodiazepine Cessation by Cluster (Pooled)",
+       y = "Percentage", x = "Cluster", fill = "SIMOA Status") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1")
+print(cessation_plot)
+
+# ============================================================================
+# STEP 8: EXPORT RESULTS
+# ============================================================================
+
+cat("\n=== EXPORTING RESULTS ===\n")
+
+write.csv(pooled_data, "cluster_assignments_pooled.csv", row.names = FALSE)
+write.csv(anova_results, "cluster_anova_results_pooled.csv", row.names = FALSE)
+write.csv(cluster_profiles, "cluster_profiles_pooled.csv", row.names = FALSE)
+
+cat("\n=== ANALYSIS COMPLETE ===\n")
+cat("Files saved with '_pooled' suffix\n")
+```
+
+## Cluster Follow-up
+
+```{r}
+#| label: CLUSTER FOLLOW-UP ANALYSIS
+# Comprehensive follow-up analyses after cluster analysis
+
+# Load required libraries
+library(tidyverse)
+library(tableone)
+library(ggplot2)
+library(patchwork)
+library(factoextra)
+
+# ============================================================================
+# STEP 1: COMPREHENSIVE COMPARISON TABLE (DEMOGRAPHICS + PERSONALITY)
+# ============================================================================
+
+cat("=== COMPREHENSIVE CLUSTER COMPARISON TABLE ===\n\n")
+
+# Combine all variables for comparison
+all_comparison_vars <- c(demographic_vars, personality_vars)
+
+# Create comprehensive comparison table
+comprehensive_table <- CreateTableOne(
+  vars = all_comparison_vars,
+  strata = "Cluster",
+  data = pooled_data,
+  test = TRUE,
+  addOverall = TRUE
+)
+
+cat("COMPLETE COMPARISON: Demographics + Personality by Cluster\n")
+cat("=" %>% rep(80) %>% paste(collapse = ""), "\n\n")
+print(comprehensive_table, showAllLevels = TRUE, smd = TRUE, printToggle = TRUE)
+
+cat("\n\n")
+
+# Create a more detailed comparison with means, SDs, and effect sizes
+cat("=== DETAILED COMPARISON WITH EFFECT SIZES ===\n\n")
+
+# Function to calculate detailed statistics
+calc_detailed_stats <- function(data, var, cluster_var = "Cluster") {
+  
+  # Check if variable exists and is numeric
+  if (!var %in% names(data)) {
+    return(NULL)
+  }
+  
+  if (is.numeric(data[[var]])) {
     
-    if (var == "sex") {
-      test_result <- chisq.test(table(test_data$cluster, test_data[[var]]))
-      compare_results[[var]] <- list(
-        variable = var,
-        test = "Chi-square",
-        statistic = test_result$statistic,
-        p_value = test_result$p.value
-      )
-    } else {
-      # For ordered categorical
-      test_result <- kruskal.test(as.numeric(test_data[[var]]) ~ test_data$cluster)
-      compare_results[[var]] <- list(
-        variable = var,
-        test = "Kruskal-Wallis",
-        statistic = test_result$statistic,
-        p_value = test_result$p.value
-      )
-    }
-  } else if (grepl("side_effects|safety|adls|dependence", var)) {
-    # For ordinal clinical variables, use Kruskal-Wallis
-    test_data <- complete(final_imp_clustered_mids, 1)
-    test_result <- kruskal.test(as.numeric(test_data[[var]]) ~ test_data$cluster)
-    compare_results[[var]] <- list(
-      variable = var,
-      test = "Kruskal-Wallis",
-      statistic = test_result$statistic,
-      p_value = test_result$p.value
+    cluster1_data <- data[[var]][data[[cluster_var]] == 1]
+    cluster2_data <- data[[var]][data[[cluster_var]] == 2]
+    
+    # Remove NAs
+    cluster1_data <- cluster1_data[!is.na(cluster1_data)]
+    cluster2_data <- cluster2_data[!is.na(cluster2_data)]
+    
+    # Calculate statistics
+    stats <- data.frame(
+      Variable = var,
+      Cluster1_N = length(cluster1_data),
+      Cluster1_Mean = mean(cluster1_data),
+      Cluster1_SD = sd(cluster1_data),
+      Cluster2_N = length(cluster2_data),
+      Cluster2_Mean = mean(cluster2_data),
+      Cluster2_SD = sd(cluster2_data),
+      Difference = mean(cluster2_data) - mean(cluster1_data)
     )
-  } else {
-    # ANOVA for continuous variables using pooled analysis
-    # Manually pool across imputations
-    p_values <- numeric(n_imp)
     
-    for (i in 1:n_imp) {
-      imp_data <- complete(final_imp_clustered_mids, i)
-      fit <- lm(as.formula(paste(var, "~ as.factor(cluster)")), data = imp_data)
-      p_values[i] <- anova(fit)$"Pr(>F)"[1]
+    # T-test
+    if (length(cluster1_data) > 1 && length(cluster2_data) > 1) {
+      t_result <- t.test(cluster2_data, cluster1_data)
+      stats$t_statistic <- t_result$statistic
+      stats$p_value <- t_result$p.value
+      
+      # Cohen's d
+      pooled_sd <- sqrt(((stats$Cluster1_N - 1) * stats$Cluster1_SD^2 + 
+                         (stats$Cluster2_N - 1) * stats$Cluster2_SD^2) / 
+                        (stats$Cluster1_N + stats$Cluster2_N - 2))
+      stats$Cohens_d <- stats$Difference / pooled_sd
+    } else {
+      stats$t_statistic <- NA
+      stats$p_value <- NA
+      stats$Cohens_d <- NA
     }
     
-    # Use median p-value as pooled estimate (conservative approach)
-    compare_results[[var]] <- list(
-      variable = var,
-      test = "ANOVA (pooled)",
-      p_value = median(p_values)
+    return(stats)
+  } else {
+    return(NULL)
+  }
+}
+
+# Calculate for all numeric variables
+detailed_comparison <- lapply(all_comparison_vars, function(v) {
+  calc_detailed_stats(pooled_data, v)
+}) %>%
+  bind_rows()
+
+# Check if we have results
+if (nrow(detailed_comparison) > 0) {
+  detailed_comparison <- detailed_comparison %>%
+    mutate(
+      Significance = case_when(
+        is.na(p_value) ~ "",
+        p_value < 0.001 ~ "***",
+        p_value < 0.01 ~ "**",
+        p_value < 0.05 ~ "*",
+        TRUE ~ "ns"
+      ),
+      Effect_Size_Interpretation = case_when(
+        is.na(Cohens_d) ~ "",
+        abs(Cohens_d) >= 0.8 ~ "Large",
+        abs(Cohens_d) >= 0.5 ~ "Medium",
+        abs(Cohens_d) >= 0.2 ~ "Small",
+        TRUE ~ "Negligible"
+      )
+    ) %>%
+    arrange(desc(abs(Cohens_d)))
+  
+  # Format and print
+  cat("\nNUMERIC VARIABLES COMPARISON (sorted by effect size):\n")
+  cat("=" %>% rep(120) %>% paste(collapse = ""), "\n\n")
+  
+  print(
+    detailed_comparison %>%
+      mutate(
+        Cluster1_Mean = round(Cluster1_Mean, 2),
+        Cluster1_SD = round(Cluster1_SD, 2),
+        Cluster2_Mean = round(Cluster2_Mean, 2),
+        Cluster2_SD = round(Cluster2_SD, 2),
+        Difference = round(Difference, 2),
+        t_statistic = round(t_statistic, 2),
+        p_value = ifelse(is.na(p_value), "", format.pval(p_value, digits = 3)),
+        Cohens_d = round(Cohens_d, 3)
+      ) %>%
+      dplyr::select(Variable, 
+             Cluster1_Mean, Cluster1_SD, 
+             Cluster2_Mean, Cluster2_SD,
+             Difference, Cohens_d, Effect_Size_Interpretation,
+             t_statistic, p_value, Significance),
+    row.names = FALSE
+  )
+} else {
+  cat("\nNo numeric variables found for comparison.\n")
+}
+
+cat("\n\n")
+
+# Print categorical variables summary
+cat("=== CATEGORICAL VARIABLES SUMMARY ===\n\n")
+
+categorical_vars <- all_comparison_vars[!sapply(pooled_data[all_comparison_vars], is.numeric)]
+
+if (length(categorical_vars) > 0) {
+  for (var in categorical_vars) {
+    cat("\n", var, ":\n", sep = "")
+    cat("-" %>% rep(60) %>% paste(collapse = ""), "\n")
+    
+    cross_tab <- table(pooled_data$Cluster, pooled_data[[var]])
+    prop_tab <- prop.table(cross_tab, 1)
+    
+    cat("Counts:\n")
+    print(cross_tab)
+    cat("\nProportions (by cluster):\n")
+    print(round(prop_tab, 3))
+    
+    # Chi-square test if more than 1 level
+    if (ncol(cross_tab) > 1) {
+      chi_result <- chisq.test(cross_tab)
+      cat("\nChi-square: X² =", round(chi_result$statistic, 3), 
+          ", p =", format.pval(chi_result$p.value, digits = 3), "\n")
+    }
+  }
+}
+
+# ============================================================================
+# STEP 2: LOGISTIC REGRESSION - CLUSTER PREDICTING CESSATION
+# ============================================================================
+
+cat("\n\n=== LOGISTIC REGRESSION ANALYSIS ===\n\n")
+
+# Crude model (unadjusted)
+cat("--- CRUDE MODEL (Unadjusted) ---\n")
+model_crude <- glm(scrn_stopped_bzra ~ Cluster, 
+                   data = pooled_data, 
+                   family = binomial)
+summary(model_crude)
+
+cat("\nOdds Ratios with 95% CI (Crude Model):\n")
+crude_or <- exp(cbind(OR = coef(model_crude), confint(model_crude)))
+print(round(crude_or, 3))
+cat("\n")
+
+# Adjusted model (with demographics)
+cat("--- ADJUSTED MODEL (with covariates) ---\n")
+model_adjusted <- glm(scrn_stopped_bzra ~ Cluster + age + sex + 
+                      phq2_score + osss_3_score, 
+                      data = pooled_data, 
+                      family = binomial)
+summary(model_adjusted)
+
+cat("\nOdds Ratios with 95% CI (Adjusted Model):\n")
+adjusted_or <- exp(cbind(OR = coef(model_adjusted), confint(model_adjusted)))
+print(round(adjusted_or, 3))
+cat("\n")
+
+# Create comparison table
+regression_results <- data.frame(
+  Model = c("Crude", "Adjusted"),
+  OR = c(crude_or["Cluster2", "OR"], adjusted_or["Cluster2", "OR"]),
+  CI_Lower = c(crude_or["Cluster2", "2.5 %"], adjusted_or["Cluster2", "2.5 %"]),
+  CI_Upper = c(crude_or["Cluster2", "97.5 %"], adjusted_or["Cluster2", "97.5 %"]),
+  P_Value = c(
+    summary(model_crude)$coefficients["Cluster2", "Pr(>|z|)"],
+    summary(model_adjusted)$coefficients["Cluster2", "Pr(>|z|)"]
+  )
+)
+
+cat("\nREGRESSION SUMMARY TABLE:\n")
+print(regression_results, row.names = FALSE)
+cat("\n")
+
+# ============================================================================
+# STEP 3: POST-HOC TESTS FOR TOP DISCRIMINATING VARIABLES
+# ============================================================================
+
+cat("=== POST-HOC TESTS (Tukey HSD) ===\n\n")
+
+# Top variables with large effect sizes
+top_vars <- c("CISS_Emotional_Style", "Neuroticism", "DBAS_Worry_Helplessness", 
+              "DBAS_Consequences", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+              "SURPS_Impulsivity")
+
+posthoc_results_list <- list()
+
+for (var in top_vars) {
+  if (var %in% names(pooled_data)) {
+    cat("\n=== POST-HOC TEST:", var, "===\n")
+    formula_str <- paste(var, "~ Cluster")
+    aov_model <- aov(as.formula(formula_str), data = pooled_data)
+    tukey_result <- TukeyHSD(aov_model)
+    print(tukey_result)
+    
+    # Store results
+    posthoc_results_list[[var]] <- data.frame(
+      Variable = var,
+      Comparison = rownames(tukey_result$Cluster),
+      Difference = tukey_result$Cluster[, "diff"],
+      CI_Lower = tukey_result$Cluster[, "lwr"],
+      CI_Upper = tukey_result$Cluster[, "upr"],
+      P_Adjusted = tukey_result$Cluster[, "p adj"]
     )
   }
 }
 
-# Create summary table
-comparison_df <- do.call(rbind, lapply(compare_results, function(x) {
-  data.frame(
-    Variable = x$variable,
-    Test = x$test,
-    P_value = round(x$p_value, 4),
-    Significant = ifelse(x$p_value < 0.05, "Yes", "No")
-  )
-}))
-
-cat("\n=== VARIABLE COMPARISON RESULTS ===\n")
-print(comparison_df)
-
-cat("\n=== SIGNIFICANT DIFFERENCES (p < 0.05) ===\n")
-sig_vars <- comparison_df %>% filter(Significant == "Yes")
-print(sig_vars)
-cat("\nNumber of significant variables:", nrow(sig_vars), "out of", nrow(comparison_df), "\n")
-
-# ===== COMPARE CLUSTERS ON OUTCOME =====
-cat("\n=== COMPARING CLUSTERS ON OUTCOME (scrn_stopped_bzra) ===\n")
-
-# Chi-square test for outcome
-outcome_data <- complete(final_imp_clustered_mids, 1)
-
-if ("scrn_stopped_bzra" %in% names(outcome_data)) {
-  outcome_table <- table(outcome_data$cluster, outcome_data$scrn_stopped_bzra)
-  outcome_test <- chisq.test(outcome_table)
-  
-  cat("\nOutcome by Cluster:\n")
-  print(outcome_table)
-  cat("\nProportions (row percentages):\n")
-  print(round(prop.table(outcome_table, 1) * 100, 1))
-  
-  cat("\nChi-square test: X² =", round(outcome_test$statistic, 2),
-      ", p =", round(outcome_test$p.value, 4), "\n")
-  
-  # Visualize
-  outcome_props <- as.data.frame(prop.table(outcome_table, 1))
-  names(outcome_props) <- c("Cluster", "Outcome", "Proportion")
-  
-  outcome_plot <- ggplot(outcome_props, aes(x = Cluster, y = Proportion * 100, fill = Outcome)) +
-    geom_bar(stat = "identity", position = "dodge") +
-    labs(title = "BZRA Cessation by Cluster",
-         x = "Cluster",
-         y = "Percentage (%)",
-         fill = "Stopped BZRA") +
-    theme_minimal() +
-    theme(text = element_text(size = 12))
-  
-  print(outcome_plot)
+# Combine and export
+if (length(posthoc_results_list) > 0) {
+  posthoc_results <- do.call(rbind, posthoc_results_list)
+  cat("\n=== SUMMARY OF POST-HOC RESULTS ===\n")
+  print(posthoc_results, row.names = FALSE)
+  cat("\n")
 }
 
-# ===== CLUSTER DESCRIPTIONS =====
-cat("\n=== CLUSTER DESCRIPTIONS ===\n")
+# ============================================================================
+# STEP 4: CLUSTER STABILITY ANALYSIS
+# ============================================================================
 
-# Get means/frequencies by cluster for key variables
-cluster_data_complete <- complete(final_imp_clustered_mids, 1)
+cat("=== CLUSTER STABILITY ANALYSIS ===\n\n")
 
-# Demographic summary
-demo_summary <- cluster_data_complete %>%
-  group_by(cluster) %>%
+# Distribution of stability scores
+cat("Cluster Stability Summary:\n")
+print(summary(pooled_data$Cluster_Stability))
+cat("\n")
+
+# Create stability histogram
+stability_hist <- ggplot(pooled_data, aes(x = Cluster_Stability)) +
+  geom_histogram(bins = 20, fill = "lightblue", color = "black", alpha = 0.7) +
+  geom_vline(xintercept = 0.7, linetype = "dashed", color = "red", linewidth = 1) +
+  labs(title = "Distribution of Cluster Stability Scores",
+       subtitle = "Red line indicates 70% threshold",
+       x = "Stability Score (Proportion of Consistent Assignments)",
+       y = "Count") +
+  theme_minimal()
+print(stability_hist)
+ggsave("cluster_stability_histogram.png", width = 10, height = 6, dpi = 300)
+
+# Categorize by stability
+pooled_data$Stability_Category <- cut(pooled_data$Cluster_Stability,
+                                       breaks = c(0, 0.5, 0.7, 0.85, 1.0),
+                                       labels = c("Low (<50%)", "Moderate (50-70%)", 
+                                                  "High (70-85%)", "Very High (>85%)"))
+
+cat("Stability Categories:\n")
+print(table(pooled_data$Stability_Category))
+cat("\n")
+
+# Cessation rates by stability category
+cat("Cessation rates by stability category:\n")
+stability_cessation <- table(pooled_data$Stability_Category, pooled_data$scrn_stopped_bzra)
+print(stability_cessation)
+cat("\nProportions:\n")
+print(round(prop.table(stability_cessation, 1), 3))
+cat("\n")
+
+# Compare high vs low stability
+pooled_data$High_Stability <- ifelse(pooled_data$Cluster_Stability >= 0.7, "High (≥70%)", "Low (<70%)")
+cat("High vs Low Stability:\n")
+stab_table <- table(pooled_data$High_Stability, pooled_data$scrn_stopped_bzra)
+print(stab_table)
+cat("\nProportions:\n")
+print(round(prop.table(stab_table, 1), 3))
+cat("\n")
+
+# Test if stability moderates cessation
+chi_stability <- chisq.test(stab_table)
+cat("Chi-square test (Stability × Cessation):\n")
+cat("X-squared =", round(chi_stability$statistic, 3), "\n")
+cat("p-value =", format.pval(chi_stability$p.value, digits = 3), "\n\n")
+
+# ============================================================================
+# STEP 5: PUBLICATION-READY FIGURES
+# ============================================================================
+
+cat("=== CREATING PUBLICATION-READY FIGURES ===\n\n")
+
+# Figure 1: Cluster profiles heatmap
+cat("Creating cluster profiles heatmap...\n")
+
+cluster_means_long <- cluster_profiles %>%
+  dplyr::select(-N) %>%
+  pivot_longer(-Cluster, names_to = "Variable", values_to = "Mean")
+
+# Standardize means for better visualization
+cluster_means_long <- cluster_means_long %>%
+  group_by(Variable) %>%
+  mutate(Mean_Std = scale(Mean)[,1]) %>%
+  ungroup()
+
+heatmap_plot <- ggplot(cluster_means_long, aes(x = Variable, y = as.factor(Cluster), fill = Mean_Std)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B", 
+                       midpoint = 0, name = "Standardized\nMean") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        axis.text.y = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold")) +
+  labs(title = "Personality Profiles by Cluster",
+       x = "", y = "Cluster")
+
+print(heatmap_plot)
+ggsave("cluster_heatmap.png", width = 14, height = 5, dpi = 300)
+cat("✓ Saved: cluster_heatmap.png\n")
+
+# Figure 2: Forest plot of effect sizes
+cat("Creating effect size forest plot...\n")
+
+forest_data <- anova_results %>%
+  filter(Effect_size_eta2 >= 0.01) %>%  # Only small or larger effects
+  mutate(Variable = factor(Variable, levels = Variable[order(Effect_size_eta2)]))
+
+forest_plot <- ggplot(forest_data, aes(x = Effect_size_eta2, y = Variable)) +
+  geom_segment(aes(x = 0, xend = Effect_size_eta2, y = Variable, yend = Variable), 
+               color = "gray70") +
+  geom_point(aes(color = Effect_Size_Interpretation), size = 4) +
+  geom_vline(xintercept = c(0.01, 0.06, 0.14), linetype = "dashed", alpha = 0.5) +
+  scale_color_manual(values = c("Small" = "#FDB462", "Medium" = "#FB8072", "Large" = "#E31A1C"),
+                     name = "Effect Size") +
+  labs(title = "Effect Sizes (η²) for Cluster Differences",
+       subtitle = "Dashed lines indicate small (0.01), medium (0.06), and large (0.14) effects",
+       x = "Eta-squared (η²)", y = "") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.text.y = element_text(size = 10))
+
+print(forest_plot)
+ggsave("effect_sizes_forest_plot.png", width = 10, height = 8, dpi = 300)
+cat("✓ Saved: effect_sizes_forest_plot.png\n")
+
+# Figure 3: Cessation by cluster with confidence intervals
+cat("Creating cessation comparison plot...\n")
+
+cessation_summary <- pooled_data %>%
+  group_by(Cluster) %>%
   summarise(
     n = n(),
-    mean_age = round(mean(age, na.rm = TRUE), 1),
-    pct_female = round(mean(sex == "Female", na.rm = TRUE) * 100, 1),
-    mean_med_quant = round(mean(med_quant, na.rm = TRUE), 1),
+    successes = sum(scrn_stopped_bzra),
+    prop = mean(scrn_stopped_bzra),
     .groups = "drop"
+  ) %>%
+  rowwise() %>%
+  mutate(
+    ci_lower = binom.test(successes, n)$conf.int[1],
+    ci_upper = binom.test(successes, n)$conf.int[2]
   )
 
-cat("\nDemographic Summary by Cluster:\n")
-print(demo_summary)
+cessation_comparison_plot <- ggplot(cessation_summary, aes(x = Cluster, y = prop, fill = Cluster)) +
+  geom_bar(stat = "identity", alpha = 0.7, width = 0.6) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2, linewidth = 1) +
+  geom_text(aes(label = paste0(round(prop * 100, 1), "%\n(n=", successes, "/", n, ")")),
+            vjust = -0.5, size = 5) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 0.4)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(title = "Benzodiazepine Cessation Rates by Cluster",
+       subtitle = "Error bars represent 95% confidence intervals",
+       x = "Cluster", y = "Cessation Rate") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 12))
 
-# ===== SUMMARY REPORT =====
-cat("\n========================================\n")
-cat("     FOCUSED CLUSTERING COMPLETE\n")
-cat("========================================\n")
-cat("Variables used:", length(clustering_vars), "\n")
-cat("  - Demographics: 6\n")
-cat("  - Personality: 9\n")
-cat("  - Sleep beliefs: 4\n")
-cat("  - Coping: 3\n")
-cat("  - Medication concerns: 13\n")
-cat("\nOptimal k:", optimal_k, "\n")
-cat("Mean silhouette width:", round(results_list[[paste0("k", optimal_k)]]$mean_sil, 3), "\n")
-cat("Interpretation:", sil_interpretation, "\n")
-cat("\nCluster stability:", round(mean(agreement), 1), "%\n")
-cat("Cases with ≥80% stability:", round(sum(agreement >= 80)/length(agreement) * 100, 1), "%\n")
-cat("\nSignificant variables:", sum(comparison_df$Significant == "Yes"), 
-    "out of", nrow(comparison_df), "\n")
+print(cessation_comparison_plot)
+ggsave("cessation_by_cluster_with_ci.png", width = 8, height = 6, dpi = 300)
+cat("✓ Saved: cessation_by_cluster_with_ci.png\n")
 
-if ("scrn_stopped_bzra" %in% names(outcome_data)) {
-  cat("\nOutcome analysis:\n")
-  cat("  Chi-square p-value:", round(outcome_test$p.value, 4), "\n")
-  if (outcome_test$p.value < 0.05) {
-    cat("  *** Clusters differ significantly on BZRA cessation! ***\n")
-  } else {
-    cat("  Clusters do not differ significantly on BZRA cessation.\n")
-  }
+# Figure 4: Combined personality domain plots
+cat("Creating combined domain profiles...\n")
+
+# Create plots for each domain
+create_domain_plot <- function(data, vars, domain_name, palette) {
+  long_data <- data %>%
+    dplyr::select(Cluster, all_of(vars)) %>%
+    pivot_longer(cols = all_of(vars), names_to = "Variable", values_to = "Value")
+  
+  ggplot(long_data, aes(x = Variable, y = Value, fill = Cluster)) +
+    geom_boxplot(alpha = 0.7) +
+    scale_fill_brewer(palette = palette) +
+    labs(title = domain_name, x = "", y = "Score") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+          plot.title = element_text(size = 11, face = "bold"),
+          legend.position = "bottom")
 }
 
-cat("========================================\n")
+bfi_plot <- create_domain_plot(pooled_data, 
+                                c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness"),
+                                "Big Five Personality", "Set2")
 
-cat("\nNext steps:\n")
-cat("1. Review silhouette width - did it improve from your initial 0.107?\n")
-cat("2. Check which variables differ significantly between clusters\n")
-cat("3. Examine outcome differences between clusters\n")
-cat("4. If results look good, re-run with file saving enabled\n")
-cat("\nObjects created:\n")
-cat("  - results_list: all clustering results\n")
-cat("  - sil_summary: silhouette summary table\n")
-cat("  - comparison_df: variable comparison results\n")
-cat("  - final_imp_clustered_mids: imputed data with cluster assignments\n")
+surps_plot <- create_domain_plot(pooled_data,
+                                  c("SURPS_Impulsivity", "SURPS_Sensation_Seeking", 
+                                    "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity"),
+                                  "Substance Use Risk", "Set1")
+
+dbas_plot <- create_domain_plot(pooled_data,
+                                 c("DBAS_Expectations", "DBAS_Medications", 
+                                   "DBAS_Worry_Helplessness", "DBAS_Consequences"),
+                                 "Sleep Beliefs", "Pastel1")
+
+ciss_plot <- create_domain_plot(pooled_data,
+                                 c("CISS_Avoidance_Style", "CISS_Task_Style", "CISS_Emotional_Style"),
+                                 "Coping Styles", "Dark2")
+
+# Combine all domain plots
+combined_domains <- (bfi_plot | surps_plot) / (dbas_plot | ciss_plot) +
+  plot_annotation(title = "Personality Domain Profiles by Cluster",
+                  theme = theme(plot.title = element_text(size = 16, face = "bold")))
+
+print(combined_domains)
+ggsave("combined_domain_profiles.png", width = 16, height = 10, dpi = 300)
+cat("✓ Saved: combined_domain_profiles.png\n\n")
+
+# ============================================================================
+# STEP 6: SENSITIVITY AND INTERACTION ANALYSES
+# ============================================================================
+
+cat("=== SENSITIVITY AND INTERACTION ANALYSES ===\n\n")
+
+# Add descriptive cluster labels
+cat("Adding descriptive cluster labels...\n")
+pooled_data <- pooled_data %>%
+  mutate(Cluster_Label = factor(Cluster,
+                                levels = c(1, 2),
+                                labels = c("Vulnerable/Distressed", "Resilient/Adaptive")))
+
+cat("Cluster labels assigned:\n")
+cat("  Cluster 1 = Vulnerable/Distressed\n")
+cat("  Cluster 2 = Resilient/Adaptive\n\n")
+
+cat("Distribution:\n")
+print(table(pooled_data$Cluster_Label))
+cat("\n")
+
+# ============================================================================
+# PART A: SENSITIVITY ANALYSES - SUBGROUP ANALYSES
+# ============================================================================
+
+cat("=== SENSITIVITY ANALYSES: SUBGROUP ANALYSES ===\n\n")
+
+# Function to run logistic regression in subgroups
+run_subgroup_analysis <- function(data, subgroup_var, subgroup_label) {
+  
+  cat("\n", rep("=", 70), "\n", sep = "")
+  cat("SUBGROUP ANALYSIS:", subgroup_label, "\n")
+  cat(rep("=", 70), "\n\n", sep = "")
+  
+  # Get unique levels of subgroup variable
+  levels <- unique(data[[subgroup_var]])
+  levels <- levels[!is.na(levels)]
+  
+  results_list <- list()
+  
+  for (level in levels) {
+    cat("\n--- Subgroup:", subgroup_var, "=", level, "---\n")
+    
+    # Subset data
+    subset_data <- data %>% filter(!!sym(subgroup_var) == level)
+    
+    cat("N =", nrow(subset_data), "\n")
+    cat("Cluster 1:", sum(subset_data$Cluster == 1), 
+        "| Cluster 2:", sum(subset_data$Cluster == 2), "\n")
+    
+    # Check if we have enough data
+    if (nrow(subset_data) < 30) {
+      cat("WARNING: Small sample size, results may be unstable\n\n")
+    }
+    
+    # Run logistic regression
+    tryCatch({
+      model <- glm(scrn_stopped_bzra ~ Cluster, 
+                   data = subset_data, 
+                   family = binomial)
+      
+      # Get OR and CI
+      or_ci <- exp(cbind(OR = coef(model), confint(model)))
+      
+      cat("\nOdds Ratio (95% CI):\n")
+      print(round(or_ci["Cluster2", ], 3))
+      
+      # Get p-value
+      p_val <- summary(model)$coefficients["Cluster2", "Pr(>|z|)"]
+      cat("p-value:", format.pval(p_val, digits = 3), "\n")
+      
+      # Cessation rates by cluster
+      cess_rates <- subset_data %>%
+        group_by(Cluster) %>%
+        summarise(
+          n = n(),
+          n_stopped = sum(scrn_stopped_bzra),
+          pct_stopped = mean(scrn_stopped_bzra) * 100,
+          .groups = "drop"
+        )
+      
+      cat("\nCessation Rates:\n")
+      print(cess_rates)
+      
+      # Store results
+      results_list[[as.character(level)]] <- data.frame(
+        Subgroup_Variable = subgroup_var,
+        Subgroup_Level = level,
+        N = nrow(subset_data),
+        OR = or_ci["Cluster2", "OR"],
+        CI_Lower = or_ci["Cluster2", "2.5 %"],
+        CI_Upper = or_ci["Cluster2", "97.5 %"],
+        P_Value = p_val,
+        Cluster1_Cessation = cess_rates$pct_stopped[cess_rates$Cluster == 1],
+        Cluster2_Cessation = cess_rates$pct_stopped[cess_rates$Cluster == 2]
+      )
+      
+    }, error = function(e) {
+      cat("ERROR: Could not fit model -", e$message, "\n")
+    })
+    
+    cat("\n")
+  }
+  
+  return(bind_rows(results_list))
+}
+
+# ------------------------------------------------------------------------
+# 1. By Sex/Gender
+# ------------------------------------------------------------------------
+sensitivity_sex <- run_subgroup_analysis(pooled_data, "sex", "SEX")
+
+# ------------------------------------------------------------------------
+# 2. By Age Group
+# ------------------------------------------------------------------------
+cat("\n\nCreating age groups...\n")
+pooled_data$age_group <- cut(pooled_data$age,
+                               breaks = c(-Inf, 70, 75, Inf),
+                               labels = c("Under 70", "70-75", "Over 75"))
+
+cat("Age group distribution:\n")
+print(table(pooled_data$age_group))
+
+sensitivity_age <- run_subgroup_analysis(pooled_data, "age_group", "AGE GROUP")
+
+# ------------------------------------------------------------------------
+# 3. By Depression Level (PHQ-2)
+# ------------------------------------------------------------------------
+cat("\n\nCreating depression groups...\n")
+pooled_data$depression_level <- cut(pooled_data$phq2_score,
+                                      breaks = c(-Inf, 2, Inf),
+                                      labels = c("Low (0-2)", "High (3+)"))
+
+cat("Depression level distribution:\n")
+print(table(pooled_data$depression_level))
+
+sensitivity_depression <- run_subgroup_analysis(pooled_data, "depression_level", 
+                                                 "DEPRESSION LEVEL (PHQ-2)")
+
+# ------------------------------------------------------------------------
+# 4. By Social Support Level (OSSS-3)
+# ------------------------------------------------------------------------
+cat("\n\nCreating social support groups...\n")
+pooled_data$social_support_level <- cut(pooled_data$osss_3_score,
+                                          breaks = c(-Inf, 9, Inf),
+                                          labels = c("Low (3-9)", "High (10+)"))
+
+cat("Social support level distribution:\n")
+print(table(pooled_data$social_support_level))
+
+sensitivity_support <- run_subgroup_analysis(pooled_data, "social_support_level", 
+                                              "SOCIAL SUPPORT LEVEL (OSSS-3)")
+
+# ------------------------------------------------------------------------
+# 5. By Medication Quantity
+# ------------------------------------------------------------------------
+cat("\n\nCreating medication quantity groups...\n")
+pooled_data$med_quantity_group <- cut(pooled_data$med_quant,
+                                        breaks = c(-Inf, median(pooled_data$med_quant, na.rm = TRUE), Inf),
+                                        labels = c("Low", "High"))
+
+cat("Medication quantity distribution:\n")
+print(table(pooled_data$med_quantity_group))
+
+sensitivity_medquant <- run_subgroup_analysis(pooled_data, "med_quantity_group", 
+                                               "MEDICATION QUANTITY")
+
+# ------------------------------------------------------------------------
+# Combine all sensitivity analyses
+# ------------------------------------------------------------------------
+cat("\n\n", rep("=", 80), "\n", sep = "")
+cat("SUMMARY OF ALL SENSITIVITY ANALYSES\n")
+cat(rep("=", 80), "\n\n", sep = "")
+
+all_sensitivity_results <- bind_rows(
+  sensitivity_sex,
+  sensitivity_age,
+  sensitivity_depression,
+  sensitivity_support,
+  sensitivity_medquant
+)
+
+print(all_sensitivity_results %>%
+        mutate(
+          OR = round(OR, 3),
+          CI_Lower = round(CI_Lower, 3),
+          CI_Upper = round(CI_Upper, 3),
+          P_Value = format.pval(P_Value, digits = 3),
+          Cluster1_Cessation = round(Cluster1_Cessation, 1),
+          Cluster2_Cessation = round(Cluster2_Cessation, 1)
+        ), row.names = FALSE)
+
+# Results available in: all_sensitivity_results
+
+# ============================================================================
+# PART B: INTERACTION ANALYSES
+# ============================================================================
+
+cat("\n\n", rep("=", 80), "\n", sep = "")
+cat("=== INTERACTION ANALYSES ===\n")
+cat(rep("=", 80), "\n\n", sep = "")
+
+# Function to test interactions
+test_interaction <- function(data, var_name, var_label) {
+  
+  cat("\n", rep("-", 70), "\n", sep = "")
+  cat("INTERACTION:", var_label, "\n")
+  cat(rep("-", 70), "\n\n", sep = "")
+  
+  # Create formula with interaction
+  formula_str <- paste0("scrn_stopped_bzra ~ Cluster * ", var_name, 
+                       " + age + sex + phq2_score + osss_3_score")
+  
+  cat("Testing: Cluster ×", var_label, "\n\n")
+  
+  # Fit model with interaction
+  model_interaction <- glm(as.formula(formula_str), 
+                           data = data, 
+                           family = binomial)
+  
+  # Fit model without interaction (for comparison)
+  formula_main <- paste0("scrn_stopped_bzra ~ Cluster + ", var_name, 
+                        " + age + sex + phq2_score + osss_3_score")
+  model_main <- glm(as.formula(formula_main), 
+                    data = data, 
+                    family = binomial)
+  
+  # Likelihood ratio test
+  lr_test <- anova(model_main, model_interaction, test = "Chisq")
+  
+  cat("Model Summary (with interaction):\n")
+  print(summary(model_interaction)$coefficients)
+  
+  cat("\n\nLikelihood Ratio Test (interaction term):\n")
+  print(lr_test)
+  
+  interaction_p <- lr_test$`Pr(>Chi)`[2]
+  
+  cat("\n")
+  if (!is.na(interaction_p) && interaction_p < 0.05) {
+    cat("*** SIGNIFICANT INTERACTION DETECTED (p =", 
+        format.pval(interaction_p, digits = 3), ") ***\n")
+    
+    # Calculate stratified effects if interaction is significant
+    cat("\nStratified Effects:\n")
+    cat("(Effect of Cluster at different levels of", var_label, ")\n\n")
+    
+  } else {
+    cat("No significant interaction (p =", 
+        format.pval(interaction_p, digits = 3), ")\n")
+  }
+  
+  # Return results
+  return(data.frame(
+    Variable = var_label,
+    Interaction_P = interaction_p,
+    Significant = ifelse(!is.na(interaction_p) && interaction_p < 0.05, "Yes", "No"),
+    AIC_Main = AIC(model_main),
+    AIC_Interaction = AIC(model_interaction)
+  ))
+}
+
+# ------------------------------------------------------------------------
+# Test key interactions
+# ------------------------------------------------------------------------
+
+interaction_results <- list()
+
+# 1. Cluster × Age
+interaction_results[["age"]] <- test_interaction(pooled_data, "age", "Age")
+
+# 2. Cluster × Sex
+interaction_results[["sex"]] <- test_interaction(pooled_data, "sex", "Sex")
+
+# 3. Cluster × Depression (PHQ-2)
+interaction_results[["phq2"]] <- test_interaction(pooled_data, "phq2_score", "Depression (PHQ-2)")
+
+# 4. Cluster × Social Support (OSSS-3)
+interaction_results[["osss"]] <- test_interaction(pooled_data, "osss_3_score", "Social Support (OSSS-3)")
+
+# 5. Cluster × Medication Quantity
+interaction_results[["medquant"]] <- test_interaction(pooled_data, "med_quant", "Medication Quantity")
+
+# 6. Cluster × Neuroticism
+interaction_results[["neuroticism"]] <- test_interaction(pooled_data, "Neuroticism", "Neuroticism")
+
+# 7. Cluster × Stability
+interaction_results[["stability"]] <- test_interaction(pooled_data, "Cluster_Stability", "Cluster Stability")
+
+# ------------------------------------------------------------------------
+# Summary of all interactions
+# ------------------------------------------------------------------------
+
+cat("\n\n", rep("=", 80), "\n", sep = "")
+cat("SUMMARY OF INTERACTION ANALYSES\n")
+cat(rep("=", 80), "\n\n", sep = "")
+
+interaction_summary <- bind_rows(interaction_results)
+
+print(interaction_summary %>%
+        mutate(
+          Interaction_P = format.pval(Interaction_P, digits = 3),
+          AIC_Main = round(AIC_Main, 1),
+          AIC_Interaction = round(AIC_Interaction, 1),
+          AIC_Diff = round(AIC_Main - AIC_Interaction, 1)
+        ) %>%
+        arrange(Interaction_P), row.names = FALSE)
+
+# Results available in: interaction_summary
+
+# ============================================================================
+# PART C: VISUALIZATION OF KEY FINDINGS
+# ============================================================================
+
+cat("\n\n=== CREATING SENSITIVITY/INTERACTION VISUALIZATIONS ===\n\n")
+
+# Forest plot of sensitivity analyses
+cat("Creating sensitivity analysis forest plot...\n")
+
+sensitivity_plot_data <- all_sensitivity_results %>%
+  mutate(
+    Subgroup = paste0(Subgroup_Variable, ": ", Subgroup_Level),
+    Subgroup = factor(Subgroup, levels = rev(Subgroup))
+  )
+
+forest_sensitivity <- ggplot(sensitivity_plot_data, 
+                              aes(x = OR, y = Subgroup)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  geom_errorbarh(aes(xmin = CI_Lower, xmax = CI_Upper), height = 0.2) +
+  geom_point(size = 3, color = "steelblue") +
+  geom_text(aes(label = sprintf("%.2f", OR)), 
+            hjust = -0.5, size = 3) +
+  labs(
+    title = "Sensitivity Analysis: Cluster Effect on Cessation Across Subgroups",
+    subtitle = "Odds Ratios with 95% Confidence Intervals",
+    x = "Odds Ratio (Cluster 2 vs Cluster 1)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.text.y = element_text(size = 10)
+  )
+
+print(forest_sensitivity)
+cat("Forest plot created (stored in: forest_sensitivity)\n")
+
+# Plot cessation rates by subgroups
+cat("Creating subgroup comparison plot...\n")
+
+subgroup_comparison <- all_sensitivity_results %>%
+  mutate(Subgroup = paste0(Subgroup_Variable, ": ", Subgroup_Level)) %>%
+  dplyr::select(Subgroup, Cluster1_Cessation, Cluster2_Cessation) %>%
+  pivot_longer(cols = c(Cluster1_Cessation, Cluster2_Cessation),
+               names_to = "Cluster",
+               values_to = "Cessation_Rate") %>%
+  mutate(Cluster = ifelse(Cluster == "Cluster1_Cessation", "Cluster 1", "Cluster 2"))
+
+subgroup_plot <- ggplot(subgroup_comparison, 
+                        aes(x = Subgroup, y = Cessation_Rate, fill = Cluster)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_brewer(palette = "Set2") +
+  coord_flip() +
+  labs(
+    title = "Cessation Rates by Cluster Across Subgroups",
+    x = "",
+    y = "Cessation Rate (%)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.position = "bottom"
+  )
+
+print(subgroup_plot)
+cat("Subgroup plot created (stored in: subgroup_plot)\n")
+
+cat("\n\n=== SENSITIVITY AND INTERACTION ANALYSES COMPLETE ===\n")
+cat("All results are available in the following objects:\n")
+cat("  - all_sensitivity_results\n")
+cat("  - interaction_summary\n")
+cat("  - forest_sensitivity (plot)\n")
+cat("  - subgroup_plot (plot)\n\n")
+
+cat("\n=== ALL FOLLOW-UP ANALYSES COMPLETE ===\n")
+cat("All results and figures have been generated.\n")
 ```
+
+
+## BZRA Cessation by Cluster
+
+```{r}
+#| label: BZRA Cessation Integration and Analysis
+
+cat("\n\n=== ADDING AND ANALYZING BZRA CESSATION BY CLUSTER ===\n\n")
+
+library(dplyr)
+library(ggplot2)
+library(vcd)        # for Cramér’s V
+library(effectsize) # backup effect size functions
+
+# --- Step 1: Add scrn_stopped_bzra from SIMOA ---
+if (exists("SIMOA") && "scrn_stopped_bzra" %in% names(SIMOA)) {
+  
+  cat("Checking dataset alignment...\n")
+  cat("SIMOA rows:", nrow(SIMOA), "\n")
+  cat("Cluster dataset rows:", nrow(data_with_clusters), "\n\n")
+  
+  if (nrow(data_with_clusters) == nrow(SIMOA)) {
+    data_with_clusters <- data_with_clusters %>%
+      mutate(scrn_stopped_bzra = SIMOA$scrn_stopped_bzra)
+    
+    cat("✅ Added 'scrn_stopped_bzra' successfully by row order.\n")
+    cat("Missing values:", sum(is.na(data_with_clusters$scrn_stopped_bzra)), "\n\n")
+    
+  } else {
+    cat("⚠️ Row mismatch between datasets — cannot merge by row safely.\n")
+    cat("Please confirm alignment before proceeding.\n\n")
+  }
+  
+} else {
+  cat("⚠️ SIMOA dataset or variable 'scrn_stopped_bzra' not found.\n\n")
+}
+
+
+# --- Step 2: Analyze cessation rates by cluster ---
+if ("scrn_stopped_bzra" %in% names(data_with_clusters)) {
+  
+  cat("=== BZRA CESSATION RATES BY CLUSTER ===\n\n")
+  
+  # 2A. Summary table
+  cessation_summary <- data_with_clusters %>%
+    group_by(cluster) %>%
+    summarise(
+      n_total = n(),
+      n_stopped = sum(scrn_stopped_bzra == 1, na.rm = TRUE),
+      pct_stopped = round(100 * n_stopped / n_total, 1),
+      .groups = "drop"
+    )
+  
+  cat("Cessation summary by cluster:\n\n")
+  print(cessation_summary)
+  
+  # 2B. Chi-square test
+  cat("\n\nChi-square test of cessation rate differences:\n\n")
+  cessation_table <- table(data_with_clusters$cluster, data_with_clusters$scrn_stopped_bzra)
+  print(cessation_table)
+  
+  chi_test <- suppressWarnings(chisq.test(cessation_table))
+  print(chi_test)
+  
+  # 2C. Cramér’s V (effect size)
+  cramer_v <- suppressWarnings(assocstats(cessation_table)$cramer)
+  cat("\nCramér’s V (effect size):", round(cramer_v, 3), "\n")
+  
+  # 2D. Visualization
+  ggplot(cessation_summary, aes(x = factor(cluster), y = pct_stopped, fill = factor(cluster))) +
+    geom_col() +
+    geom_text(aes(label = paste0(pct_stopped, "%")), vjust = -0.3, size = 4) +
+    scale_fill_brewer(palette = "Set2") +
+    labs(
+      title = "BZRA Cessation Rates by Cluster",
+      x = "Cluster",
+      y = "% Stopped BZRA Use",
+      fill = "Cluster"
+    ) +
+    theme_minimal(base_size = 14)
+  
+} else {
+  cat("Variable 'scrn_stopped_bzra' not found in dataset — analysis skipped.\n")
+}
+```
+
+
+
 
 
