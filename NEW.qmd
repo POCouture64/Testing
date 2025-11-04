@@ -37,7 +37,15 @@ The section where I have set out the inclusion criteria to remove people from th
 # who did not select one of the 14 BZRAs listed because we do not want the results to be affected by 
 # other sedating medications such as antihistamines or SSRI's.
 # Additionally, filter to include only those who answered the scrn_stopped_bzra question.
+# Finally, remove participants who indicated code 14 for prov_terr.
 ######
+
+library(dplyr)
+
+# Ensure dplyr functions take priority
+select <- dplyr::select
+filter <- dplyr::filter
+mutate <- dplyr::mutate
 
 # Original count
 n_original <- nrow(SIMOA)
@@ -47,28 +55,36 @@ SIMOA_age_filtered <- SIMOA %>%
   filter(age_cat == 1 | (age_cat == 0 & age >= 65))
 n_after_age <- nrow(SIMOA_age_filtered)
 
-# After c_sp filtering
+# After c_sp filtering (selecting those who indicated at least one of 14 BZRAs)
 SIMOA_c_sp_filtered <- SIMOA_age_filtered %>%
-  filter(rowSums(select(., starts_with("c_sp___"))[, 1:14] == 1, na.rm = TRUE) > 0)
+  mutate(
+    bzra_selected = rowSums(across(starts_with("c_sp___"), ~ .x == 1), na.rm = TRUE)
+  ) %>%
+  filter(bzra_selected > 0) %>%
+  select(-bzra_selected)
 n_after_c_sp <- nrow(SIMOA_c_sp_filtered)
 
-# After prov_terr filtering (remove answer 14)
-SIMOA_prov_filtered <- SIMOA_c_sp_filtered %>%
-  filter(prov_terr != 14 | is.na(prov_terr))
-n_after_prov <- nrow(SIMOA_prov_filtered)
-
-# After scrn_stopped_bzra filtering (only those who answered the question)
-SIMOA <- SIMOA_prov_filtered %>%
+# After scrn_stopped_bzra filtering
+SIMOA_scrn_filtered <- SIMOA_c_sp_filtered %>%
   filter(!is.na(scrn_stopped_bzra))
-n_final <- nrow(SIMOA)
+n_after_scrn <- nrow(SIMOA_scrn_filtered)
 
-# Report results
-cat("Original sample:", n_original, "\n")
-cat("After age filtering:", n_after_age, "(removed:", n_original - n_after_age, ")\n")
-cat("After c_sp filtering:", n_after_c_sp, "(removed:", n_after_age - n_after_c_sp, ")\n")
-cat("After prov_terr filtering:", n_after_prov, "(removed:", n_after_c_sp - n_after_prov, ")\n")
-cat("After scrn_stopped_bzra filtering:", n_final, "(removed:", n_after_prov - n_final, ")\n")
-cat("Total removed:", n_original - n_final, "\n")
+# Remove participants who indicated 14 for prov_terr
+n_before_prov <- n_after_scrn
+SIMOA <- SIMOA_scrn_filtered %>%
+  filter(prov_terr != 14)
+n_after_prov <- nrow(SIMOA)
+
+# Calculate how many were removed because of prov_terr == 14
+n_removed_prov <- n_before_prov - n_after_prov
+
+# Summary
+cat("Original sample size:", n_original, "\n")
+cat("After age filtering:", n_after_age, " (", round(n_after_age / n_original * 100, 1), "% retained)\n")
+cat("After BZRA filtering:", n_after_c_sp, " (", round(n_after_c_sp / n_after_age * 100, 1), "% retained)\n")
+cat("After scrn_stopped_bzra filtering:", n_after_scrn, " (", round(n_after_scrn / n_after_c_sp * 100, 1), "% retained)\n")
+cat("After prov_terr == 14 removal:", n_after_prov, " (", round(n_after_prov / n_after_scrn * 100, 1), "% retained)\n")
+cat("Participants removed because they do not live in Canada:", n_removed_prov, "\n")
 ```
 
 
@@ -1383,7 +1399,7 @@ cat("\n=== COMPLETE ===\n")
 ## Random Forest Model
 
 ```{r}
-#| label: Complete Random Forest Analysis - Updated Variable Names
+#| label: Complete Random Forest Analysis
 
 library(mice)
 library(dplyr)
@@ -1900,6 +1916,96 @@ cat("  AUC:", round(auc(roc_pooled), 3), "\n")
 cat("  Optimal Threshold:", round(youden_threshold, 3), "\n")
 cat("  Accuracy:", round(cm_optimal$overall["Accuracy"], 3), "\n")
 cat("  Top Predictor:", pooled_importance_enhanced$Variable[1], "\n")
+
+cat("\n========================================\n")
+cat("FINAL VARIABLE IMPORTANCE VISUALIZATION\n")
+cat("========================================\n\n")
+
+# Select top 15 variables (excluding alc_use_combined)
+top_vars <- pooled_importance_enhanced %>%
+  filter(Variable != "alc_use_combined") %>%
+  head(15)
+
+# Create a function to rename variables ONLY for the plot
+rename_for_plot <- function(var_names) {
+  var_mapping <- c(
+    "medburden_3" = "Desire to Reduce Medications",
+    "traz_use" = "Trazodone Use",
+    "dependence_2" = "Worry About Running Out",
+    "safety_1" = "Unsafe Driver Next Day",
+    "adls_2" = "Negative Impact on Social Life",
+    "side_effects_1" = "Morning Drowsiness",
+    "med_burden2" = "Comfortable with Med Amount",
+    "age" = "Age"
+  )
+  
+  sapply(var_names, function(x) {
+    if (x %in% names(var_mapping)) {
+      return(var_mapping[[x]])
+    } else {
+      return(x)
+    }
+  })
+}
+
+# Add display names for plot only
+top_vars$Variable_Display <- rename_for_plot(top_vars$Variable)
+
+# Create a clean, publication-ready importance plot
+p_importance_final <- ggplot(top_vars, 
+                             aes(x = reorder(Variable_Display, MeanDecreaseAccuracy), 
+                                 y = MeanDecreaseAccuracy)) +
+  geom_col(fill = "steelblue", alpha = 0.8) +
+  geom_errorbar(aes(ymin = MeanDecreaseAccuracy - SD_MDA,
+                    ymax = MeanDecreaseAccuracy + SD_MDA),
+                width = 0.3, alpha = 0.6, linewidth = 0.5) +
+  coord_flip() +
+  labs(title = "Top 15 Most Important Variables",
+       subtitle = "Random Forest Variable Importance (Pooled Across Imputations)",
+       x = NULL,
+       y = "Mean Decrease in Accuracy",
+       caption = "Error bars represent ±1 SD across imputed datasets") +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 11),
+    plot.caption = element_text(hjust = 1, face = "italic", size = 9),
+    axis.text.y = element_text(size = 10),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+print(p_importance_final)
+
+# Save the plot
+ggsave("variable_importance_plot.png", 
+       plot = p_importance_final,
+       width = 10, height = 7, dpi = 300, bg = "white")
+
+cat("✓ Variable importance plot saved to 'variable_importance_plot.png'\n")
+
+# Print detailed table of top variables (using ORIGINAL variable names)
+cat("\nTop 15 Variables (Detailed):\n")
+cat(rep("=", 80), "\n", sep = "")
+
+top_vars_table <- top_vars %>%
+  mutate(
+    MDA = sprintf("%.4f", MeanDecreaseAccuracy),
+    SD = sprintf("%.4f", SD_MDA),
+    MDG = sprintf("%.4f", MeanDecreaseGini),
+    Rank = sprintf("%.1f", Mean_Rank),
+    Stability = sprintf("%.3f", CV_Rank)
+  ) %>%
+  select(Variable, MDA, SD, MDG, Rank, Stability)  # Use original Variable column
+
+print(top_vars_table, row.names = FALSE)
+
+cat("\nColumn Definitions:\n")
+cat("  MDA       = Mean Decrease in Accuracy (higher = more important)\n")
+cat("  SD        = Standard deviation of MDA across imputations\n")
+cat("  MDG       = Mean Decrease in Gini (alternative importance measure)\n")
+cat("  Rank      = Average rank across imputations (lower = more consistently important)\n")
+cat("  Stability = Coefficient of variation in rank (lower = more stable)\n\n")
 ```
 
 
@@ -2581,7 +2687,7 @@ library(factoextra)
 library(NbClust)
 library(ggplot2)
 library(tableone)
-library(mice)  # For handling multiple imputation
+library(mice)  
 
 # ============================================================================
 # STEP 1: DATA PREPARATION WITH MULTIPLE IMPUTATION
@@ -2957,7 +3063,7 @@ plot_cluster_profiles <- function(data, vars, title) {
     scale_fill_brewer(palette = "Set2")
 }
 
-# NEO-FFI profile
+# BFI-10 profile
 neo_vars <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness")
 print(plot_cluster_profiles(pooled_data, neo_vars, "NEO-FFI Big Five by Cluster"))
 
@@ -3000,31 +3106,35 @@ if (!is.null(outcome_var)) {
   cat("X-squared =", round(chi_test$statistic, 3), "\n")
   cat("p-value =", format.pval(chi_test$p.value, digits = 3), "\n\n")
   
-  # Visualization
-  cessation_viz <- pooled_data %>%
-    group_by(Cluster, !!sym(outcome_var)) %>%
-    summarise(n = n(), .groups = "drop") %>%
-    group_by(Cluster) %>%
-    mutate(prop = n / sum(n))
-  
-  cessation_plot <- ggplot(cessation_viz, aes(x = Cluster, y = prop, fill = as.factor(!!sym(outcome_var)))) +
-    geom_bar(stat = "identity", position = "fill") +
-    geom_text(aes(label = paste0(round(prop * 100, 1), "%")), 
-              position = position_fill(vjust = 0.5), size = 3) +
-    scale_y_continuous(labels = scales::percent) +
-    labs(title = "Benzodiazepine Cessation by Cluster (Pooled)",
-         y = "Percentage", x = "Cluster", fill = "SIMOA Status") +
-    theme_minimal() +
-    scale_fill_brewer(palette = "Set1")
-  print(cessation_plot)
-} else {
-  cat("\n=== OUTCOME VARIABLE NOT AVAILABLE ===\n")
-  cat("Skipping cessation analysis.\n\n")
-} +
-  labs(title = "Benzodiazepine Cessation by Cluster (Pooled)",
-       y = "Percentage", x = "Cluster", fill = "SIMOA Status") +
-  theme_minimal() +
-  scale_fill_brewer(palette = "Set1")
+# Visualization
+cessation_viz <- pooled_data %>%
+  group_by(Cluster, !!sym(outcome_var)) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(Cluster) %>%
+  mutate(prop = n / sum(n)) %>%
+  mutate(Cluster = case_when(
+    Cluster == 1 ~ "Distressed",
+    Cluster == 2 ~ "Adaptive",
+    TRUE ~ as.character(Cluster)
+  ))
+
+cessation_plot <- ggplot(cessation_viz, aes(x = Cluster, y = prop, fill = as.factor(!!sym(outcome_var)))) +
+  geom_bar(stat = "identity", position = "fill") +
+  geom_text(aes(label = paste0(round(prop * 100, 1), "%")), 
+            position = position_fill(vjust = 0.5), size = 3) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(
+    name = "Current BZRA Use",
+    values = c("0" = "#E41A1C", "1" = "#377EB8"),  # red = still using, blue = not using
+    labels = c("0" = "Still Using", "1" = "Not Using")
+  ) +
+  labs(
+    title = "BZRA Cessation by Cluster",
+    y = "Percentage",
+    x = "Cluster"
+  ) +
+  theme_minimal()
+
 print(cessation_plot)
 
 # ============================================================================
@@ -3039,6 +3149,410 @@ write.csv(cluster_profiles, "cluster_profiles_pooled.csv", row.names = FALSE)
 
 cat("\n=== ANALYSIS COMPLETE ===\n")
 cat("Files saved with '_pooled' suffix\n")
+
+
+# ============================================================================
+# TABLE 1 – PSYCHOLOGICAL CHARACTERISTICS DEFINING CLUSTERS
+# ============================================================================
+library(dplyr)
+library(tidyr)
+library(flextable)
+library(webshot2)
+library(officer)
+
+# Label clusters
+pooled_data <- pooled_data %>%
+  mutate(Cluster = ifelse(Cluster == 1, "Distressed",
+                   ifelse(Cluster == 2, "Adaptive", as.character(Cluster))))
+
+# Variables used in clustering
+psych_vars <- c(
+  # BFI-10
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  # SURPS
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking",
+  "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+  # DBAS
+  "DBAS_Expectations", "DBAS_Medications",
+  "DBAS_Worry_Helplessness", "DBAS_Consequences",
+  # CISS
+  "CISS_Task_Style", "CISS_Emotional_Style", "CISS_Avoidance_Style"
+)
+
+# Compute cluster means
+psych_summary <- pooled_data %>%
+  group_by(Cluster) %>%
+  summarise(across(all_of(psych_vars), ~ round(mean(.x, na.rm = TRUE), 2)), .groups = "drop") %>%
+  pivot_longer(cols = -Cluster, names_to = "Variable", values_to = "Value") %>%
+  pivot_wider(names_from = Cluster, values_from = Value)
+
+# Calculate effect sizes and significance for each variable
+effect_sig <- data.frame(
+  Variable = character(),
+  `Effect.Size..Cohen.s.d.` = character(),
+  Significance = character(),
+  stringsAsFactors = FALSE
+)
+
+for (var in psych_vars) {
+  # Get values for each cluster
+  distressed_vals <- pooled_data %>% filter(Cluster == "Distressed") %>% pull(!!sym(var))
+  adaptive_vals <- pooled_data %>% filter(Cluster == "Adaptive") %>% pull(!!sym(var))
+  
+  # Remove NAs
+  distressed_vals <- distressed_vals[!is.na(distressed_vals)]
+  adaptive_vals <- adaptive_vals[!is.na(adaptive_vals)]
+  
+  # Calculate Cohen's d
+  mean_diff <- mean(distressed_vals) - mean(adaptive_vals)
+  pooled_sd <- sqrt(((length(distressed_vals) - 1) * var(distressed_vals) + 
+                     (length(adaptive_vals) - 1) * var(adaptive_vals)) / 
+                    (length(distressed_vals) + length(adaptive_vals) - 2))
+  cohens_d <- mean_diff / pooled_sd
+  
+  # t-test for significance
+  t_test <- t.test(distressed_vals, adaptive_vals)
+  p_value <- t_test$p.value
+  
+  # Format significance
+  if (p_value < 0.001) {
+    sig <- "***"
+  } else if (p_value < 0.01) {
+    sig <- "**"
+  } else if (p_value < 0.05) {
+    sig <- "*"
+  } else {
+    sig <- "ns"
+  }
+  
+  effect_sig <- rbind(effect_sig, data.frame(
+    Variable = var,
+    Effect.Size..Cohen.s.d. = as.character(round(cohens_d, 2)),
+    Significance = sig,
+    stringsAsFactors = FALSE
+  ))
+}
+
+# Rename the column to match
+names(effect_sig)[2] <- "Effect Size (Cohen's d)"
+
+# Join effect sizes and significance with summary
+psych_summary <- psych_summary %>%
+  left_join(effect_sig, by = "Variable")
+
+# Create N row with character values to avoid decimals
+N_row <- tibble(
+  Variable = "N",
+  Distressed = "205",
+  Adaptive = "192",
+  `Effect Size (Cohen's d)` = "",
+  Significance = ""
+)
+
+# Convert columns to character in psych_summary
+psych_summary <- psych_summary %>%
+  mutate(Distressed = as.character(Distressed),
+         Adaptive = as.character(Adaptive))
+
+# Bind N row on top
+psych_summary <- bind_rows(N_row, psych_summary)
+
+# Create flextable with APA-style title
+ft1 <- flextable(psych_summary) %>%
+  add_header_lines(values = "Personality Characteristics Defining the Distressed and Adaptive Clusters") %>%
+  add_header_lines(values = "Table 1") %>%
+  bold(i = 1, part = "header") %>%
+  italic(i = 2, part = "header") %>%
+  align(i = 1:2, align = "left", part = "header") %>%
+  border_remove() %>%
+  hline_top(border = fp_border(width = 2), part = "header") %>%
+  hline(i = 2, border = fp_border(width = 0), part = "header") %>%
+  hline_bottom(border = fp_border(width = 1), part = "header") %>%
+  hline_bottom(border = fp_border(width = 2), part = "body") %>%
+  autofit()
+
+# Export as PNG
+save_as_image(ft1, path = "Table1_Psychological_Profiles.png", zoom = 3)
+
+# ============================================================================
+# TABLE 2 – DEMOGRAPHIC, CLINICAL, AND CESSATION DIFFERENCES (SPLIT VERSION)
+# ============================================================================
+library(lsr)  # for cramersV
+
+# -------------------------------
+# Recode categorical variables
+# -------------------------------
+pooled_data <- pooled_data %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Female",
+      sex == 2 ~ "Male",
+      TRUE ~ as.character(sex)
+    ),
+    gender = case_when(
+      gender == 1 ~ "Woman",
+      gender == 2 ~ "Man",
+      gender == 3 ~ "Non-binary",
+      gender == 4 ~ "Other",
+      gender == 5 ~ "Prefer not to say",
+      TRUE ~ as.character(gender)
+    ),
+    prov_terr_grouped = case_when(
+      prov_terr %in% c("Alberta", "British Columbia", "Manitoba", "Saskatchewan") ~ "Western Canada",
+      prov_terr %in% c("Ontario", "Quebec") ~ "Central Canada",
+      prov_terr %in% c("New Brunswick", "Newfoundland and Labrador", "Nova Scotia", "Prince Edward Island") ~ "Atlantic Canada",
+      TRUE ~ "Territories"
+    ),
+    education_grouped = case_when(
+      education %in% c("Elementary school", "Middle school", "High school diploma") ~ "High School or Less",
+      TRUE ~ "Trade School/University"
+    ),
+    employment_grouped = case_when(
+      employment %in% c("Not in workforce", "Retired") ~ "Not in Workforce",
+      TRUE ~ "Full- / Part-Time Work"
+    ),
+    driving_freq = case_when(
+      driving_freq == 0 ~ "I do not drive",
+      driving_freq == 1 ~ "Less than 1 day per week",
+      driving_freq == 2 ~ "1-3 days per week",
+      driving_freq == 3 ~ "4-7 days per week",
+      TRUE ~ as.character(driving_freq)
+    ),
+    income = case_when(
+      income == 1 ~ "$15,000 or less",
+      income == 2 ~ "$15,000 to $30,000",
+      income == 3 ~ "$30,000 to $50,000",
+      income == 4 ~ "$50,000 to $80,000",
+      income == 5 ~ "$80,000 or more",
+      TRUE ~ as.character(income)
+    ),
+    scrn_stopped_bzra = case_when(
+      scrn_stopped_bzra == 1 ~ "Not using",
+      scrn_stopped_bzra == 0 ~ "Still using",
+      TRUE ~ as.character(scrn_stopped_bzra)
+    )
+  )
+
+# -------------------------------
+# Define variables - Combined into one table
+# -------------------------------
+vars_table2 <- list(
+  continuous = c("age", "osss_3_score", "phq2_score"),
+  categorical = c("sex", "gender", "prov_terr_grouped", "education_grouped", 
+                  "employment_grouped", "driving_freq", "income", "scrn_stopped_bzra")
+)
+
+# -------------------------------
+# Function to create summary table
+# -------------------------------
+create_summary_table <- function(continuous_vars = NULL, categorical_vars = NULL) {
+  
+  summary_data <- data.frame(
+    Variable = character(),
+    Distressed = character(),
+    Adaptive = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  effect_sig <- data.frame(
+    Variable = character(),
+    `Effect Size` = character(),
+    Significance = character(),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  # Process continuous variables
+  if (!is.null(continuous_vars)) {
+    for (var in continuous_vars) {
+      distressed_vals <- pooled_data %>% 
+        filter(Cluster == "Distressed") %>% 
+        pull(!!sym(var)) %>% 
+        na.omit()
+      
+      adaptive_vals <- pooled_data %>% 
+        filter(Cluster == "Adaptive") %>% 
+        pull(!!sym(var)) %>% 
+        na.omit()
+      
+      mean_distressed <- round(mean(distressed_vals), 2)
+      sd_distressed <- round(sd(distressed_vals), 2)
+      mean_adaptive <- round(mean(adaptive_vals), 2)
+      sd_adaptive <- round(sd(adaptive_vals), 2)
+      
+      mean_diff <- mean(distressed_vals) - mean(adaptive_vals)
+      pooled_sd <- sqrt(((length(distressed_vals) - 1) * var(distressed_vals) + 
+                         (length(adaptive_vals) - 1) * var(adaptive_vals)) / 
+                        (length(distressed_vals) + length(adaptive_vals) - 2))
+      cohens_d <- mean_diff / pooled_sd
+      
+      t_test <- t.test(distressed_vals, adaptive_vals)
+      p_value <- t_test$p.value
+      
+      if (p_value < 0.001) {
+        sig <- "***"
+      } else if (p_value < 0.01) {
+        sig <- "**"
+      } else if (p_value < 0.05) {
+        sig <- "*"
+      } else {
+        sig <- "ns"
+      }
+      
+      # Capitalize variable name for display
+      var_label <- ifelse(var == "age", "Age", var)
+      
+      summary_data <- rbind(summary_data, data.frame(
+        Variable = var_label,
+        Distressed = paste0(mean_distressed, " (", sd_distressed, ")"),
+        Adaptive = paste0(mean_adaptive, " (", sd_adaptive, ")"),
+        stringsAsFactors = FALSE
+      ))
+      
+      effect_sig <- rbind(effect_sig, data.frame(
+        Variable = var_label,
+        `Effect Size` = as.character(round(cohens_d, 2)),
+        Significance = sig,
+        stringsAsFactors = FALSE,
+        check.names = FALSE
+      ))
+    }
+  }
+  
+  # Process categorical variables
+  if (!is.null(categorical_vars)) {
+    for (var in categorical_vars) {
+      
+      var_label <- case_when(
+        var == "sex" ~ "Sex",
+        var == "gender" ~ "Gender Identity",
+        var == "prov_terr_grouped" ~ "Canadian Region",
+        var == "education_grouped" ~ "Education",
+        var == "employment_grouped" ~ "Employment",
+        var == "driving_freq" ~ "Driving Frequency",
+        var == "income" ~ "Annual Household Income",
+        var == "scrn_stopped_bzra" ~ "Benzodiazepine Use Status",
+        TRUE ~ var
+      )
+      
+      # Get distributions
+      distressed_dist <- pooled_data %>%
+        filter(Cluster == "Distressed", !is.na(!!sym(var))) %>%
+        group_by(!!sym(var)) %>%
+        summarise(n = n(), .groups = "drop") %>%
+        mutate(percent = round(n / sum(n) * 100, 1),
+               text = paste0(n, " (", percent, "%)"))
+      
+      adaptive_dist <- pooled_data %>%
+        filter(Cluster == "Adaptive", !is.na(!!sym(var))) %>%
+        group_by(!!sym(var)) %>%
+        summarise(n = n(), .groups = "drop") %>%
+        mutate(percent = round(n / sum(n) * 100, 1),
+               text = paste0(n, " (", percent, "%)"))
+      
+      # Chi-square test
+      tbl <- table(pooled_data$Cluster, pooled_data[[var]])
+      chi_test <- chisq.test(tbl)
+      p_value <- chi_test$p.value
+      cramers_v <- cramersV(tbl)
+      
+      if (p_value < 0.001) {
+        sig <- "***"
+      } else if (p_value < 0.01) {
+        sig <- "**"
+      } else if (p_value < 0.05) {
+        sig <- "*"
+      } else {
+        sig <- "ns"
+      }
+      
+      # Add main category row
+      summary_data <- rbind(summary_data, data.frame(
+        Variable = var_label,
+        Distressed = "",
+        Adaptive = "",
+        stringsAsFactors = FALSE
+      ))
+      
+      effect_sig <- rbind(effect_sig, data.frame(
+        Variable = var_label,
+        `Effect Size` = as.character(round(cramers_v, 2)),
+        Significance = sig,
+        stringsAsFactors = FALSE,
+        check.names = FALSE
+      ))
+      
+      # Add subcategory rows
+      for (i in 1:nrow(distressed_dist)) {
+        category_label <- distressed_dist[[var]][i]
+        distressed_text <- distressed_dist$text[i]
+        
+        adaptive_match <- adaptive_dist %>% filter(!!sym(var) == category_label)
+        adaptive_text <- if(nrow(adaptive_match) > 0) adaptive_match$text[1] else "0 (0.0%)"
+        
+        summary_data <- rbind(summary_data, data.frame(
+          Variable = paste0("  ", category_label),
+          Distressed = distressed_text,
+          Adaptive = adaptive_text,
+          stringsAsFactors = FALSE
+        ))
+        
+        effect_sig <- rbind(effect_sig, data.frame(
+          Variable = paste0("  ", category_label),
+          `Effect Size` = "",
+          Significance = "",
+          stringsAsFactors = FALSE,
+          check.names = FALSE
+        ))
+      }
+    }
+  }
+  
+  # Join effect sizes with summary
+  final_table <- summary_data %>%
+    left_join(effect_sig, by = "Variable")
+  
+  return(final_table)
+}
+
+# -------------------------------
+# Create combined table
+# -------------------------------
+table2 <- create_summary_table(
+  continuous_vars = vars_table2$continuous,
+  categorical_vars = vars_table2$categorical
+)
+
+# -------------------------------
+# Create flextable with APA-style title
+# -------------------------------
+ft2 <- flextable(table2) %>%
+  add_header_lines(values = "Demographic and Cessation Differences Between Clusters") %>%
+  add_header_lines(values = "Table 2") %>%
+  bold(i = 1, part = "header") %>%
+  italic(i = 2, part = "header") %>%
+  align(i = 1:2, align = "left", part = "header") %>%
+  set_header_labels(
+    Variable = "Variable",
+    Distressed = "Distressed",
+    Adaptive = "Adaptive",
+    `Effect Size` = "Effect Size (Cohen's d / Cramér's V)",
+    Significance = "Significance"
+  ) %>%
+  border_remove() %>%
+  hline_top(border = fp_border(width = 2), part = "header") %>%
+  hline(i = 2, border = fp_border(width = 0), part = "header") %>%
+  hline_bottom(border = fp_border(width = 1), part = "header") %>%
+  hline_bottom(border = fp_border(width = 2), part = "body") %>%
+  autofit()
+
+# -------------------------------
+# Export as PNG
+# -------------------------------
+save_as_image(ft2, path = "Table2_Demographic_Differences.png", zoom = 3)
+
+# Optional: Print dimensions
+cat("Table 2 created with", nrow(table2), "rows\n")
 ```
 
 ## Cluster Follow-up
@@ -3887,6 +4401,348 @@ cat("  - subgroup_plot (plot)\n\n")
 
 cat("\n=== ALL FOLLOW-UP ANALYSES COMPLETE ===\n")
 cat("All results and figures have been generated.\n")
+
+# ============================================================================
+# FIGURE 4 – COMPREHENSIVE SUBGROUP ANALYSIS AND FOREST PLOT FOR CESSATION
+# ============================================================================
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# ============================================================================
+# STEP 1: PREPARE DATA
+# ============================================================================
+
+# Ensure binary cessation variable
+pooled_data <- pooled_data %>%
+  mutate(
+    stopped = as.numeric(scrn_stopped_bzra == "Not using"),
+    Cluster_binary = as.numeric(Cluster == "Adaptive")
+  )
+
+# ============================================================================
+# STEP 2: CALCULATE ALL SUBGROUP EFFECTS
+# ============================================================================
+
+# Function to calculate OR with CI for subgroups
+calculate_subgroup_OR <- function(data, subgroup_var, subgroup_value = NULL, label) {
+  
+  # Filter to subgroup if specified
+  if (!is.null(subgroup_value)) {
+    data_sub <- data %>% filter(!!sym(subgroup_var) == subgroup_value)
+  } else {
+    data_sub <- data
+  }
+  
+  # Check if enough observations
+  if (nrow(data_sub) < 20) {
+    return(data.frame(
+      subgroup = label,
+      OR = NA, lower_CI = NA, upper_CI = NA, p_value = NA,
+      n = nrow(data_sub), significance = "insufficient n",
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  # Run logistic regression
+  tryCatch({
+    model <- glm(stopped ~ Cluster_binary, data = data_sub, family = binomial())
+    
+    # Extract OR and CI
+    coef_summary <- summary(model)$coefficients
+    OR <- exp(coef(model)[2])
+    se_log_or <- coef_summary[2, 2]
+    lower_CI <- exp(coef(model)[2] - 1.96 * se_log_or)
+    upper_CI <- exp(coef(model)[2] + 1.96 * se_log_or)
+    p_value <- coef_summary[2, 4]
+    
+    # Significance stars
+    sig <- case_when(
+      p_value < 0.001 ~ "***",
+      p_value < 0.01 ~ "**",
+      p_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+    
+    return(data.frame(
+      subgroup = label,
+      OR = OR, lower_CI = lower_CI, upper_CI = upper_CI,
+      p_value = p_value, n = nrow(data_sub), significance = sig,
+      stringsAsFactors = FALSE
+    ))
+  }, error = function(e) {
+    return(data.frame(
+      subgroup = label,
+      OR = NA, lower_CI = NA, upper_CI = NA, p_value = NA,
+      n = nrow(data_sub), significance = "error",
+      stringsAsFactors = FALSE
+    ))
+  })
+}
+
+# Initialize results list
+all_results <- list()
+
+# ===== OVERALL =====
+all_results[[1]] <- calculate_subgroup_OR(pooled_data, NULL, NULL, "Overall (Unadjusted)")
+
+# ===== DEMOGRAPHICS =====
+# Sex
+if ("sex" %in% names(pooled_data)) {
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "sex", "Male", "Sex: Male")
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "sex", "Female", "Sex: Female")
+}
+
+# Age groups
+if ("age" %in% names(pooled_data)) {
+  pooled_data <- pooled_data %>%
+    mutate(age_group = case_when(
+      age < 60 ~ "Under 60",
+      age < 70 ~ "60-69",
+      TRUE ~ "70+"
+    ))
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "age_group", "Under 60", "Age: <60")
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "age_group", "60-69", "Age: 60-69")
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "age_group", "70+", "Age: 70+")
+}
+
+# Region
+if ("prov_terr_grouped" %in% names(pooled_data)) {
+  regions <- unique(pooled_data$prov_terr_grouped[!is.na(pooled_data$prov_terr_grouped)])
+  for (reg in regions) {
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "prov_terr_grouped", reg, paste0("Region: ", reg))
+  }
+}
+
+# Education
+if ("education_grouped" %in% names(pooled_data)) {
+  edu_levels <- unique(pooled_data$education_grouped[!is.na(pooled_data$education_grouped)])
+  for (edu in edu_levels) {
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "education_grouped", edu, paste0("Education: ", edu))
+  }
+}
+
+# Employment
+if ("employment_grouped" %in% names(pooled_data)) {
+  emp_levels <- unique(pooled_data$employment_grouped[!is.na(pooled_data$employment_grouped)])
+  for (emp in emp_levels) {
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "employment_grouped", emp, paste0("Employment: ", emp))
+  }
+}
+
+# Income
+if ("income" %in% names(pooled_data)) {
+  pooled_data <- pooled_data %>%
+    mutate(income_group = case_when(
+      income %in% c("$15,000 or less", "$15,000 to $30,000", "$30,000 to $50,000") ~ "Lower Income",
+      income %in% c("$50,000 to $80,000", "$80,000 or more") ~ "Higher Income",
+      TRUE ~ as.character(income)
+    ))
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "income_group", "Lower Income", "Income: Lower (<$50k)")
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "income_group", "Higher Income", "Income: Higher (≥$50k)")
+}
+
+# ===== CLINICAL MEASURES =====
+# PHQ-2 (Depression)
+if ("phq2_score" %in% names(pooled_data)) {
+  pooled_data <- pooled_data %>%
+    mutate(depression_level = ifelse(phq2_score < 3, "Low Depression", "High Depression"))
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "depression_level", "Low Depression", "Depression: Low (PHQ-2 <3)")
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "depression_level", "High Depression", "Depression: High (PHQ-2 ≥3)")
+}
+
+# OSSS-3 (Social Support)
+if ("osss_3_score" %in% names(pooled_data)) {
+  pooled_data <- pooled_data %>%
+    mutate(social_support = ifelse(osss_3_score >= 9, "High Support", "Low Support"))
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "social_support", "High Support", "Social Support: High (OSSS ≥9)")
+  all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, "social_support", "Low Support", "Social Support: Low (OSSS <9)")
+}
+
+# ===== MEDICATION BURDEN =====
+med_burden_vars <- c("med_burden_1", "med_burden2", "medburden_3", "med_burden_4")
+for (var in med_burden_vars) {
+  if (var %in% names(pooled_data) && !all(is.na(pooled_data[[var]]))) {
+    median_val <- median(pooled_data[[var]], na.rm = TRUE)
+    pooled_data[[paste0(var, "_group")]] <- ifelse(pooled_data[[var]] <= median_val, "Low", "High")
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "Low", paste0("Med Burden (", var, "): Low"))
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "High", paste0("Med Burden (", var, "): High"))
+  }
+}
+
+# ===== SUBSTANCE USE =====
+substance_vars <- c("op_use", "can_use", "caf_use", "nico_use", "alc_sleep", "can_sleep", 
+                    "melatonin_use", "op_sleep", "quet_use", "traz_use", "otc_use")
+for (var in substance_vars) {
+  if (var %in% names(pooled_data) && length(unique(pooled_data[[var]][!is.na(pooled_data[[var]])])) > 1) {
+    # Assume binary or convert to binary
+    unique_vals <- sort(unique(pooled_data[[var]][!is.na(pooled_data[[var]])]))
+    if (length(unique_vals) == 2) {
+      all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, var, unique_vals[1], paste0(var, ": ", unique_vals[1]))
+      all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, var, unique_vals[2], paste0(var, ": ", unique_vals[2]))
+    }
+  }
+}
+
+# ===== PERSONALITY (BFI-10) =====
+bfi_vars <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness")
+for (var in bfi_vars) {
+  if (var %in% names(pooled_data)) {
+    median_val <- median(pooled_data[[var]], na.rm = TRUE)
+    pooled_data[[paste0(var, "_group")]] <- ifelse(pooled_data[[var]] <= median_val, "Low", "High")
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "Low", paste0(var, ": Low"))
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "High", paste0(var, ": High"))
+  }
+}
+
+# ===== SURPS =====
+surps_vars <- c("SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity")
+for (var in surps_vars) {
+  if (var %in% names(pooled_data)) {
+    median_val <- median(pooled_data[[var]], na.rm = TRUE)
+    pooled_data[[paste0(var, "_group")]] <- ifelse(pooled_data[[var]] <= median_val, "Low", "High")
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "Low", paste0(var, ": Low"))
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "High", paste0(var, ": High"))
+  }
+}
+
+# ===== DBAS =====
+dbas_vars <- c("DBAS_Expectations", "DBAS_Medications", "DBAS_Worry_Helplessness", "DBAS_Consequences")
+for (var in dbas_vars) {
+  if (var %in% names(pooled_data)) {
+    median_val <- median(pooled_data[[var]], na.rm = TRUE)
+    pooled_data[[paste0(var, "_group")]] <- ifelse(pooled_data[[var]] <= median_val, "Low", "High")
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "Low", paste0(var, ": Low"))
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "High", paste0(var, ": High"))
+  }
+}
+
+# ===== CISS =====
+ciss_vars <- c("CISS_Task_Style", "CISS_Emotional_Style", "CISS_Avoidance_Style")
+for (var in ciss_vars) {
+  if (var %in% names(pooled_data)) {
+    median_val <- median(pooled_data[[var]], na.rm = TRUE)
+    pooled_data[[paste0(var, "_group")]] <- ifelse(pooled_data[[var]] <= median_val, "Low", "High")
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "Low", paste0(var, ": Low"))
+    all_results[[length(all_results) + 1]] <- calculate_subgroup_OR(pooled_data, paste0(var, "_group"), "High", paste0(var, ": High"))
+  }
+}
+
+# Combine all results
+all_subgroups <- bind_rows(all_results)
+
+# Print all results
+cat("\n=== ALL SUBGROUP ANALYSES ===\n")
+all_subgroups_sorted <- all_subgroups %>%
+  filter(!is.na(OR)) %>%
+  arrange(p_value) %>%
+  select(subgroup, n, OR, lower_CI, upper_CI, p_value, significance) %>%
+  mutate(across(c(OR, lower_CI, upper_CI), ~round(., 2)),
+         p_value = round(p_value, 4))
+
+print(all_subgroups_sorted, n = 100)
+
+# Save to CSV
+write.csv(all_subgroups_sorted, "All_Subgroup_Analysis_Results.csv", row.names = FALSE)
+
+# ============================================================================
+# STEP 3: SELECT MOST SIGNIFICANT SUBGROUPS FOR FOREST PLOT
+# ============================================================================
+
+# Filter to significant effects (p < 0.05) with highest ORs
+significant_subgroups <- all_subgroups %>%
+  filter(p_value < 0.05 & !is.na(OR) & !grepl("Overall", subgroup)) %>%
+  arrange(desc(OR)) %>%
+  slice_head(n = 8)  # Top 8 most significant
+
+# Add overall at top
+forest_data <- bind_rows(
+  all_subgroups %>% filter(grepl("Overall", subgroup)),
+  significant_subgroups
+) %>%
+  mutate(
+    category = ifelse(grepl("Overall", subgroup), "Overall", "Subgroup"),
+    order = rev(seq_len(n()))
+  )
+
+cat("\n=== SELECTED SUBGROUPS FOR FOREST PLOT ===\n")
+print(forest_data %>% select(subgroup, n, OR, lower_CI, upper_CI, p_value, significance))
+
+# ============================================================================
+# STEP 4: CREATE FOREST PLOT
+# ============================================================================
+
+# Calculate plot ranges
+x_min <- 0.5
+x_max <- max(forest_data$upper_CI, na.rm = TRUE) * 1.15
+
+p <- ggplot(forest_data, aes(y = order, x = OR)) +
+  # Add reference line at OR = 1
+  geom_vline(xintercept = 1, linetype = "dashed", color = "grey50", linewidth = 0.8) +
+  
+  # Add confidence intervals
+  geom_errorbarh(aes(xmin = lower_CI, xmax = upper_CI), 
+                 height = 0.25, linewidth = 0.7, color = "black") +
+  
+  # Add point estimates
+  geom_point(aes(shape = category, fill = category), 
+             size = 4, stroke = 0.8, color = "black") +
+  
+  # Customize shapes
+  scale_shape_manual(values = c("Overall" = 23, "Subgroup" = 22)) +
+  scale_fill_manual(values = c("Overall" = "black", "Subgroup" = "white")) +
+  
+  # Scales
+  scale_x_continuous(
+    breaks = seq(0, ceiling(x_max), 0.5),
+    limits = c(x_min, x_max),
+    name = "Odds Ratio (95% CI)"
+  ) +
+  
+  scale_y_continuous(
+    breaks = forest_data$order,
+    labels = paste0(forest_data$subgroup, "  ",
+                   sprintf("%.2f", forest_data$OR), " (",
+                   sprintf("%.2f", forest_data$lower_CI), "-",
+                   sprintf("%.2f", forest_data$upper_CI), ")",
+                   forest_data$significance),
+    name = ""
+  ) +
+  
+  # Theme
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "grey90"),
+    axis.text.y = element_text(hjust = 0, size = 9),
+    axis.title.x = element_text(size = 11, face = "bold"),
+    axis.text.x = element_text(size = 9),
+    plot.title = element_text(size = 13, face = "bold"),
+    plot.subtitle = element_text(size = 10),
+    plot.margin = margin(15, 15, 15, 15)
+  ) +
+  
+  labs(
+    title = "Figure 1: Subgroup Effects on Benzodiazepine Cessation",
+    subtitle = "Adaptive Cluster vs. Distressed Cluster - Strongest Effects"
+  )
+
+# Save plot
+ggsave("Figure4_Subgroup_Forest_Plot.png", 
+       plot = p, 
+       width = 12, 
+       height = 7, 
+       dpi = 300,
+       bg = "white")
+
+# Print plot
+print(p)
+
+cat("\n=== ANALYSIS COMPLETE ===\n")
+cat("Complete results saved to: All_Subgroup_Analysis_Results.csv\n")
+cat("Forest plot saved to: Figure4_Subgroup_Forest_Plot.png\n")
 ```
 
 
