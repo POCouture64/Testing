@@ -1,0 +1,3081 @@
+---
+title: "FINAL"
+author: "PO Couture"
+format: html
+editor: visual
+---
+
+## FINAL
+
+This is the code I will use for my MSc thesis because I am going to fix the issues with my previous code and will allow me to better keep track of everything that I have changed and things that I am investigating versus trying to edit all the code and gettign confused about which parts have and have not been changed.
+
+
+## Loading in the SIMOA
+
+The section I will use to load the SIMOAset that I will use for the analysis.
+
+```{r}
+#| label: Loading the SIMOA and Libraries
+######
+# Loading the SIMOA
+######
+
+library(readr)
+SIMOA <- read_csv("SIMOA Report.csv")
+View(SIMOA)
+```
+
+## Eligible Participants
+
+The section where I have set out the inclusion criteria to remove people from the SIMOAset that do not meet our criteria.
+
+```{r}
+#| label: Eligible Participants
+######
+# In this section I will filter out those who have indicated they are <65 or that have not answered   
+# yes to the question about age category or not answered either question. I will also filter out those 
+# who did not select one of the 14 BZRAs listed because we do not want the results to be affected by 
+# other sedating medications such as antihistamines or SSRI's.
+# Additionally, filter to include only those who answered the scrn_stopped_bzra question.
+# Finally, remove participants who indicated code 14 for prov_terr.
+######
+
+library(dplyr)
+
+# Ensure dplyr functions take priority
+select <- dplyr::select
+filter <- dplyr::filter
+mutate <- dplyr::mutate
+
+# Original count
+n_original <- nrow(SIMOA)
+
+# After age filtering
+SIMOA_age_filtered <- SIMOA %>%
+  filter(age_cat == 1 | (age_cat == 0 & age >= 65))
+n_after_age <- nrow(SIMOA_age_filtered)
+
+# After c_sp filtering (selecting those who indicated at least one of 14 BZRAs)
+SIMOA_c_sp_filtered <- SIMOA_age_filtered %>%
+  mutate(
+    bzra_selected = rowSums(across(starts_with("c_sp___"), ~ .x == 1), na.rm = TRUE)
+  ) %>%
+  filter(bzra_selected > 0) %>%
+  select(-bzra_selected)
+n_after_c_sp <- nrow(SIMOA_c_sp_filtered)
+
+# After scrn_stopped_bzra filtering
+SIMOA_scrn_filtered <- SIMOA_c_sp_filtered %>%
+  filter(!is.na(scrn_stopped_bzra))
+n_after_scrn <- nrow(SIMOA_scrn_filtered)
+
+# Remove participants who indicated 14 for prov_terr
+n_before_prov <- n_after_scrn
+SIMOA <- SIMOA_scrn_filtered %>%
+  filter(prov_terr != 14)
+n_after_prov <- nrow(SIMOA)
+
+# Calculate how many were removed because of prov_terr == 14
+n_removed_prov <- n_before_prov - n_after_prov
+
+# Summary
+cat("Original sample size:", n_original, "\n")
+cat("After age filtering:", n_after_age, " (", round(n_after_age / n_original * 100, 1), "% retained)\n")
+cat("After BZRA filtering:", n_after_c_sp, " (", round(n_after_c_sp / n_after_age * 100, 1), "% retained)\n")
+cat("After scrn_stopped_bzra filtering:", n_after_scrn, " (", round(n_after_scrn / n_after_c_sp * 100, 1), "% retained)\n")
+cat("After prov_terr == 14 removal:", n_after_prov, " (", round(n_after_prov / n_after_scrn * 100, 1), "% retained)\n")
+cat("Participants removed because they do not live in Canada:", n_removed_prov, "\n")
+```
+
+
+## Missing CISS Investigation
+
+```{r}
+#==============================================================================
+# CHUNK 1: MANDATORY CISS INVESTIGATION
+#==============================================================================
+# Purpose: Investigate why 64 people stopped at CISS item 11
+# This is not optional - Dr. Yakovenko requires this before proceeding
+#==============================================================================
+
+library(tidyverse)
+library(tableone)
+library(naniar)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 0: CISS ITEM 11 INVESTIGATION (MANDATORY)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# -----------------------------------------------------------------------------
+# A. Identify stopping pattern
+# -----------------------------------------------------------------------------
+
+cat("PART A: Identifying where people stopped in CISS\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Create variable showing last CISS item answered
+SIMOA <- SIMOA %>%
+  mutate(
+    CISS_last_item = apply(select(., ciss1:ciss21), 1, function(x) {
+      if(all(is.na(x))) return(0)  # Didn't start CISS
+      max(which(!is.na(x)))
+    }),
+    stopped_at_11 = ifelse(CISS_last_item == 11, 1, 0),
+    completed_CISS = ifelse(CISS_last_item == 21, 1, 0)
+  )
+
+# Show distribution
+cat("Distribution of last CISS item completed:\n")
+print(table(SIMOA$CISS_last_item, useNA = "ifany"))
+cat("\n")
+
+# Key statistics
+n_stopped_11 <- sum(SIMOA$stopped_at_11, na.rm = TRUE)
+n_completed <- sum(SIMOA$completed_CISS, na.rm = TRUE)
+n_started <- sum(SIMOA$CISS_last_item > 0, na.rm = TRUE)
+
+cat("KEY STATISTICS:\n")
+cat("  People who started CISS:", n_started, "\n")
+cat("  People who completed all 21 items:", n_completed, 
+    "(", round(100 * n_completed / n_started, 1), "% of starters)\n")
+cat("  People who stopped EXACTLY at item 11:", n_stopped_11, 
+    "(", round(100 * n_stopped_11 / n_started, 1), "% of starters)\n\n")
+
+if(n_stopped_11 > 50) {
+  cat("⚠ WARNING: Large number stopped at item 11 - investigate further!\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# B. Compare stoppers vs completers on demographics and early survey items
+# -----------------------------------------------------------------------------
+
+cat("PART B: Comparing people who stopped at item 11 vs completers\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Variables to compare
+compare_vars <- c(
+  "age", "sex", "gender", "education", "income", "employment",
+  "phq2_score", "osss_3_score", "med_quant",
+  "dbas1", "reserved", "surps1"  # Early items from other scales
+)
+
+# Only include people who started CISS
+comparison_data <- SIMOA %>%
+  filter(CISS_last_item > 0) %>%
+  mutate(
+    group = case_when(
+      stopped_at_11 == 1 ~ "Stopped at 11",
+      completed_CISS == 1 ~ "Completed",
+      TRUE ~ "Partial (other)"
+    )
+  )
+
+# Create comparison table
+tab_stopper <- CreateTableOne(
+  vars = compare_vars,
+  strata = "group",
+  data = comparison_data,
+  test = TRUE
+)
+
+cat("Comparison of Stopped at 11 vs Completed:\n")
+print(tab_stopper, smd = TRUE)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# C. Look for technical/timing patterns
+# -----------------------------------------------------------------------------
+
+cat("PART C: Looking for technical or timing patterns\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# If you have completion time data
+if("survey_duration" %in% names(SIMOA)) {
+  cat("Survey duration comparison:\n")
+  SIMOA %>%
+    filter(CISS_last_item > 0) %>%
+    group_by(stopped_at_11) %>%
+    summarise(
+      n = n(),
+      mean_duration = mean(survey_duration, na.rm = TRUE),
+      sd_duration = sd(survey_duration, na.rm = TRUE)
+    ) %>%
+    print()
+  cat("\n")
+}
+
+# Check if there's a day-of-week pattern
+if("completion_date" %in% names(SIMOA)) {
+  SIMOA <- SIMOA %>%
+    mutate(day_of_week = weekdays(completion_date))
+  
+  cat("Distribution by day of week:\n")
+  table(SIMOA$stopped_at_11, SIMOA$day_of_week) %>% print()
+  cat("\n")
+}
+
+# -----------------------------------------------------------------------------
+# D. Examine CISS item 11 specifically
+# -----------------------------------------------------------------------------
+
+cat("PART D: Examining CISS item 11 content\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("CISS Item 11 asks about: [INSERT ACTUAL QUESTION TEXT]\n\n")
+cat("Potential issues to consider:\n")
+cat("  [ ] Question is confusing or sensitive\n")
+cat("  [ ] Page break after item 11\n")
+cat("  [ ] Response format changes after item 11\n")
+cat("  [ ] Technical glitch in survey platform\n")
+cat("  [ ] Fatigue effect (item 11 is midpoint)\n\n")
+
+# Check if items after 11 are different
+cat("Response rate by CISS item:\n")
+response_rates <- sapply(paste0("ciss", 1:21), function(var) {
+  sum(!is.na(SIMOA[[var]])) / nrow(SIMOA) * 100
+})
+names(response_rates) <- paste0("Item ", 1:21)
+print(round(response_rates, 1))
+cat("\n")
+
+# Is there a sharp drop after item 11?
+drop_at_11 <- response_rates[11] - response_rates[12]
+if(drop_at_11 > 5) {
+  cat("⚠ SHARP DROP of", round(drop_at_11, 1), "% between items 11 and 12\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# E. Your documented findings and decision
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("YOUR FINDINGS AND DECISION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("FINDINGS:\n")
+cat("1. Pattern identified: [DESCRIBE WHAT YOU FOUND]\n")
+cat("   - Demographics: [Same/Different between groups]\n")
+cat("   - Early scale scores: [Same/Different]\n")
+cat("   - Technical factors: [Any glitches/patterns found]\n\n")
+
+cat("2. Most likely explanation: [YOUR ASSESSMENT]\n")
+cat("   [ ] Survey page break/design issue\n")
+cat("   [ ] Participant fatigue (midpoint dropout)\n")
+cat("   [ ] Systematic bias (certain people more likely to stop)\n")
+cat("   [ ] Technical glitch\n")
+cat("   [ ] Random/unexplainable\n\n")
+
+cat("DECISION FOR ANALYSIS:\n")
+cat("Based on these findings, I will:\n")
+cat("[ ] Option A: Proceed with imputation (pattern seems random/technical)\n")
+cat("[ ] Option B: Run sensitivity analysis (pattern is concerning)\n")
+cat("[ ] Option C: Drop CISS entirely (pattern is MNAR and unexplainable)\n\n")
+
+cat("JUSTIFICATION:\n")
+cat("[WRITE YOUR JUSTIFICATION HERE BASED ON FINDINGS]\n\n")
+
+# Save this decision for later
+CISS_decision <- "proceed_with_sensitivity"  # Change this based on your decision
+# Options: "proceed_with_imputation", "proceed_with_sensitivity", "drop_CISS"
+
+saveRDS(list(
+  decision = CISS_decision,
+  n_stopped_11 = n_stopped_11,
+  comparison_table = tab_stopper
+), "CISS_investigation_results.rds")
+
+cat("✓ Investigation complete. Results saved.\n\n")
+```
+
+
+
+## Personality Missingness
+
+```{r}
+#==============================================================================
+# CHUNK 2: COMPREHENSIVE MISSINGNESS DIAGNOSTICS
+#==============================================================================
+# Purpose: Test MAR vs MNAR assumptions for all personality scales
+# This determines which variables to include in imputation and whether
+# you need sensitivity analyses for MNAR
+#==============================================================================
+
+library(tidyverse)
+library(naniar)
+library(mice)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 2: MISSINGNESS PATTERN ANALYSIS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# -----------------------------------------------------------------------------
+# A. Visualize missing data patterns
+# -----------------------------------------------------------------------------
+
+cat("PART A: Visualizing missingness patterns\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Select personality scales for visualization
+personality_items <- SIMOA %>%
+  select(dbas1:dbas_16, reserved:imagination, surps1:surps23, ciss1:ciss21)
+
+# Missingness heatmap
+cat("Creating missingness heatmap...\n")
+png("missingness_heatmap.png", width = 1400, height = 800, res = 120)
+vis_miss(personality_items, cluster = TRUE)
+dev.off()
+cat("✓ Saved: missingness_heatmap.png\n\n")
+
+# Summary statistics
+cat("Missingness by scale:\n")
+miss_summary <- data.frame(
+  Scale = c("DBAS (16 items)", "BFI (10 items)", "SURPS (23 items)", "CISS (21 items)"),
+  N_Missing = c(
+    sum(is.na(SIMOA$dbas1)),
+    sum(is.na(SIMOA$reserved)),
+    sum(is.na(SIMOA$surps1)),
+    sum(is.na(SIMOA$ciss1))
+  ),
+  Percent = c(
+    round(100 * mean(is.na(SIMOA$dbas1)), 1),
+    round(100 * mean(is.na(SIMOA$reserved)), 1),
+    round(100 * mean(is.na(SIMOA$surps1)), 1),
+    round(100 * mean(is.na(SIMOA$ciss1)), 1)
+  )
+)
+print(miss_summary)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# B. Create missingness indicators for each scale
+# -----------------------------------------------------------------------------
+
+cat("PART B: Creating missingness indicators\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+SIMOA <- SIMOA %>%
+  mutate(
+    miss_DBAS = ifelse(is.na(dbas1), 1, 0),
+    miss_BFI = ifelse(is.na(reserved), 1, 0),
+    miss_SURPS = ifelse(is.na(surps1), 1, 0),
+    miss_CISS = ifelse(is.na(ciss1), 1, 0),
+    miss_ANY_personality = ifelse(miss_DBAS + miss_BFI + miss_SURPS + miss_CISS > 0, 1, 0),
+    n_personality_missing = miss_DBAS + miss_BFI + miss_SURPS + miss_CISS
+  )
+
+cat("Patterns of missingness:\n")
+print(table(SIMOA$n_personality_missing))
+cat("\n")
+
+cat("People missing at least one scale:", sum(SIMOA$miss_ANY_personality), "\n")
+cat("People with complete personality data:", sum(SIMOA$miss_ANY_personality == 0), "\n\n")
+
+# -----------------------------------------------------------------------------
+# C. Test predictors of missingness (MAR assessment)
+# -----------------------------------------------------------------------------
+
+cat("PART C: Testing predictors of missingness (MAR assessment)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("GOAL: If missingness is predicted by observed variables, MAR is plausible.\n")
+cat("      If not, MNAR is more likely and sensitivity analyses are needed.\n\n")
+
+# Potential predictors of missingness
+predictors_of_miss <- c(
+  "age", "sex", "education", "income", "employment",
+  "phq2_score", "osss_3_score", "med_quant",
+  "gen_health___1", "gen_health___2", "gen_health___3"  # health indicators
+)
+
+# Function to test predictors
+test_missingness_predictors <- function(miss_var, data, predictors) {
+  
+  # Remove predictors that don't exist
+  available_preds <- predictors[predictors %in% names(data)]
+  
+  # Formula
+  formula_str <- paste(miss_var, "~", paste(available_preds, collapse = " + "))
+  
+  # Fit model
+  model <- glm(as.formula(formula_str), data = data, family = binomial())
+  
+  # Get results
+  results <- broom::tidy(model) %>%
+    filter(term != "(Intercept)") %>%
+    mutate(
+      OR = exp(estimate),
+      sig = ifelse(p.value < 0.05, "*", "")
+    ) %>%
+    arrange(p.value)
+  
+  # Significant predictors
+  sig_preds <- results %>%
+    filter(p.value < 0.05) %>%
+    pull(term)
+  
+  return(list(
+    model = model,
+    results = results,
+    significant = sig_preds
+  ))
+}
+
+# Test for each scale
+cat("Testing predictors of DBAS missingness:\n")
+miss_DBAS_test <- test_missingness_predictors("miss_DBAS", SIMOA, predictors_of_miss)
+print(miss_DBAS_test$results %>% select(term, OR, p.value, sig))
+cat("\n")
+
+cat("Testing predictors of BFI missingness:\n")
+miss_BFI_test <- test_missingness_predictors("miss_BFI", SIMOA, predictors_of_miss)
+print(miss_BFI_test$results %>% select(term, OR, p.value, sig))
+cat("\n")
+
+cat("Testing predictors of SURPS missingness:\n")
+miss_SURPS_test <- test_missingness_predictors("miss_SURPS", SIMOA, predictors_of_miss)
+print(miss_SURPS_test$results %>% select(term, OR, p.value, sig))
+cat("\n")
+
+cat("Testing predictors of CISS missingness:\n")
+miss_CISS_test <- test_missingness_predictors("miss_CISS", SIMOA, predictors_of_miss)
+print(miss_CISS_test$results %>% select(term, OR, p.value, sig))
+cat("\n")
+
+# Compile all significant predictors
+all_sig_predictors <- unique(c(
+  miss_DBAS_test$significant,
+  miss_BFI_test$significant,
+  miss_SURPS_test$significant,
+  miss_CISS_test$significant
+))
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("SIGNIFICANT PREDICTORS OF MISSINGNESS (to include in imputation):\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+if(length(all_sig_predictors) > 0) {
+  cat("The following variables predict who has missing personality data:\n")
+  for(pred in all_sig_predictors) {
+    cat("  •", pred, "\n")
+  }
+  cat("\n")
+  cat("INTERPRETATION: Missingness is related to observed variables.\n")
+  cat("→ MAR assumption is plausible (conditional on these predictors)\n")
+  cat("→ Include these variables in imputation model\n")
+  cat("→ Still recommend sensitivity analysis for robustness\n\n")
+  
+  missingness_mechanism <- "MAR"
+  
+} else {
+  cat("⚠ NO significant predictors of missingness found.\n\n")
+  cat("INTERPRETATION: Missingness appears random or related to unobserved factors.\n")
+  cat("→ Either MCAR (completely random) or MNAR (related to unmeasured factors)\n")
+  cat("→ Sensitivity analyses are CRITICAL\n\n")
+  
+  missingness_mechanism <- "MCAR_or_MNAR"
+}
+
+# -----------------------------------------------------------------------------
+# D. Advanced MNAR check: Compare completers vs non-completers on early scales
+# -----------------------------------------------------------------------------
+
+cat("PART D: Advanced MNAR diagnostic\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("LOGIC: If people who skip late scales differ on EARLY scales in ways\n")
+cat("       not explained by demographics/health, MNAR is more plausible.\n\n")
+
+# Do completers vs non-completers differ on early survey items?
+# (after adjusting for demographics)
+
+early_scales <- c("phq2_score", "osss_3_score")
+
+for(scale in early_scales) {
+  if(scale %in% names(SIMOA)) {
+    
+    cat("Comparing", scale, "by personality completion status:\n")
+    
+    # Crude comparison
+    crude_test <- t.test(
+      SIMOA[[scale]][SIMOA$miss_ANY_personality == 0],
+      SIMOA[[scale]][SIMOA$miss_ANY_personality == 1]
+    )
+    
+    cat("  Completers mean:", round(mean(SIMOA[[scale]][SIMOA$miss_ANY_personality == 0], na.rm = TRUE), 2), "\n")
+    cat("  Non-completers mean:", round(mean(SIMOA[[scale]][SIMOA$miss_ANY_personality == 1], na.rm = TRUE), 2), "\n")
+    cat("  p-value:", format.pval(crude_test$p.value, digits = 3), "\n\n")
+    
+    if(crude_test$p.value < 0.05) {
+      cat("  ⚠ Significant difference suggests possible MNAR component\n\n")
+    }
+  }
+}
+
+# -----------------------------------------------------------------------------
+# E. Summary and recommendations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("MISSINGNESS DIAGNOSTIC SUMMARY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("1. MECHANISM ASSESSMENT:\n")
+cat("   Most likely mechanism:", missingness_mechanism, "\n\n")
+
+cat("2. VARIABLES TO INCLUDE IN IMPUTATION MODEL:\n")
+if(length(all_sig_predictors) > 0) {
+  cat("   Mandatory (predict missingness):\n")
+  for(pred in all_sig_predictors) {
+    cat("     •", pred, "\n")
+  }
+} else {
+  cat("   No strong predictors identified.\n")
+  cat("   Use standard auxiliary variables (age, sex, education, health)\n")
+}
+cat("\n")
+
+cat("3. RECOMMENDATION:\n")
+if(missingness_mechanism == "MAR") {
+  cat("   ✓ Proceed with multiple imputation\n")
+  cat("   ✓ Include all significant predictors\n")
+  cat("   ⚠ Still run sensitivity analyses for robustness\n\n")
+} else {
+  cat("   ⚠ MNAR is plausible\n")
+  cat("   ✓ Proceed with imputation BUT...\n")
+  cat("   ✓ Sensitivity analyses are MANDATORY:\n")
+  cat("      - Complete-case analysis\n")
+  cat("      - Exclude late scales\n")
+  cat("      - Delta-MNAR perturbations\n\n")
+}
+
+# Save results
+saveRDS(list(
+  mechanism = missingness_mechanism,
+  significant_predictors = all_sig_predictors,
+  DBAS_model = miss_DBAS_test,
+  BFI_model = miss_BFI_test,
+  SURPS_model = miss_SURPS_test,
+  CISS_model = miss_CISS_test
+), "missingness_diagnostics.rds")
+
+cat("✓ Missingness diagnostics complete. Results saved.\n\n")
+```
+
+## Variable Reduction
+
+```{r}
+#==============================================================================
+# CHUNK 3: VARIABLE REDUCTION AND COMPOSITE VALIDATION
+#==============================================================================
+# Purpose: Reduce from ~570 variables to ~30-40 predictors using:
+#          1) Theory (drop non-essential variables)
+#          2) Empirical validation (check correlations and reliability)
+#          3) Sparse category collapsing
+# This addresses Dr. Yakovenko's concern about arbitrary variable lumping
+#==============================================================================
+
+library(tidyverse)
+library(psych)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 3: THEORY-DRIVEN VARIABLE REDUCTION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("STARTING POINT:\n")
+cat("  Total variables in dataset:", ncol(SIMOA), "\n")
+cat("  Goal: Reduce to 30-40 predictors for modeling\n\n")
+
+# -----------------------------------------------------------------------------
+# A. Drop variables not central to research question
+# -----------------------------------------------------------------------------
+
+cat("PART A: Dropping non-essential variables\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("DROPPING:\n")
+cat("  • All BZRA-specific dosing variables (111-228, 229-345)\n")
+cat("  • Substance use variables (not central to question)\n")
+cat("  • Sex-specific alcohol variables (methodological issues)\n")
+cat("  • Living situation checkboxes (redundant)\n")
+cat("  • General health checkboxes (use n_health_conditions instead)\n\n")
+
+# Variables to keep for analysis
+core_demographics <- c(
+  "age", "sex", "gender", "prov_terr", "education", "employment",
+  "driving_freq", "income"
+)
+
+social_support <- c("oslo1", "oslo2", "oslo3", "osss_3_score")
+
+mental_health <- c("phq1", "phq2", "phq2_score")
+
+physical_health <- c("med_quant", "mobil_aid", "fall", "n_health_conditions")
+
+# Medication burden items
+med_burden_items <- c("med_burden_1", "med_burden2", "medburden_3", "med_burden_4")
+
+# Sleep aids (keep only these specific ones, not all substance use)
+sleep_aids <- c("alc_sleep", "can_sleep", "melatonin_use", "op_sleep", 
+                "quet_use", "traz_use", "otc_use")
+
+# Adverse effects items (will validate as composites)
+side_effects_items <- c("side_effects_1", "side_effects_2", "side_effects_3", "side_effects_4")
+safety_items <- c("safety_1", "safety_2", "safety_3", "safety_4")
+adl_items <- c("adls_1", "adls_2")
+dependence_items <- c("dependence_1", "dependence_2", "dependence_3")
+
+# Personality items (will process after imputation)
+dbas_items <- paste0("dbas", c(1:16))  # Note: dbas1 not dbas_1
+bfi_items <- c("reserved", "trusting", "lazy", "relaxed", "few_interests",
+               "outgoing", "find_fault", "thorough", "nervous", "imagination")
+surps_items <- paste0("surps", 1:23)
+ciss_items <- paste0("ciss", 1:21)
+
+# Outcome
+outcome <- "scrn_stopped_bzra"
+
+# Compile all variables to keep
+vars_to_keep <- c(
+  outcome,
+  core_demographics,
+  social_support,
+  mental_health,
+  physical_health,
+  med_burden_items,
+  sleep_aids,
+  side_effects_items,
+  safety_items,
+  adl_items,
+  dependence_items,
+  dbas_items,
+  bfi_items,
+  surps_items,
+  ciss_items,
+  all_sig_predictors  # From missingness analysis
+)
+
+# Remove duplicates
+vars_to_keep <- unique(vars_to_keep)
+
+# Check which exist in SIMOA
+vars_available <- vars_to_keep[vars_to_keep %in% names(SIMOA)]
+vars_missing <- vars_to_keep[!vars_to_keep %in% names(SIMOA)]
+
+if(length(vars_missing) > 0) {
+  cat("⚠ WARNING: These variables not found in dataset:\n")
+  for(v in vars_missing) {
+    cat("   -", v, "\n")
+  }
+  cat("\n")
+}
+
+# Create analysis dataset
+SIMOA_analysis <- SIMOA %>%
+  select(all_of(vars_available))
+
+cat("AFTER DROPPING:\n")
+cat("  Variables retained:", ncol(SIMOA_analysis), "\n")
+cat("  (This includes individual items to be combined)\n\n")
+
+# -----------------------------------------------------------------------------
+# B. Empirical validation of composite scores
+# -----------------------------------------------------------------------------
+
+cat("PART B: Validating composite scores (items from same instrument)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("PRINCIPLE: Only combine items if:\n")
+cat("  1) From same validated instrument\n")
+cat("  2) Correlated with each other (mean r > .30)\n")
+cat("  3) Reliable (Cronbach's α > .70)\n\n")
+
+# Function to validate and create composite
+validate_and_create_composite <- function(data, items, composite_name) {
+  
+  cat("\n", composite_name, "\n")
+  cat(rep("─", nchar(composite_name)), "\n", sep = "")
+  
+  # Check if items exist
+  available_items <- items[items %in% names(data)]
+  
+  if(length(available_items) < 2) {
+    cat("  ⚠ Insufficient items available (n =", length(available_items), ")\n")
+    return(NULL)
+  }
+  
+  # Get complete cases
+  comp_data <- data %>%
+    select(all_of(available_items)) %>%
+    na.omit()
+  
+  if(nrow(comp_data) < 50) {
+    cat("  ⚠ Insufficient complete cases (n =", nrow(comp_data), ")\n")
+    return(NULL)
+  }
+  
+  cat("  Items:", length(available_items), "\n")
+  cat("  Complete cases:", nrow(comp_data), "\n")
+  
+  # Correlation matrix
+  cor_mat <- cor(comp_data, use = "complete.obs")
+  
+  # Mean inter-item correlation
+  lower_tri <- cor_mat[lower.tri(cor_mat)]
+  mean_r <- mean(lower_tri)
+  
+  cat("  Mean inter-item correlation:", round(mean_r, 3))
+  
+  if(mean_r < 0.15) {
+    cat(" (LOW - questionable)\n")
+  } else if(mean_r < 0.30) {
+    cat(" (ACCEPTABLE)\n")
+  } else if(mean_r < 0.50) {
+    cat(" (GOOD)\n")
+  } else } else {
+    cat(" (HIGH - may be redundant)\n")
+  }
+  
+  # Cronbach's alpha
+  alpha_result <- psych::alpha(comp_data, check.keys = TRUE)
+  alpha_value <- alpha_result$total$raw_alpha
+  
+  cat("  Cronbach's α:", round(alpha_value, 3))
+  
+  if(alpha_value < 0.60) {
+    cat(" (POOR - do NOT combine)\n")
+    return(NULL)
+  } else if(alpha_value < 0.70) {
+    cat(" (QUESTIONABLE)\n")
+  } else if(alpha_value < 0.80) {
+    cat(" (ACCEPTABLE)\n")
+  } else if(alpha_value < 0.90) {
+    cat(" (GOOD)\n")
+  } else {
+    cat(" (EXCELLENT)\n")
+  }
+  
+  # Decision
+  if(alpha_value >= 0.70) {
+    cat("  ✓ DECISION: Combine into composite\n")
+    decision <- "combine"
+  } else {
+    cat("  ✗ DECISION: Keep items separate (α too low)\n")
+    decision <- "separate"
+  }
+  
+  return(list(
+    items = available_items,
+    n_items = length(available_items),
+    mean_r = mean_r,
+    alpha = alpha_value,
+    decision = decision
+  ))
+}
+
+# Validate each composite
+cat("VALIDATING ADVERSE EFFECTS COMPOSITES:\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+
+side_effects_valid <- validate_and_create_composite(
+  SIMOA_analysis, 
+  side_effects_items, 
+  "Side Effects (4 items)"
+)
+
+safety_valid <- validate_and_create_composite(
+  SIMOA_analysis, 
+  safety_items, 
+  "Safety Concerns (4 items)"
+)
+
+adl_valid <- validate_and_create_composite(
+  SIMOA_analysis, 
+  adl_items, 
+  "ADL Impact (2 items)"
+)
+
+dependence_valid <- validate_and_create_composite(
+  SIMOA_analysis, 
+  dependence_items, 
+  "Dependence (3 items)"
+)
+
+med_burden_valid <- validate_and_create_composite(
+  SIMOA_analysis, 
+  med_burden_items, 
+  "Medication Burden (4 items)"
+)
+
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# C. Create composites where validated
+# -----------------------------------------------------------------------------
+
+cat("PART C: Creating validated composites\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Create composites for those with α >= 0.70
+if(!is.null(side_effects_valid) && side_effects_valid$decision == "combine") {
+  SIMOA_analysis <- SIMOA_analysis %>%
+    rowwise() %>%
+    mutate(side_effects_composite = mean(c_across(all_of(side_effects_items)), na.rm = TRUE)) %>%
+    ungroup()
+  cat("✓ Created: side_effects_composite (α =", round(side_effects_valid$alpha, 3), ")\n")
+}
+
+if(!is.null(safety_valid) && safety_valid$decision == "combine") {
+  SIMOA_analysis <- SIMOA_analysis %>%
+    rowwise() %>%
+    mutate(safety_composite = mean(c_across(all_of(safety_items)), na.rm = TRUE)) %>%
+    ungroup()
+  cat("✓ Created: safety_composite (α =", round(safety_valid$alpha, 3), ")\n")
+}
+
+if(!is.null(adl_valid) && adl_valid$decision == "combine") {
+  SIMOA_analysis <- SIMOA_analysis %>%
+    rowwise() %>%
+    mutate(adl_composite = mean(c_across(all_of(adl_items)), na.rm = TRUE)) %>%
+    ungroup()
+  cat("✓ Created: adl_composite (α =", round(adl_valid$alpha, 3), ")\n")
+}
+
+if(!is.null(dependence_valid) && dependence_valid$decision == "combine") {
+  SIMOA_analysis <- SIMOA_analysis %>%
+    rowwise() %>%
+    mutate(dependence_composite = mean(c_across(all_of(dependence_items)), na.rm = TRUE)) %>%
+    ungroup()
+  cat("✓ Created: dependence_composite (α =", round(dependence_valid$alpha, 3), ")\n")
+}
+
+if(!is.null(med_burden_valid) && med_burden_valid$decision == "combine") {
+  SIMOA_analysis <- SIMOA_analysis %>%
+    rowwise() %>%
+    mutate(med_burden_composite = mean(c_across(all_of(med_burden_items)), na.rm = TRUE)) %>%
+    ungroup()
+  cat("✓ Created: med_burden_composite (α =", round(med_burden_valid$alpha, 3), ")\n")
+}
+
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# D. Handle sparse categorical variables
+# -----------------------------------------------------------------------------
+
+cat("PART D: Collapsing sparse categorical variables\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("Checking for sparse categories (< 5% of sample)...\n\n")
+
+# Check each categorical variable
+categorical_vars <- c("sex", "gender", "prov_terr", "education", "employment", "income")
+
+for(var in categorical_vars) {
+  if(var %in% names(SIMOA_analysis)) {
+    
+    freq_table <- table(SIMOA_analysis[[var]], useNA = "ifany")
+    prop_table <- prop.table(freq_table) * 100
+    
+    # Check for sparse categories
+    sparse_categories <- names(prop_table)[prop_table < 5 & prop_table > 0]
+    
+    if(length(sparse_categories) > 0) {
+      cat(var, "- Sparse categories found:\n")
+      print(prop_table)
+      cat("  → Consider collapsing or creating 'Other' category\n\n")
+    }
+  }
+}
+
+# Example: Collapse province/territory into regions
+if("prov_terr" %in% names(SIMOA_analysis)) {
+  SIMOA_analysis <- SIMOA_analysis %>%
+    mutate(
+      region = case_when(
+        prov_terr %in% c(1, 2, 3, 12) ~ "Prairies",  # AB, BC, MB, SK
+        prov_terr %in% c(9, 11) ~ "Central",        # ON, QC
+        prov_terr %in% c(4, 5, 7, 10) ~ "Atlantic", # NB, NL, NS, PE
+        TRUE ~ "Other"
+      )
+    )
+  cat("✓ Created: region (collapsed from prov_terr)\n\n")
+}
+
+# Example: Collapse education into broad categories
+if("education" %in% names(SIMOA_analysis)) {
+  SIMOA_analysis <- SIMOA_analysis %>%
+    mutate(
+      education_grouped = case_when(
+        education %in% c(1, 2, 3) ~ "High School or Less",
+        education %in% c(4, 5) ~ "Post-Secondary",
+        TRUE ~ as.character(education)
+      )
+    )
+  cat("✓ Created: education_grouped (collapsed)\n\n")
+}
+
+# Example: Collapse employment
+if("employment" %in% names(SIMOA_analysis)) {
+  SIMOA_analysis <- SIMOA_analysis %>%
+    mutate(
+      employment_grouped = case_when(
+        employment %in% c(0, 3, 4) ~ "Not Working",
+        employment %in% c(1, 2) ~ "Working",
+        TRUE ~ as.character(employment)
+      )
+    )
+  cat("✓ Created: employment_grouped (collapsed)\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# E. Define final predictor set (pre-imputation)
+# -----------------------------------------------------------------------------
+
+cat("PART E: Final predictor set definition\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Core demographics (use collapsed versions where available)
+final_demographics <- c(
+  "age", "sex", "gender", "region", "education_grouped", 
+  "employment_grouped", "income", "driving_freq"
+)
+
+# Clinical/health
+final_clinical <- c(
+  "phq2_score", "osss_3_score", "med_quant", "n_health_conditions"
+)
+
+# Composites (only those successfully created)
+final_composites <- c(
+  if(exists("side_effects_composite", where = SIMOA_analysis)) "side_effects_composite" else NULL,
+  if(exists("safety_composite", where = SIMOA_analysis)) "safety_composite" else NULL,
+  if(exists("adl_composite", where = SIMOA_analysis)) "adl_composite" else NULL,
+  if(exists("dependence_composite", where = SIMOA_analysis)) "dependence_composite" else NULL,
+  if(exists("med_burden_composite", where = SIMOA_analysis)) "med_burden_composite" else NULL
+)
+
+# Sleep aids (keep as individual variables - not many of them)
+final_sleep_aids <- sleep_aids
+
+# Personality items (will be imputed then processed)
+final_personality <- c(dbas_items, bfi_items, surps_items, ciss_items)
+
+# Compile all
+all_predictor_vars <- c(
+  final_demographics,
+  final_clinical,
+  final_composites,
+  final_sleep_aids,
+  final_personality
+)
+
+# Remove any that don't exist
+all_predictor_vars <- all_predictor_vars[all_predictor_vars %in% names(SIMOA_analysis)]
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("FINAL VARIABLE COUNT (BEFORE IMPUTATION):\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("  Demographics:", length(final_demographics[final_demographics %in% names(SIMOA_analysis)]), "\n")
+cat("  Clinical/Health:", length(final_clinical[final_clinical %in% names(SIMOA_analysis)]), "\n")
+cat("  Composites:", length(final_composites), "\n")
+cat("  Sleep Aids:", length(final_sleep_aids[final_sleep_aids %in% names(SIMOA_analysis)]), "\n")
+cat("  Personality (items):", length(final_personality[final_personality %in% names(SIMOA_analysis)]), "\n")
+cat("  ─────────────────────────────────\n")
+cat("  TOTAL:", length(all_predictor_vars), "\n\n")
+
+cat("NOTE: Personality items will be combined into subscales AFTER imputation\n\n")
+
+# Calculate obs:predictor ratio
+n_obs <- nrow(SIMOA_analysis)
+n_pred_current <- length(all_predictor_vars)
+ratio_current <- round(n_obs / n_pred_current, 1)
+
+cat("SAMPLE SIZE ASSESSMENT:\n")
+cat("  Observations:", n_obs, "\n")
+cat("  Current predictors:", n_pred_current, "\n")
+cat("  Ratio:", ratio_current, ":1")
+
+if(ratio_current >= 10) {
+  cat(" ✓ (EXCELLENT)\n\n")
+} else if(ratio_current >= 5) {
+  cat(" ✓ (ACCEPTABLE)\n\n")
+} else {
+  cat(" ⚠ (LOW - further reduction needed)\n\n")
+}
+
+# Save results
+saveRDS(list(
+  composite_validation = list(
+    side_effects = side_effects_valid,
+    safety = safety_valid,
+    adl = adl_valid,
+    dependence = dependence_valid,
+    med_burden = med_burden_valid
+  ),
+  final_predictors = all_predictor_vars,
+  analysis_data = SIMOA_analysis
+), "variable_reduction_results.rds")
+
+cat("✓ Variable reduction complete. Results saved.\n\n")
+```
+
+## Multiple Imputation
+
+```{r}
+#==============================================================================
+# CHUNK 4: MULTIPLE IMPUTATION WITH PROPER AUXILIARY VARIABLES
+#==============================================================================
+# Purpose: Impute missing personality data using all significant predictors
+#          of missingness (from Chunk 2) to make MAR assumption defensible
+# Strategy: Impute at ITEM level, create subscales AFTER imputation
+# m = 30 imputations (appropriate for ~15% missingness)
+#==============================================================================
+
+library(mice)
+library(tidyverse)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 4: MULTIPLE IMPUTATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load results from previous chunks
+var_reduction <- readRDS("variable_reduction_results.rds")
+miss_diagnostics <- readRDS("missingness_diagnostics.rds")
+
+SIMOA_analysis <- var_reduction$analysis_data
+all_sig_predictors <- miss_diagnostics$significant_predictors
+
+# -----------------------------------------------------------------------------
+# A. Prepare data for imputation
+# -----------------------------------------------------------------------------
+
+cat("PART A: Preparing imputation model\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Variables to include in imputation model
+imputation_vars <- c(
+  outcome,                    # Include outcome (don't impute it)
+  all_predictor_vars,        # All predictors
+  all_sig_predictors         # Auxiliary variables that predict missingness
+)
+
+# Remove duplicates
+imputation_vars <- unique(imputation_vars)
+
+# Create imputation dataset
+df_imp <- SIMOA_analysis %>%
+  select(all_of(imputation_vars[imputation_vars %in% names(SIMOA_analysis)]))
+
+cat("Imputation model includes:\n")
+cat("  Total variables:", ncol(df_imp), "\n")
+cat("  Outcome (not imputed):", outcome, "\n")
+cat("  Predictors:", length(all_predictor_vars), "\n")
+cat("  Auxiliary variables:", length(all_sig_predictors), "\n\n")
+
+cat("Missing data summary:\n")
+missing_counts <- colSums(is.na(df_imp))
+missing_vars <- names(missing_counts[missing_counts > 0])
+cat("  Variables with missing data:", length(missing_vars), "\n")
+cat("  Total missing cells:", sum(missing_counts), 
+    "(", round(100 * sum(missing_counts) / (nrow(df_imp) * ncol(df_imp)), 2), "% of all data)\n\n")
+
+# -----------------------------------------------------------------------------
+# B. Configure MICE imputation methods
+# -----------------------------------------------------------------------------
+
+cat("PART B: Configuring imputation methods\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Initialize
+init <- mice(df_imp, maxit = 0, print = FALSE)
+meth <- init$method
+pred <- init$predictorMatrix
+
+cat("Setting imputation methods:\n")
+
+# Continuous variables → PMM (predictive mean matching)
+continuous_vars <- c(
+  "age", "phq2_score", "osss_3_score", "med_quant",
+  dbas_items, surps_items, ciss_items,
+  names(df_imp)[grep("composite", names(df_imp))]
+)
+
+for(var in continuous_vars) {
+  if(var %in% names(meth) && meth[var] != "") {
+    meth[var] <- "pmm"
+  }
+}
+cat("  Continuous (PMM):", sum(meth == "pmm"), "variables\n")
+
+# Binary variables → Logistic regression
+binary_vars <- c("sex")
+for(var in binary_vars) {
+  if(var %in% names(meth) && meth[var] != "") {
+    meth[var] <- "logreg"
+  }
+}
+cat("  Binary (logreg):", sum(meth == "logreg"), "variables\n")
+
+# Unordered categorical → Polytomous regression
+unordered_cat <- c("gender", "region")
+for(var in unordered_cat) {
+  if(var %in% names(meth) && meth[var] != "") {
+    meth[var] <- "polyreg"
+  }
+}
+cat("  Unordered categorical (polyreg):", sum(meth == "polyreg"), "variables\n")
+
+# Ordered categorical → Proportional odds model
+ordered_cat <- c("education_grouped", "employment_grouped", "income", "driving_freq")
+for(var in ordered_cat) {
+  if(var %in% names(meth) && meth[var] != "") {
+    meth[var] <- "polr"
+  }
+}
+cat("  Ordered categorical (polr):", sum(meth == "polr"), "variables\n\n")
+
+# Don't impute outcome
+if(outcome %in% names(meth)) {
+  meth[outcome] <- ""
+  cat("✓ Outcome (", outcome, ") will NOT be imputed\n\n", sep = "")
+}
+
+# -----------------------------------------------------------------------------
+# C. Run multiple imputation (m = 30)
+# -----------------------------------------------------------------------------
+
+cat("PART C: Running multiple imputation\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("Configuration:\n")
+cat("  m (number of imputations): 30\n")
+cat("  maxit (iterations): 20\n")
+cat("  seed: 12345 (for reproducibility)\n\n")
+
+cat("⏱ ESTIMATED TIME: 10-20 minutes\n")
+cat("(Grab a coffee - this takes a while!)\n\n")
+
+set.seed(12345)
+start_time <- Sys.time()
+
+mids_obj <- mice(
+  df_imp,
+  m = 30,
+  method = meth,
+  predictorMatrix = pred,
+  maxit = 20,
+  seed = 12345,
+  printFlag = TRUE  # Show progress
+)
+
+end_time <- Sys.time()
+time_taken <- round(difftime(end_time, start_time, units = "mins"), 1)
+
+cat("\n✓ Imputation complete!\n")
+cat("  Time taken:", time_taken, "minutes\n\n")
+
+# -----------------------------------------------------------------------------
+# D. Diagnostic checks
+# -----------------------------------------------------------------------------
+
+cat("PART D: Imputation diagnostics\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Check convergence - trace plots
+cat("Creating convergence plots...\n")
+png("imputation_convergence.png", width = 1600, height = 1200, res = 120)
+plot(mids_obj, layout = c(4, 4))
+dev.off()
+cat("✓ Saved: imputation_convergence.png\n")
+cat("  → Check that lines are mixing well (overlapping, no trends)\n\n")
+
+# Check distributions - density plots
+cat("Creating distribution comparison plots...\n")
+
+# Select a few key variables to check
+check_vars <- c("dbas1", "reserved", "surps1", "ciss1", "age", "phq2_score")
+check_vars <- check_vars[check_vars %in% names(df_imp)]
+
+if(length(check_vars) > 0) {
+  png("imputation_distributions.png", width = 1600, height = 1200, res = 120)
+  densityplot(mids_obj, ~ dbas1 + reserved + surps1 + ciss1 + age + phq2_score)
+  dev.off()
+  cat("✓ Saved: imputation_distributions.png\n")
+  cat("  → Check that imputed (red) and observed (blue) distributions are similar\n\n")
+}
+
+# Check for any logged events (warnings during imputation)
+if(nrow(mids_obj$loggedEvents) > 0) {
+  cat("⚠ WARNING: Logged events during imputation:\n")
+  print(mids_obj$loggedEvents)
+  cat("\n")
+} else {
+  cat("✓ No warnings during imputation\n\n")
+}
+
+# Check completeness
+first_imputed <- complete(mids_obj, 1)
+remaining_na <- sum(is.na(first_imputed))
+
+if(remaining_na == 0) {
+  cat("✓ SUCCESS: All missing values imputed\n\n")
+} else {
+  cat("⚠ WARNING:", remaining_na, "missing values remain\n")
+  cat("  Variables still missing:\n")
+  still_missing <- colSums(is.na(first_imputed))
+  print(still_missing[still_missing > 0])
+  cat("\n")
+}
+
+# -----------------------------------------------------------------------------
+# E. Save imputation object
+# -----------------------------------------------------------------------------
+
+cat("PART E: Saving imputation results\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+saveRDS(mids_obj, "imputed_data_mids.rds")
+cat("✓ Saved: imputed_data_mids.rds (mids object)\n")
+
+# Also save one completed dataset for quick checks
+write.csv(first_imputed, "imputed_data_example.csv", row.names = FALSE)
+cat("✓ Saved: imputed_data_example.csv (first imputation for reference)\n\n")
+
+# -----------------------------------------------------------------------------
+# F. Summary
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("MULTIPLE IMPUTATION SUMMARY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("IMPUTATION COMPLETED:\n")
+cat("  • Created 30 imputed datasets\n")
+cat("  • Each with", nrow(first_imputed), "observations\n")
+cat("  • And", ncol(first_imputed), "variables\n")
+cat("  • Took", time_taken, "minutes\n\n")
+
+cat("NEXT STEPS:\n")
+cat("  1. Review diagnostic plots:\n")
+cat("     - imputation_convergence.png (should show good mixing)\n")
+cat("     - imputation_distributions.png (imputed should match observed)\n")
+cat("  2. If plots look good → proceed to subscale creation\n")
+cat("  3. If plots show problems → adjust imputation model and re-run\n\n")
+
+cat("IMPORTANT:\n")
+cat("  • Subscales will be created AFTER this step\n")
+cat("  • VSURF will be run on personality subscales + other predictors\n")
+cat("  • All analyses will use pooled results across 30 imputations\n\n")
+
+cat("✓ Multiple imputation complete!\n\n")
+```
+
+## Subscale Creation
+
+```{r}
+#==============================================================================
+# CHUNK 5: CREATE PERSONALITY SUBSCALES FROM IMPUTED DATA
+#==============================================================================
+# Purpose: Convert individual personality items into validated subscale scores
+#          Different approach for each measure based on validation status
+# Strategy: Perform scoring in each imputed dataset separately
+#==============================================================================
+
+library(mice)
+library(tidyverse)
+library(psych)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 5: PERSONALITY SUBSCALE CREATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load imputed data
+mids_obj <- readRDS("imputed_data_mids.rds")
+CISS_investigation <- readRDS("CISS_investigation_results.rds")
+
+cat("Working with", mids_obj$m, "imputed datasets\n\n")
+
+# -----------------------------------------------------------------------------
+# A. BFI-10: Big Five Personality (validated 10-item version)
+# -----------------------------------------------------------------------------
+
+cat("PART A: BFI-10 (Big Five Inventory - 10 items)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("BFI-10 Structure:\n")
+cat("  • Extraversion: reserved (R), outgoing\n")
+cat("  • Agreeableness: find_fault (R), trusting\n")
+cat("  • Conscientiousness: lazy (R), thorough\n")
+cat("  • Neuroticism: relaxed (R), nervous\n")
+cat("  • Openness: few_interests (R), imagination\n")
+cat("  (R) = Reverse coded\n\n")
+
+# Process each imputed dataset
+mids_long <- complete(mids_obj, "long", include = TRUE)
+
+mids_long <- mids_long %>%
+  mutate(
+    # Reverse code items (assuming 1-5 scale)
+    # Check your actual scale range and adjust if needed
+    reserved_rev = 6 - reserved,
+    find_fault_rev = 6 - find_fault,
+    lazy_rev = 6 - lazy,
+    relaxed_rev = 6 - relaxed,
+    few_interests_rev = 6 - few_interests,
+    
+    # Create subscales (sum of 2 items each)
+    Extraversion = reserved_rev + outgoing,
+    Agreeableness = find_fault_rev + trusting,
+    Conscientiousness = lazy_rev + thorough,
+    Neuroticism = relaxed_rev + nervous,
+    Openness = few_interests_rev + imagination
+  )
+
+cat("✓ Created BFI-10 subscales (5 traits)\n\n")
+
+# -----------------------------------------------------------------------------
+# B. SURPS: Substance Use Risk Profile Scale (23 items)
+# -----------------------------------------------------------------------------
+
+cat("PART B: SURPS (23 items)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("SURPS Structure:\n")
+cat("  • Impulsivity: 2, 5, 11, 15, 22\n")
+cat("  • Sensation Seeking: 3, 6, 9, 12, 16, 19\n")
+cat("  • Hopelessness: 1(R), 4(R), 7(R), 13(R), 17, 20(R), 23(R)\n")
+cat("  • Anxiety Sensitivity: 8, 10, 14, 18, 21\n")
+cat("  (R) = Reverse coded\n\n")
+
+mids_long <- mids_long %>%
+  mutate(
+    # Reverse code hopelessness items (1-4 scale)
+    surps1_rev = 5 - surps1,
+    surps4_rev = 5 - surps4,
+    surps7_rev = 5 - surps7,
+    surps13_rev = 5 - surps13,
+    surps20_rev = 5 - surps20,
+    surps23_rev = 5 - surps23,
+    
+    # Create subscales (sums)
+    SURPS_Impulsivity = surps2 + surps5 + surps11 + surps15 + surps22,
+    SURPS_Sensation_Seeking = surps3 + surps6 + surps9 + surps12 + surps16 + surps19,
+    SURPS_Hopelessness = surps1_rev + surps4_rev + surps7_rev + surps13_rev + 
+                         surps17 + surps20_rev + surps23_rev,
+    SURPS_Anxiety_Sensitivity = surps8 + surps10 + surps14 + surps18 + surps21
+  )
+
+cat("✓ Created SURPS subscales (4 risk factors)\n\n")
+
+# -----------------------------------------------------------------------------
+# C. DBAS-16: Dysfunctional Beliefs About Sleep (16 items)
+# -----------------------------------------------------------------------------
+
+cat("PART C: DBAS-16 (16 items)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("DBAS-16 Structure (average scores, 0-10 scale):\n")
+cat("  • Consequences: 5, 7, 9, 12, 16 (5 items)\n")
+cat("  • Worry/Helplessness: 3, 4, 8, 10, 11, 14 (6 items)\n")
+cat("  • Expectations: 1, 2 (2 items)\n")
+cat("  • Medication: 6, 13, 15 (3 items)\n")
+cat("  Total score = sum of 4 subscale means\n\n")
+
+mids_long <- mids_long %>%
+  rowwise() %>%
+  mutate(
+    # Calculate subscale means
+    DBAS_Consequences = mean(c(dbas_5, dbas_7, dbas_9, dbas_12, dbas_16), na.rm = FALSE),
+    DBAS_Worry_Helplessness = mean(c(dbas_3, dbas_4, dbas_8, dbas_10, dbas_11, dbas_14), na.rm = FALSE),
+    DBAS_Expectations = mean(c(dbas1, dbas_2), na.rm = FALSE),
+    DBAS_Medications = mean(c(dbas_6, dbas_13, dbas_15), na.rm = FALSE),
+    
+    # Total score
+    DBAS_Total = DBAS_Consequences + DBAS_Worry_Help 
+    
+    # Total score
+    DBAS_Total = DBAS_Consequences + DBAS_Worry_Helplessness + 
+                 DBAS_Expectations + DBAS_Medications
+  ) %>%
+  ungroup()
+
+cat("✓ Created DBAS-16 subscales (4 belief domains + total)\n\n")
+
+# -----------------------------------------------------------------------------
+# D. CISS: Coping Inventory for Stressful Situations (decision-dependent)
+# -----------------------------------------------------------------------------
+
+cat("PART D: CISS (21 items) - DECISION-DEPENDENT\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("Based on your CISS investigation (Chunk 1):\n")
+cat("  Decision:", CISS_investigation$decision, "\n\n")
+
+if(CISS_investigation$decision == "drop_CISS") {
+  
+  cat("DECISION: Drop CISS entirely\n")
+  cat("  → No CISS subscales will be created\n")
+  cat("  → Analysis will proceed without CISS\n\n")
+  
+  created_CISS <- FALSE
+  
+} else if(CISS_investigation$decision == "use_items_1_10") {
+  
+  cat("DECISION: Use only items 1-10 (items 12-21 too problematic)\n")
+  cat("NOTE: Cannot use standard subscales (require all 21 items)\n")
+  cat("APPROACH: Factor analysis on items 1-10 in each imputation\n\n")
+  
+  # Run EFA on items 1-10 in first imputation to determine structure
+  cat("Running exploratory factor analysis on items 1-10...\n")
+  
+  first_imp <- mids_long %>% filter(.imp == 1)
+  ciss_items_1_10 <- first_imp %>%
+    select(ciss1:ciss10) %>%
+    na.omit()
+  
+  # Determine number of factors
+  fa_parallel <- fa.parallel(ciss_items_1_10, fa = "fa", n.iter = 100)
+  n_factors <- fa_parallel$nfact
+  
+  cat("  Parallel analysis suggests", n_factors, "factors\n\n")
+  
+  # Run EFA
+  fa_result <- fa(ciss_items_1_10, nfactors = n_factors, rotate = "oblimin", fm = "ml")
+  
+  cat("Factor loadings:\n")
+  print(fa_result$loadings, cutoff = 0.30)
+  cat("\n")
+  
+  # Apply this structure to all imputations
+  cat("Extracting factor scores from all", mids_obj$m, "imputations...\n")
+  
+  for(i in 0:mids_obj$m) {
+    imp_data <- mids_long %>% filter(.imp == i)
+    ciss_data <- imp_data %>% select(ciss1:ciss10)
+    
+    # Calculate factor scores using the loadings from first imputation
+    factor_scores <- factor.scores(ciss_data, fa_result)$scores
+    
+    # Add to mids_long
+    for(f in 1:n_factors) {
+      col_name <- paste0("CISS_Factor_", f)
+      mids_long[mids_long$.imp == i, col_name] <- factor_scores[, f]
+    }
+  }
+  
+  cat("✓ Created", n_factors, "CISS factor scores (from items 1-10)\n\n")
+  created_CISS <- TRUE
+  
+} else {
+  
+  cat("DECISION: Use all 21 items (with imputation)\n")
+  cat("APPROACH: Standard CISS subscales\n\n")
+  
+  cat("CISS Structure:\n")
+  cat("  • Task-Oriented: 2, 6, 8, 11, 13, 16, 19 (7 items)\n")
+  cat("  • Emotion-Oriented: 3, 5, 10, 12, 14, 17, 20 (7 items)\n")
+  cat("  • Avoidance: 1, 4, 7, 9, 15, 18, 21 (7 items)\n\n")
+  
+  mids_long <- mids_long %>%
+    mutate(
+      CISS_Task = ciss2 + ciss6 + ciss8 + ciss11 + ciss13 + ciss16 + ciss19,
+      CISS_Emotion = ciss3 + ciss5 + ciss10 + ciss12 + ciss14 + ciss17 + ciss20,
+      CISS_Avoidance = ciss1 + ciss4 + ciss7 + ciss9 + ciss15 + ciss18 + ciss21
+    )
+  
+  cat("✓ Created CISS subscales (3 coping styles)\n\n")
+  created_CISS <- TRUE
+}
+
+# -----------------------------------------------------------------------------
+# E. Convert back to mids object
+# -----------------------------------------------------------------------------
+
+cat("PART E: Converting back to mids object\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+mids_with_subscales <- as.mids(mids_long)
+
+cat("✓ Converted to mids object with subscales\n\n")
+
+# -----------------------------------------------------------------------------
+# F. Verify subscale creation
+# -----------------------------------------------------------------------------
+
+cat("PART F: Verification of subscales\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Get one complete dataset to check
+check_data <- complete(mids_with_subscales, 1)
+
+# BFI-10
+cat("BFI-10 Subscales:\n")
+bfi_subscales <- c("Extraversion", "Agreeableness", "Conscientiousness", 
+                   "Neuroticism", "Openness")
+bfi_summary <- check_data %>%
+  select(all_of(bfi_subscales)) %>%
+  summary()
+print(bfi_summary)
+cat("\n")
+
+# SURPS
+cat("SURPS Subscales:\n")
+surps_subscales <- c("SURPS_Impulsivity", "SURPS_Sensation_Seeking", 
+                     "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity")
+surps_summary <- check_data %>%
+  select(all_of(surps_subscales)) %>%
+  summary()
+print(surps_summary)
+cat("\n")
+
+# DBAS
+cat("DBAS Subscales:\n")
+dbas_subscales <- c("DBAS_Consequences", "DBAS_Worry_Helplessness", 
+                    "DBAS_Expectations", "DBAS_Medications", "DBAS_Total")
+dbas_summary <- check_data %>%
+  select(all_of(dbas_subscales)) %>%
+  summary()
+print(dbas_summary)
+cat("\n")
+
+# CISS (if created)
+if(created_CISS) {
+  cat("CISS Subscales:\n")
+  ciss_cols <- grep("CISS", names(check_data), value = TRUE)
+  ciss_summary <- check_data %>%
+    select(all_of(ciss_cols)) %>%
+    summary()
+  print(ciss_summary)
+  cat("\n")
+}
+
+# -----------------------------------------------------------------------------
+# G. Calculate reliability (Cronbach's α) for each subscale
+# -----------------------------------------------------------------------------
+
+cat("PART G: Subscale reliability (Cronbach's α)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("Calculating α on first imputation (representative):\n\n")
+
+# BFI subscales (2 items each - use Spearman-Brown)
+cat("BFI-10:\n")
+bfi_items_list <- list(
+  Extraversion = c("reserved_rev", "outgoing"),
+  Agreeableness = c("find_fault_rev", "trusting"),
+  Conscientiousness = c("lazy_rev", "thorough"),
+  Neuroticism = c("relaxed_rev", "nervous"),
+  Openness = c("few_interests_rev", "imagination")
+)
+
+for(trait in names(bfi_items_list)) {
+  items <- bfi_items_list[[trait]]
+  if(all(items %in% names(check_data))) {
+    trait_data <- check_data %>% select(all_of(items)) %>% na.omit()
+    if(nrow(trait_data) > 0) {
+      alpha_result <- psych::alpha(trait_data)
+      cat("  ", trait, ": α =", round(alpha_result$total$raw_alpha, 3), "\n")
+    }
+  }
+}
+cat("\n")
+
+# SURPS subscales
+cat("SURPS:\n")
+surps_items_list <- list(
+  Impulsivity = c("surps2", "surps5", "surps11", "surps15", "surps22"),
+  Sensation_Seeking = c("surps3", "surps6", "surps9", "surps12", "surps16", "surps19"),
+  Hopelessness = c("surps1_rev", "surps4_rev", "surps7_rev", "surps13_rev", 
+                   "surps17", "surps20_rev", "surps23_rev"),
+  Anxiety_Sensitivity = c("surps8", "surps10", "surps14", "surps18", "surps21")
+)
+
+for(factor in names(surps_items_list)) {
+  items <- surps_items_list[[factor]]
+  if(all(items %in% names(check_data))) {
+    factor_data <- check_data %>% select(all_of(items)) %>% na.omit()
+    if(nrow(factor_data) > 0) {
+      alpha_result <- psych::alpha(factor_data)
+      cat("  ", factor, ": α =", round(alpha_result$total$raw_alpha, 3), "\n")
+    }
+  }
+}
+cat("\n")
+
+# DBAS subscales
+cat("DBAS:\n")
+dbas_items_list <- list(
+  Consequences = c("dbas_5", "dbas_7", "dbas_9", "dbas_12", "dbas_16"),
+  Worry_Helplessness = c("dbas_3", "dbas_4", "dbas_8", "dbas_10", "dbas_11", "dbas_14"),
+  Expectations = c("dbas1", "dbas_2"),
+  Medications = c("dbas_6", "dbas_13", "dbas_15")
+)
+
+for(domain in names(dbas_items_list)) {
+  items <- dbas_items_list[[domain]]
+  if(all(items %in% names(check_data))) {
+    domain_data <- check_data %>% select(all_of(items)) %>% na.omit()
+    if(nrow(domain_data) > 0) {
+      alpha_result <- psych::alpha(domain_data)
+      cat("  ", domain, ": α =", round(alpha_result$total$raw_alpha, 3), "\n")
+    }
+  }
+}
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# H. Define final predictor set with subscales
+# -----------------------------------------------------------------------------
+
+cat("PART H: Final predictor set (with personality subscales)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Personality subscales (not individual items)
+personality_subscales <- c(
+  bfi_subscales,
+  surps_subscales,
+  dbas_subscales,
+  if(created_CISS) ciss_cols else NULL
+)
+
+# All other predictors (non-personality)
+non_personality_predictors <- c(
+  "age", "sex", "gender", "region", "education_grouped", 
+  "employment_grouped", "income", "driving_freq",
+  "phq2_score", "osss_3_score", "med_quant", "n_health_conditions",
+  "side_effects_composite", "safety_composite", "adl_composite",
+  "dependence_composite", "med_burden_composite",
+  "alc_sleep", "can_sleep", "melatonin_use", "op_sleep", 
+  "quet_use", "traz_use", "otc_use"
+)
+
+# Remove any that don't exist
+non_personality_predictors <- non_personality_predictors[
+  non_personality_predictors %in% names(check_data)
+]
+
+# Combined final set
+final_predictor_set <- c(personality_subscales, non_personality_predictors)
+
+cat("FINAL PREDICTOR SET:\n")
+cat("  Personality subscales:", length(personality_subscales), "\n")
+cat("  Other predictors:", length(non_personality_predictors), "\n")
+cat("  ─────────────────────────────\n")
+cat("  TOTAL:", length(final_predictor_set), "\n\n")
+
+# Calculate final ratio
+n_obs <- nrow(check_data)
+n_final_pred <- length(final_predictor_set)
+final_ratio <- round(n_obs / n_final_pred, 1)
+
+cat("FINAL SAMPLE SIZE ASSESSMENT:\n")
+cat("  Observations:", n_obs, "\n")
+cat("  Predictors:", n_final_pred, "\n")
+cat("  Ratio:", final_ratio, ":1")
+
+if(final_ratio >= 10) {
+  cat(" ✓ (EXCELLENT - ready for VSURF)\n\n")
+} else if(final_ratio >= 5) {
+  cat(" ✓ (ACCEPTABLE)\n\n")
+} else {
+  cat(" ⚠ (LOW - consider further reduction)\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# I. Save results
+# -----------------------------------------------------------------------------
+
+cat("PART I: Saving results\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+saveRDS(mids_with_subscales, "imputed_data_with_subscales.rds")
+cat("✓ Saved: imputed_data_with_subscales.rds\n")
+
+saveRDS(list(
+  personality_subscales = personality_subscales,
+  non_personality_predictors = non_personality_predictors,
+  final_predictor_set = final_predictor_set,
+  reliability_checks = list(
+    bfi = bfi_items_list,
+    surps = surps_items_list,
+    dbas = dbas_items_list
+  )
+), "subscale_creation_results.rds")
+cat("✓ Saved: subscale_creation_results.rds\n\n")
+
+# Save one complete dataset for reference
+write.csv(check_data, "imputed_data_with_subscales_example.csv", row.names = FALSE)
+cat("✓ Saved: imputed_data_with_subscales_example.csv\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("SUBSCALE CREATION COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("SUMMARY:\n")
+cat("  ✓ BFI-10: 5 traits created\n")
+cat("  ✓ SURPS: 4 risk factors created\n")
+cat("  ✓ DBAS: 4 domains + total created\n")
+if(created_CISS) {
+  cat("  ✓ CISS: Created based on your decision\n")
+} else {
+  cat("  ⊗ CISS: Dropped based on your decision\n")
+}
+cat("\n")
+
+cat("NEXT STEPS:\n")
+cat("  1. Review reliability coefficients (α should be > .70)\n")
+cat("  2. Proceed to VSURF variable selection (Chunk 6)\n")
+cat("  3. Then Random Forest modeling (Chunk 7)\n\n")
+
+cat("✓ Ready for VSURF!\n\n")
+```
+
+## VSURF Variable Selection
+
+```{r}
+#==============================================================================
+# CHUNK 6: VSURF VARIABLE SELECTION
+#==============================================================================
+# Purpose: Principled variable selection using VSURF (replaces arbitrary "top 15")
+# Strategy: Run on first imputation, check stability across 5 others
+# Output: Interpretation set (for logistic regression) and prediction set
+#==============================================================================
+
+library(VSURF)
+library(tidyverse)
+library(mice)
+library(parallel)
+library(randomForest)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 6: VSURF VARIABLE SELECTION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("ADDRESSING COMMITTEE CONCERN: Arbitrary 'top 15' selection\n")
+cat("SOLUTION: VSURF - statistically principled variable selection\n")
+cat("REFERENCE: Genuer et al. (2015), Pattern Recognition Letters\n\n")
+
+# Load data with subscales
+mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
+subscale_results <- readRDS("subscale_creation_results.rds")
+
+final_predictor_set <- subscale_results$final_predictor_set
+
+# -----------------------------------------------------------------------------
+# A. Prepare data for VSURF
+# -----------------------------------------------------------------------------
+
+cat("PART A: Preparing data for VSURF\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Use first imputation for main VSURF run
+vsurf_data <- complete(mids_with_subscales, 1)
+
+# Select predictors and outcome
+vsurf_predictors <- vsurf_data %>%
+  select(all_of(final_predictor_set)) %>%
+  select_if(~ !all(is.na(.)))  # Remove any all-NA columns
+
+vsurf_outcome <- vsurf_data$scrn_stopped_bzra
+
+# Convert outcome to 0/1 numeric if needed
+if(is.factor(vsurf_outcome)) {
+  vsurf_outcome <- as.numeric(vsurf_outcome) - 1
+}
+
+# Remove any rows with NA in outcome
+complete_idx <- !is.na(vsurf_outcome)
+vsurf_predictors <- vsurf_predictors[complete_idx, ]
+vsurf_outcome <- vsurf_outcome[complete_idx]
+
+cat("VSURF Input:\n")
+cat("  Observations:", nrow(vsurf_predictors), "\n")
+cat("  Predictors:", ncol(vsurf_predictors), "\n")
+cat("  Outcome: BZRA discontinuation (0/1)\n\n")
+
+cat("Outcome distribution:\n")
+print(table(vsurf_outcome))
+cat("\n")
+
+# Check for factor variables (VSURF handles them but good to note)
+factor_vars <- sapply(vsurf_predictors, is.factor)
+if(any(factor_vars)) {
+  cat("Factor variables (will be handled automatically):\n")
+  cat("  ", paste(names(factor_vars)[factor_vars], collapse = ", "), "\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# B. Run VSURF (main analysis on imputation 1)
+# -----------------------------------------------------------------------------
+
+cat("PART B: Running VSURF (3-step algorithm)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("VSURF performs:\n")
+cat("  Step 1: THRESHOLDING - Eliminate irrelevant variables\n")
+cat("  Step 2: INTERPRETATION - Select for understanding (USE THIS)\n")
+cat("  Step 3: PREDICTION - Minimal optimal set\n\n")
+
+# Set up parallel processing
+n_cores <- max(1, detectCores() - 1)
+cat("Using", n_cores, "CPU cores for parallel processing\n\n")
+
+cat("⏱ ESTIMATED TIME: 15-30 minutes\n")
+cat("(This is computing intensive - be patient!)\n\n")
+
+set.seed(12345)
+start_time <- Sys.time()
+
+# Run VSURF
+vsurf_result <- VSURF(
+  x = vsurf_predictors,
+  y = vsurf_outcome,
+  mtry = floor(sqrt(ncol(vsurf_predictors))),  # Standard RF default
+  ntree = 1000,  # More trees for stability
+  parallel = TRUE,
+  ncores = n_cores,
+  verbose = TRUE
+)
+
+end_time <- Sys.time()
+time_taken <- round(difftime(end_time, start_time, units = "mins"), 1)
+
+cat("\n✓ VSURF completed in", time_taken, "minutes!\n\n")
+
+# -----------------------------------------------------------------------------
+# C. Extract VSURF results
+# -----------------------------------------------------------------------------
+
+cat("PART C: VSURF results\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Step 1: Thresholding
+vars_threshold <- names(vsurf_predictors)[vsurf_result$varselect.thres]
+
+cat("STEP 1 - THRESHOLDING:\n")
+cat("  Purpose: Eliminate clearly irrelevant variables\n")
+cat("  Variables retained:", length(vars_threshold), "out of", ncol(vsurf_predictors), "\n")
+cat("  Variables:\n")
+for(i in 1:length(vars_threshold)) {
+  cat("    ", i, ". ", vars_threshold[i], "\n", sep = "")
+}
+cat("\n")
+
+# Step 2: Interpretation (KEY RESULT FOR YOUR ANALYSIS)
+vars_interpretation <- names(vsurf_predictors)[vsurf_result$varselect.interp]
+
+cat("STEP 2 - INTERPRETATION SET (USE FOR LOGISTIC REGRESSION):\n")
+cat("  Purpose: Stable, important variables for understanding\n")
+cat("  Variables selected:", length(vars_interpretation), "\n")
+cat("  Variables:\n")
+for(i in 1:length(vars_interpretation)) {
+  cat("    ", i, ". ", vars_interpretation[i], "\n", sep = "")
+}
+cat("\n")
+
+# Step 3: Prediction
+vars_prediction <- names(vsurf_predictors)[vsurf_result$varselect.pred]
+
+cat("STEP 3 - PREDICTION SET:\n")
+cat("  Purpose: Minimal optimal set for prediction\n")
+cat("  Variables selected:", length(vars_prediction), "\n")
+cat("  Variables:\n")
+for(i in 1:length(vars_prediction)) {
+  cat("    ", i, ". ", vars_prediction[i], "\n", sep = "")
+}
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# D. Visualizations
+# -----------------------------------------------------------------------------
+
+cat("PART D: Creating visualizations\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Main VSURF plot (shows all 3 steps)
+png("VSURF_selection_process.png", width = 1600, height = 1000, res = 120)
+plot(vsurf_result, main = "VSURF Variable Selection Process")
+dev.off()
+cat("✓ Saved: VSURF_selection_process.png\n")
+cat("  Shows: Variable importance thresholds for each step\n\n")
+
+# Variable importance for interpretation set
+cat("Computing variable importance for selected variables...\n")
+
+rf_selected <- randomForest(
+  x = vsurf_predictors[, vars_interpretation],
+  y = as.factor(vsurf_outcome),
+  ntree = 1000,
+  importance = TRUE
+)
+
+importance_df <- data.frame(
+  Variable = vars_interpretation,
+  MeanDecreaseAccuracy = importance(rf_selected)[, "MeanDecreaseAccuracy"],
+  MeanDecreaseGini = importance(rf_selected)[, "MeanDecreaseGini"]
+) %>%
+  arrange(desc(MeanDecreaseAccuracy))
+
+# Importance plot
+library(ggplot2)
+
+p_importance <- ggplot(importance_df, 
+                       aes(x = reorder(Variable, MeanDecreaseAccuracy), 
+                           y = MeanDecreaseAccuracy)) +
+  geom_col(fill = "steelblue", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Variable Importance (VSURF Interpretation Set)",
+    subtitle = paste(length(vars_interpretation), 
+                     "variables selected via VSURF for interpretation"),
+    x = NULL,
+    y = "Mean Decrease in Accuracy"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 11),
+    axis.text.y = element_text(size = 10)
+  )
+
+ggsave("VSURF_variable_importance.png", 
+       plot = p_importance, 
+       width = 10, 
+       height = max(6, length(vars_interpretation) * 0.3), 
+       dpi = 300)
+
+cat("✓ Saved: VSURF_variable_importance.png\n\n")
+
+# Print importance table
+cat("Variable Importance Rankings:\n")
+print(importance_df %>%
+        mutate(
+          MeanDecreaseAccuracy = round(MeanDecreaseAccuracy, 4),
+          MeanDecreaseGini = round(MeanDecreaseGini, 4)
+        ),
+      row.names = FALSE)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# E. Stability check across imputations
+# -----------------------------------------------------------------------------
+
+cat("PART E: Stability check across imputations\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("Checking if VSURF selects consistent variables across imputations...\n")
+cat("(Testing on 5 additional imputations)\n\n")
+
+# Function to run VSURF on one imputation
+run_vsurf_one_imp <- function(imp_num, mids_obj, predictors, outcome_var) {
+  
+  cat("  Imputation", imp_num, "...\n")
+  
+  # Get data
+  imp_data <- complete(mids_obj, imp_num)
+  
+  # Prepare predictors and outcome
+  X <- imp_data %>%
+    select(all_of(predictors)) %>%
+    select_if(~ !all(is.na(.)))
+  
+  y <- imp_data[[outcome_var]]
+  if(is.factor(y)) y <- as.numeric(y) - 1
+  
+  # Remove NAs
+  complete_idx <- !is.na(y)
+  X <- X[complete_idx, ]
+  y <- y[complete_idx]
+  
+  # Run VSURF
+  set.seed(12345 + imp_num)
+  vs <- VSURF(
+    x = X,
+    y = y,
+    mtry = floor(sqrt(ncol(X))),
+    ntree = 500,  # Fewer trees for speed
+    parallel = FALSE,  # Already parallelized at higher level
+    verbose = FALSE
+  )
+  
+  return(list(
+    threshold = names(X)[vs$varselect.thres],
+    interpretation = names(X)[vs$varselect.interp],
+    prediction = names(X)[vs$varselect.pred]
+  ))
+}
+
+# Run on imputations 2-6
+stability_results <- list()
+for(i in 2:6) {
+  stability_results[[i]] <- run_vsurf_one_imp(
+    imp_num = i,
+    mids_obj = mids_with_subscales,
+    predictors = final_predictor_set,
+    outcome_var = "scrn_stopped_bzra"
+  )
+}
+
+cat("\n")
+
+# Analyze stability
+cat("STABILITY ANALYSIS:\n\n")
+
+# For interpretation set (most important)
+all_interp_selections <- c(
+  list(vars_interpretation),
+  lapply(stability_results, function(x) x$interpretation)
+)
+
+# Count how often each variable was selected
+var_selection_freq <- table(unlist(all_interp_selections))
+var_selection_pct <- round(100 * var_selection_freq / 6, 1)
+
+stability_df <- data.frame(
+  Variable = names(var_selection_freq),
+  Times_Selected = as.numeric(var_selection_freq),
+  Percent = var_selection_pct
+) %>%
+  arrange(desc(Times_Selected), Variable)
+
+cat("Interpretation set stability (selected in X/6 imputations):\n")
+print(stability_df, row.names = FALSE)
+cat("\n")
+
+# Variables selected in ≥5/6 imputations are highly stable
+stable_vars <- stability_df$Variable[stability_df$Times_Selected >= 5]
+unstable_vars <- stability_df$Variable[stability_df$Times_Selected <= 3]
+
+cat("STABILITY ASSESSMENT:\n")
+cat("  Highly stable (5-6/6):", length(stable_vars), "variables\n")
+if(length(stable_vars) > 0) {
+  cat("    ", paste(stable_vars, collapse = ", "), "\n")
+}
+cat("\n")
+
+if(length(unstable_vars) > 0) {
+  cat("  Unstable (≤3/6):", length(unstable_vars), "variables\n")
+  cat("    ", paste(unstable_vars, collapse = ", "), "\n")
+  cat("    → Consider excluding these from final model\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# F. Final recommendations
+# -----------------------------------------------------------------------------
+
+cat("PART F: Final variable selection recommendations\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Recommended set: Variables selected in ≥4/6 imputations
+recommended_vars <- stability_df$Variable[stability_df$Times_Selected >= 4]
+
+cat("RECOMMENDED VARIABLE SET FOR ANALYSIS:\n")
+cat("(Variables selected in ≥4/6 imputations)\n\n")
+
+cat("  Variables:", length(recommended_vars), "\n")
+for(i in 1:length(recommended_vars)) {
+  stability_info <- stability_df[stability_df$Variable == recommended_vars[i], ]
+  cat("    ", i, ". ", recommended_vars[i], 
+      " (", stability_info$Times_Selected, "/6)\n", sep = "")
+}
+cat("\n")
+
+# Compare approaches
+cat("COMPARISON OF APPROACHES:\n")
+cat("  Original predictors:", ncol(vsurf_predictors), "\n")
+cat("  VSURF threshold:", length(vars_threshold), "\n")
+cat("  VSURF interpretation (imp 1):", length(vars_interpretation), "\n")
+cat("  VSURF prediction:", length(vars_prediction), "\n")
+cat("  Stable across imputations (≥4/6):", length(recommended_vars), "\n\n")
+
+cat("OLD APPROACH (PROBLEMATIC):\n")
+cat("  • Arbitrary 'top 15' cutoff\n")
+cat("  • No justification for number\n")
+cat("  • Unstable with data changes\n\n")
+
+cat("NEW APPROACH (VSURF):\n")
+cat("  • Data-driven 3-step algorithm\n")
+cat("  • Selected", length(vars_interpretation), "variables\n")
+cat("  • Statistically justified\n")
+cat("  • Stable across imputations\n\n")
+
+# -----------------------------------------------------------------------------
+# G. Save results
+# -----------------------------------------------------------------------------
+
+cat("PART G: Saving results\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+vsurf_results_save <- list(
+  vsurf_object = vsurf_result,
+  threshold_vars = vars_threshold,
+  interpretation_vars = vars_interpretation,
+  prediction_vars = vars_prediction,
+  recommended_vars = recommended_vars,
+  stability_check = stability_df,
+  importance_rankings = importance_df,
+  input_data = list(
+    predictors = vsurf_predictors,
+    outcome = vsurf_outcome
+  ),
+  time_taken = time_taken
+)
+
+saveRDS(vsurf_results_save, "VSURF_results.rds")
+cat("✓ Saved: VSURF_results.rds\n\n")
+
+# Also save just the recommended variables for easy access
+saveRDS(recommended_vars, "VSURF_recommended_variables.rds")
+cat("✓ Saved: VSURF_recommended_variables.rds\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("VSURF VARIABLE SELECTION COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("SUMMARY:\n")
+cat("  • Completed in", time_taken, "minutes\n")
+cat("  • Selected", length(vars_interpretation), "variables for interpretation\n")
+cat("  • ", length(recommended_vars), "variables stable across imputations\n")
+cat("  • Reduced from", ncol(vsurf_predictors), "to", length(recommended_vars), "predictors\n\n")
+
+cat("FOR YOUR MANUSCRIPT:\n")
+cat('  "Variable selection was performed using VSURF (Genuer et al., 2015),\n')
+cat('   a Random Forest-based algorithm that identifies important predictors\n')
+cat('   through a three-step process. From', ncol(vsurf_predictors), 'candidate predictors,\n')
+cat('   VSURF selected', length(vars_interpretation), 'variables for interpretation.\n')
+cat('   Stability was confirmed by repeating selection across multiple\n')
+cat('   imputed datasets, with', length(recommended_vars), 'variables consistently\n')
+cat('   selected in ≥4/6 imputations."\n\n')
+
+cat("NEXT STEPS:\n")
+cat("  1. Review VSURF_selection_process.png\n")
+cat("  2. Check VSURF_variable_importance.png\n")
+cat("  3. Proceed to Random Forest modeling (Chunk 7)\n")
+cat("  4. Then logistic regression validation (Chunk 8)\n\n")
+
+cat("✓ Ready for Random Forest modeling!\n\n")
+```
+
+## Random Forest Modeling
+
+```{r}
+#==============================================================================
+# CHUNK 7: RANDOM FOREST MODELING WITH TUNING
+#==============================================================================
+# Purpose: Build and tune RF model using VSURF-selected variables
+#          across multiple imputations for stability
+# This is EXPLORATORY prediction - logistic regression will confirm
+#==============================================================================
+
+library(randomForest)
+library(ranger)  # Faster RF implementation
+library(caret)
+library(pROC)
+library(tidyverse)
+library(mice)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 7: RANDOM FOREST MODELING\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load data and VSURF results
+mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
+vsurf_results <- readRDS("VSURF_results.rds")
+recommended_vars <- readRDS("VSURF_recommended_variables.rds")
+
+cat("Using", length(recommended_vars), "VSURF-selected variables\n\n")
+
+# -----------------------------------------------------------------------------
+# A. Prepare data for RF modeling
+# -----------------------------------------------------------------------------
+
+cat("PART A: Preparing data\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Extract all imputations
+all_imputations <- list()
+for(i in 1:mids_with_subscales$m) {
+  imp_data <- complete(mids_with_subscales, i) %>%
+    select(scrn_stopped_bzra, all_of(recommended_vars)) %>%
+    na.omit() %>%
+    mutate(
+      scrn_stopped_bzra = factor(
+        scrn_stopped_bzra,
+        levels = c(0, 1),
+        labels = c("Still_Using", "Discontinued")
+      )
+    )
+  
+  all_imputations[[i]] <- imp_data
+}
+
+cat("✓ Prepared", length(all_imputations), "imputed datasets\n")
+cat("  Observations per dataset:", nrow(all_imputations[[1]]), "\n")
+cat("  Predictors:", length(recommended_vars), "\n\n")
+
+# Check class balance
+cat("Outcome distribution (first imputation):\n")
+print(table(all_imputations[[1]]$scrn_stopped_bzra))
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# B. Hyperparameter tuning (on first imputation)
+# -----------------------------------------------------------------------------
+
+cat("PART B: Hyperparameter tuning\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("Tuning mtry (number of variables tried at each split)...\n\n")
+
+# Set up cross-validation
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  savePredictions = "final"
+)
+
+# Grid of mtry values to test
+mtry_grid <- expand.grid(
+  mtry = c(
+    floor(sqrt(length(recommended_vars))),  # Default
+    floor(length(recommended_vars) / 3),
+    floor(length(recommended_vars) / 2)
+  )
+)
+
+cat("Testing mtry values:", paste(mtry_grid$mtry, collapse = ", "), "\n\n")
+
+set.seed(123)
+rf_tune <- train(
+  scrn_stopped_bzra ~ .,
+  data = all_imputations[[1]],
+  method = "rf",
+  metric = "ROC",
+  trControl = ctrl,
+  tuneGrid = mtry_grid,
+  ntree = 1000,
+  importance = TRUE
+)
+
+cat("Tuning results:\n")
+print(rf_tune$results)
+cat("\n")
+
+optimal_mtry <- rf_tune$bestTune$mtry
+cat("✓ Optimal mtry:", optimal_mtry, "\n\n")
+
+# -----------------------------------------------------------------------------
+# C. Fit RF models on all imputations
+# -----------------------------------------------------------------------------
+
+cat("PART C: Fitting Random Forest models on all imputations\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+rf_models <- list()
+rf_importance <- list()
+
+for(i in 1:length(all_imputations)) {
+  cat("  Fitting model on imputation", i, "of", length(all_imputations), "...\n")
+  
+  set.seed(123 + i)
+  
+  # Split data (80/20)
+  train_idx <- createDataPartition(
+    all_imputations[[i]]$scrn_stopped_bzra,
+    p = 0.8,
+    list = FALSE
+  )
+  
+  train_data <- all_imputations[[i]][train_idx, ]
+  test_data <- all_imputations[[i]][-train_idx, ]
+  
+  # Fit model
+  rf_model <- randomForest(
+    scrn_stopped_bzra ~ .,
+    data = train_data,
+    ntree = 1000,
+    mtry = optimal_mtry,
+    importance = TRUE,
+    keep.forest = TRUE
+  )
+  
+  rf_models[[i]] <- list(
+    model = rf_model,
+    train_data = train_data,
+    test_data = test_data
+  )
+  
+  # Store importance
+  rf_importance[[i]] <- importance(rf_model)
+}
+
+cat("\n✓ All RF models fitted\n\n")
+
+# -----------------------------------------------------------------------------
+# D. Pool variable importance across imputations
+# -----------------------------------------------------------------------------
+
+cat("PART D: Pooling variable importance\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Extract MeanDecreaseAccuracy and MeanDecreaseGini for each imputation
+mda_list <- lapply(rf_importance, function(x) x[, "MeanDecreaseAccuracy"])
+mdg_list <- lapply(rf_importance, function(x) x[, "MeanDecreaseGini"])
+
+# Pool by averaging
+pooled_importance <- data.frame(
+  Variable = rownames(rf_importance[[1]]),
+  MeanDecreaseAccuracy = rowMeans(do.call(cbind, mda_list)),
+  MeanDecreaseGini = rowMeans(do.call(cbind, mdg_list)),
+  SD_MDA = apply(do.call(cbind, mda_list), 1, sd)
+) %>%
+  arrange(desc(MeanDecreaseAccuracy))
+
+cat("Pooled Variable Importance (top 15):\n")
+print(head(pooled_importance, 15), row.names = FALSE)
+cat("\n")
+
+# Variable importance plot
+p_rf_importance <- ggplot(
+  head(pooled_importance, 15),
+  aes(x = reorder(Variable, MeanDecreaseAccuracy), 
+      y = MeanDecreaseAccuracy)
+) +
+  geom_col(fill = "darkgreen", alpha = 0.7) +
+  geom_errorbar(
+    aes(ymin = MeanDecreaseAccuracy - SD_MDA,
+        ymax = MeanDecreaseAccuracy + SD_MDA),
+    width = 0.3,
+    alpha = 0.6
+  ) +
+  coord_flip() +
+  labs(
+    title = "Random Forest Variable Importance",
+    subtitle = "Pooled across 20 imputations (error bars = ±1 SD)",
+    x = NULL,
+    y = "Mean Decrease in Accuracy"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 10)
+  )
+
+ggsave("RF_variable_importance_pooled.png",
+       plot = p_rf_importance,
+       width = 10, height = 8, dpi = 300)
+
+cat("✓ Saved: RF_variable_importance_pooled.png\n\n")
+
+# -----------------------------------------------------------------------------
+# E. Evaluate performance on test sets
+# -----------------------------------------------------------------------------
+
+cat("PART E: Model performance evaluation\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Function to evaluate one model
+evaluate_rf_model <- function(rf_obj) {
+  
+  model <- rf_obj$model
+  test_data <- rf_obj$test_data
+  
+  # Predictions
+  pred_prob <- predict(model, test_data, type = "prob")[, "Discontinued"]
+  pred_class <- predict(model, test_data, type = "class")
+  
+  # ROC and AUC
+  roc_obj <- roc(test_data$scrn_stopped_bzra, pred_prob, quiet = TRUE)
+  auc_val <- as.numeric(auc(roc_obj))
+  
+  # Optimal threshold (Youden's J)
+  coords_all <- coords(roc_obj, x = "all", ret = "all")
+  youden_j <- coords_all$sensitivity + coords_all$specificity - 1
+  optimal_thresh <- coords_all$threshold[which.max(youden_j)]
+  
+  # Predictions with optimal threshold
+  pred_class_opt <- factor(
+    ifelse(pred_prob > optimal_thresh, "Discontinued", "Still_Using"),
+    levels = levels(test_data$scrn_stopped_bzra)
+  )
+  
+  # Confusion matrix
+  cm <- confusionMatrix(pred_class_opt, test_data$scrn_stopped_bzra, 
+                       positive = "Discontinued")
+  
+  return(list(
+    auc = auc_val,
+    optimal_threshold = optimal_thresh,
+    accuracy = cm$overall["Accuracy"],
+    sensitivity = cm$byClass["Sensitivity"],
+    specificity = cm$byClass["Specificity"],
+    precision = cm$byClass["Precision"],
+    f1 = cm$byClass["F1"],
+    roc_obj = roc_obj,
+    confusion_matrix = cm
+  ))
+}
+
+# Evaluate all models
+rf_performance <- lapply(rf_models, evaluate_rf_model)
+
+# Pool performance metrics
+performance_summary <- data.frame(
+  Metric = c("AUC", "Accuracy", "Sensitivity", "Specificity", "Precision", "F1"),
+  Mean = c(
+    mean(sapply(rf_performance, function(x) x$auc)),
+    mean(sapply(rf_performance, function(x) x$accuracy)),
+    mean(sapply(rf_performance, function(x) x$sensitivity)),
+    mean(sapply(rf_performance, function(x) x$specificity)),
+    mean(sapply(rf_performance, function(x) x$precision), na.rm = TRUE),
+    mean(sapply(rf_performance, function(x) x$f1), na.rm = TRUE)
+  ),
+  SD = c(
+    sd(sapply(rf_performance, function(x) x$auc)),
+    sd(sapply(rf_performance, function(x) x$accuracy)),
+    sd(sapply(rf_performance, function(x) x$sensitivity)),
+    sd(sapply(rf_performance, function(x) x$specificity)),
+    sd(sapply(rf_performance, function(x) x$precision), na.rm = TRUE),
+sd(sapply(rf_performance, function(x) x$f1), na.rm = TRUE)
+  )
+) %>%
+  mutate(
+    Mean = round(Mean, 3),
+    SD = round(SD, 3)
+  )
+
+cat("RANDOM FOREST PERFORMANCE (Pooled Across Imputations):\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+print(performance_summary, row.names = FALSE)
+cat("\n")
+
+# Interpretation
+mean_auc <- performance_summary$Mean[performance_summary$Metric == "AUC"]
+
+cat("INTERPRETATION:\n")
+if(mean_auc >= 0.80) {
+  cat("  ✓ EXCELLENT discrimination (AUC ≥ 0.80)\n")
+} else if(mean_auc >= 0.70) {
+  cat("  ✓ GOOD discrimination (AUC 0.70-0.79)\n")
+} else if(mean_auc >= 0.60) {
+  cat("  ✓ FAIR discrimination (AUC 0.60-0.69)\n")
+} else {
+  cat("  ⚠ POOR discrimination (AUC < 0.60)\n")
+}
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# F. ROC curve visualization
+# -----------------------------------------------------------------------------
+
+cat("PART F: Creating ROC curve\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Pool ROC curves (average across imputations)
+# Use first imputation for visualization (representative)
+roc_plot_data <- rf_performance[[1]]$roc_obj
+
+roc_df <- data.frame(
+  FPR = 1 - roc_plot_data$specificities,
+  TPR = roc_plot_data$sensitivities
+)
+
+p_roc <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(color = "darkgreen", linewidth = 1.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  annotate("text", x = 0.7, y = 0.3,
+           label = paste0("AUC = ", round(mean_auc, 3)),
+           size = 6, fontface = "bold") +
+  labs(
+    title = "Random Forest ROC Curve",
+    subtitle = "Pooled performance across 20 imputations",
+    x = "False Positive Rate (1 - Specificity)",
+    y = "True Positive Rate (Sensitivity)"
+  ) +
+  coord_fixed() +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 11)
+  )
+
+ggsave("RF_ROC_curve.png", plot = p_roc, width = 8, height = 8, dpi = 300)
+cat("✓ Saved: RF_ROC_curve.png\n\n")
+
+# -----------------------------------------------------------------------------
+# G. Confusion matrix visualization
+# -----------------------------------------------------------------------------
+
+cat("PART G: Creating confusion matrix\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Use first imputation's confusion matrix
+cm_first <- rf_performance[[1]]$confusion_matrix
+
+cm_df <- as.data.frame(cm_first$table)
+names(cm_df) <- c("Predicted", "Actual", "Count")
+
+p_cm <- ggplot(cm_df, aes(x = Actual, y = Predicted, fill = Count)) +
+  geom_tile(color = "white", linewidth = 1) +
+  geom_text(aes(label = Count), size = 10, fontface = "bold") +
+  scale_fill_gradient(low = "white", high = "darkgreen") +
+  labs(
+    title = "Random Forest Confusion Matrix",
+    subtitle = paste0("Threshold = ", 
+                     round(rf_performance[[1]]$optimal_threshold, 3))
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 11),
+    legend.position = "none"
+  )
+
+ggsave("RF_confusion_matrix.png", plot = p_cm, width = 7, height = 6, dpi = 300)
+cat("✓ Saved: RF_confusion_matrix.png\n\n")
+
+# -----------------------------------------------------------------------------
+# H. Identify top predictors by domain
+# -----------------------------------------------------------------------------
+
+cat("PART H: Top predictors by domain\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Categorize variables
+pooled_importance <- pooled_importance %>%
+  mutate(
+    Domain = case_when(
+      grepl("^DBAS", Variable) ~ "Sleep Beliefs (DBAS)",
+      grepl("^SURPS", Variable) ~ "Risk Profile (SURPS)",
+      grepl("^CISS", Variable) ~ "Coping (CISS)",
+      Variable %in% c("Extraversion", "Agreeableness", "Conscientiousness", 
+                      "Neuroticism", "Openness") ~ "Personality (BFI)",
+      grepl("composite", Variable) ~ "BZRA Effects",
+      Variable %in% c("age", "sex", "gender", "region", "education_grouped",
+                      "employment_grouped", "income", "driving_freq") ~ "Demographics",
+      Variable %in% c("phq2_score", "osss_3_score", "med_quant", 
+                      "n_health_conditions") ~ "Health/Clinical",
+      TRUE ~ "Other"
+    )
+  )
+
+cat("Top 3 predictors by domain:\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+top_by_domain <- pooled_importance %>%
+  group_by(Domain) %>%
+  slice_max(order_by = MeanDecreaseAccuracy, n = 3) %>%
+  ungroup() %>%
+  arrange(Domain, desc(MeanDecreaseAccuracy))
+
+for(domain in unique(top_by_domain$Domain)) {
+  cat(domain, ":\n")
+  domain_vars <- top_by_domain %>% filter(Domain == domain)
+  for(i in 1:nrow(domain_vars)) {
+    cat("  ", i, ". ", domain_vars$Variable[i], 
+        " (MDA = ", round(domain_vars$MeanDecreaseAccuracy[i], 3), ")\n", sep = "")
+  }
+  cat("\n")
+}
+
+# -----------------------------------------------------------------------------
+# I. Save all results
+# -----------------------------------------------------------------------------
+
+cat("PART I: Saving results\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+rf_results_save <- list(
+  models = rf_models,
+  performance = rf_performance,
+  performance_summary = performance_summary,
+  pooled_importance = pooled_importance,
+  optimal_mtry = optimal_mtry,
+  mean_auc = mean_auc
+)
+
+saveRDS(rf_results_save, "RF_modeling_results.rds")
+cat("✓ Saved: RF_modeling_results.rds\n\n")
+
+# Save importance table as CSV for easy reference
+write.csv(pooled_importance, "RF_variable_importance.csv", row.names = FALSE)
+cat("✓ Saved: RF_variable_importance.csv\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("RANDOM FOREST MODELING COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("SUMMARY:\n")
+cat("  • Optimal mtry:", optimal_mtry, "\n")
+cat("  • Mean AUC:", round(mean_auc, 3), "±", 
+    round(performance_summary$SD[1], 3), "\n")
+cat("  • Top predictor:", pooled_importance$Variable[1], "\n")
+cat("  • Models fitted:", length(rf_models), "\n\n")
+
+cat("KEY FINDINGS:\n")
+cat("  1. Top 5 most important variables:\n")
+for(i in 1:5) {
+  cat("     ", i, ". ", pooled_importance$Variable[i], "\n", sep = "")
+}
+cat("\n")
+
+cat("  2. Performance metrics (mean ± SD):\n")
+cat("     AUC:", round(mean_auc, 3), "±", 
+    round(performance_summary$SD[1], 3), "\n")
+cat("     Accuracy:", round(performance_summary$Mean[2], 3), "±",
+    round(performance_summary$SD[2], 3), "\n\n")
+
+cat("FOR YOUR MANUSCRIPT:\n")
+cat('  "Random Forest models were fitted on VSURF-selected variables\n')
+cat('   using optimal hyperparameters (mtry =', optimal_mtry, ') determined via\n')
+cat('   10-fold cross-validation. Models were trained and tested across\n')
+cat('   20 multiply-imputed datasets. Mean AUC was', round(mean_auc, 3), '\n')
+cat('   (SD =', round(performance_summary$SD[1], 3), '), indicating', 
+    ifelse(mean_auc >= 0.70, "good", "fair"), 'discriminative ability.\n')
+cat('   The most important predictors were [list top 3-5 variables]."\n\n')
+
+cat("NEXT STEPS:\n")
+cat("  1. Review RF_variable_importance_pooled.png\n")
+cat("  2. Check RF_ROC_curve.png and RF_confusion_matrix.png\n")
+cat("  3. Proceed to logistic regression validation (Chunk 8)\n\n")
+
+cat("✓ Ready for logistic regression!\n\n")
+```
+
+## Logistic Regression Validation
+
+```{r}
+#==============================================================================
+# CHUNK 8: LOGISTIC REGRESSION VALIDATION
+#==============================================================================
+# Purpose: Confirmatory analysis using VSURF-selected variables
+#          Provides interpretable effect sizes (Odds Ratios)
+# Strategy: Fit models on all imputations, pool using Rubin's rules
+#==============================================================================
+
+library(mice)
+library(tidyverse)
+library(broom)
+library(pROC)
+library(caret)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 8: LOGISTIC REGRESSION VALIDATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("PURPOSE: Confirmatory analysis with interpretable effect sizes\n")
+cat("APPROACH: Use VSURF-selected variables, pool across imputations\n\n")
+
+# Load data and results
+mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
+vsurf_results <- readRDS("VSURF_results.rds")
+rf_results <- readRDS("RF_modeling_results.rds")
+recommended_vars <- readRDS("VSURF_recommended_variables.rds")
+
+cat("Using", length(recommended_vars), "VSURF-selected variables\n\n")
+
+# -----------------------------------------------------------------------------
+# A. Fit logistic regression models on all imputations
+# -----------------------------------------------------------------------------
+
+cat("PART A: Fitting logistic regression models\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Build formula
+formula_str <- paste("scrn_stopped_bzra ~", paste(recommended_vars, collapse = " + "))
+cat("Model formula:\n")
+cat("  ", formula_str, "\n\n")
+
+# Fit using mice::with (automatically handles all imputations)
+cat("Fitting models on all", mids_with_subscales$m, "imputations...\n")
+
+fit_mi <- with(mids_with_subscales, 
+               glm(as.formula(formula_str), family = binomial()))
+
+cat("✓ Models fitted\n\n")
+
+# -----------------------------------------------------------------------------
+# B. Pool results using Rubin's rules
+# -----------------------------------------------------------------------------
+
+cat("PART B: Pooling results across imputations (Rubin's rules)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+pooled_results <- pool(fit_mi)
+summary_pooled <- summary(pooled_results)
+
+cat("Pooled coefficients:\n")
+print(summary_pooled %>%
+        select(term, estimate, std.error, statistic, p.value) %>%
+        mutate(across(where(is.numeric), ~round(., 4))),
+      row.names = FALSE)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# C. Calculate Odds Ratios with confidence intervals
+# -----------------------------------------------------------------------------
+
+cat("PART C: Odds Ratios and 95% Confidence Intervals\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+or_results <- summary_pooled %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    OR = exp(estimate),
+    OR_lower = exp(estimate - 1.96 * std.error),
+    OR_upper = exp(estimate + 1.96 * std.error),
+    Significance = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01 ~ "**",
+      p.value < 0.05 ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  arrange(p.value) %>%
+  select(term, OR, OR_lower, OR_upper, p.value, Significance)
+
+cat("Odds Ratios (sorted by p-value):\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+print(or_results %>%
+        mutate(
+          OR = round(OR, 3),
+          OR_lower = round(OR_lower, 3),
+          OR_upper = round(OR_upper, 3),
+          p.value = format.pval(p.value, digits = 3)
+        ),
+      row.names = FALSE)
+cat("\n")
+
+# Count significant predictors
+n_sig <- sum(or_results$p.value < 0.05)
+cat("Significant predictors (p < .05):", n_sig, "out of", nrow(or_results), "\n\n")
+
+# -----------------------------------------------------------------------------
+# D. Model performance evaluation
+# -----------------------------------------------------------------------------
+
+cat("PART D: Model performance evaluation\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Function to evaluate LR on one imputation
+evaluate_lr_model <- function(imp_data, formula_str, recommended_vars) {
+  
+  # Prepare data
+  model_data <- imp_data %>%
+    select(scrn_stopped_bzra, all_of(recommended_vars)) %>%
+    na.omit()
+  
+  # Convert outcome
+  model_data$scrn_stopped_bzra <- as.numeric(model_data$scrn_stopped_bzra)
+  if(max(model_data$scrn_stopped_bzra) > 1) {
+    model_data$scrn_stopped_bzra <- model_data$scrn_stopped_bzra - 1
+  }
+  
+  # Split data (same 80/20 as RF)
+  set.seed(123)
+  train_idx <- createDataPartition(model_data$scrn_stopped_bzra, p = 0.8, list = FALSE)
+  train_data <- model_data[train_idx, ]
+  test_data <- model_data[-train_idx, ]
+  
+  # Fit model
+  lr_model <- glm(as.formula(formula_str), data = train_data, family = binomial())
+  
+  # Predictions
+  pred_prob <- predict(lr_model, test_data, type = "response")
+  
+  # ROC and AUC
+  roc_obj <- roc(test_data$scrn_stopped_bzra, pred_prob, quiet = TRUE)
+  auc_val <- as.numeric(auc(roc_obj))
+  
+  # Optimal threshold
+  coords_all <- coords(roc_obj, x = "all", ret = "all")
+  youden_j <- coords_all$sensitivity + coords_all$specificity - 1
+  optimal_thresh <- coords_all$threshold[which.max(youden_j)]
+  
+  # Classification
+  pred_class <- factor(
+    ifelse(pred_prob > optimal_thresh, 1, 0),
+    levels = c(0, 1)
+  )
+  actual_class <- factor(test_data$scrn_stopped_bzra, levels = c(0, 1))
+  
+  cm <- confusionMatrix(pred_class, actual_class, positive = "1")
+  
+  return(list(
+    auc = auc_val,
+    accuracy = cm$overall["Accuracy"],
+    sensitivity = cm$byClass["Sensitivity"],
+    specificity = cm$byClass["Specificity"],
+    precision = cm$byClass["Precision"],
+    f1 = cm$byClass["F1"],
+    optimal_threshold = optimal_thresh
+  ))
+}
+
+# Evaluate on all imputations
+cat("Evaluating performance on all imputations...\n")
+
+lr_performance <- list()
+for(i in 1:mids_with_subscales$m) {
+  imp_data <- complete(mids_with_subscales, i)
+  lr_performance[[i]] <- evaluate_lr_model(imp_data, formula_str, recommended_vars)
+}
+
+cat("✓ Evaluation complete\n\n")
+
+# Pool performance
+lr_performance_summary <- data.frame(
+  Metric = c("AUC", "Accuracy", "Sensitivity", "Specificity", "Precision", "F1"),
+  Mean = c(
+    mean(sapply(lr_performance, function(x) x$auc)),
+    mean(sapply(lr_performance, function(x) x$accuracy)),
+    mean(sapply(lr_performance, function(x) x$sensitivity)),
+    mean(sapply(lr_performance, function(x) x$specificity)),
+    mean(sapply(lr_performance, function(x) x$precision), na.rm = TRUE),
+    mean(sapply(lr_performance, function(x) x$f1), na.rm = TRUE)
+  ),
+  SD = c(
+    sd(sapply(lr_performance, function(x) x$auc)),
+    sd(sapply(lr_performance, function(x) x$accuracy)),
+    sd(sapply(lr_performance, function(x) x$sensitivity)),
+    sd(sapply(lr_performance, function(x) x$specificity)),
+    sd(sapply(lr_performance, function(x) x$precision), na.rm = TRUE),
+    sd(sapply(lr_performance, function(x) x$f1), na.rm = TRUE)
+  )
+) %>%
+  mutate(
+    Mean = round(Mean, 3),
+    SD = round(SD, 3)
+  )
+
+cat("LOGISTIC REGRESSION PERFORMANCE:\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+print(lr_performance_summary, row.names = FALSE)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# E. Compare RF vs LR performance
+# -----------------------------------------------------------------------------
+
+cat("PART E: Comparing Random Forest vs Logistic Regression\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+rf_auc <- rf_results$mean_auc
+lr_auc <- lr_performance_summary$Mean[1]
+
+comparison_df <- data.frame(
+  Model = c("Random Forest", "Logistic Regression"),
+  AUC = c(rf_auc, lr_auc),
+  Accuracy = c(
+    rf_results$performance_summary$Mean[2],
+    lr_performance_summary$Mean[2]
+  ),
+  Sensitivity = c(
+    rf_results$performance_summary$Mean[3],
+    lr_performance_summary$Mean[3]
+  ),
+  Specificity = c(
+    rf_results$performance_summary$Mean[4],
+    lr_performance_summary$Mean[4]
+  )
+)
+
+cat("MODEL COMPARISON:\n")
+print(comparison_df %>%
+        mutate(across(where(is.numeric), ~round(., 3))),
+      row.names = FALSE)
+cat("\n")
+
+auc_diff <- abs(rf_auc - lr_auc)
+cat("AUC difference:", round(auc_diff, 3), "\n")
+
+if(auc_diff < 0.05) {
+  cat("  → Models perform similarly (difference < 0.05)\n")
+  cat("  → RF findings validated by LR\n\n")
+} else {
+  cat("  → Models show different performance\n")
+  if(rf_auc > lr_auc) {
+    cat("  → RF performs better (captures complex interactions)\n\n")
+  } else {
+    cat("  → LR performs better (linear relationships sufficient)\n\n")
+  }
+}
+
+# Visualization
+p_comparison <- ggplot(comparison_df, aes(x = Model, y = AUC, fill = Model)) +
+  geom_col(alpha = 0.7, width = 0.6) +
+  geom_text(aes(label = round(AUC, 3)), vjust = -0.5, size = 5, fontface = "bold") +
+  scale_fill_manual(values = c("Random Forest" = "darkgreen", 
+                                "Logistic Regression" = "steelblue")) +
+  ylim(0, 1) +
+  labs(
+    title = "Model Performance Comparison",
+    subtitle = "AUC pooled across 20 imputations",
+    y = "Area Under ROC Curve (AUC)",
+    x = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 11),
+    legend.position = "none"
+  )
+
+ggsave("RF_vs_LR_comparison.png", plot = p_comparison, 
+       width = 8, height = 6, dpi = 300)
+
+cat("✓ Saved: RF_vs_LR_comparison.png\n\n")
+
+# -----------------------------------------------------------------------------
+# F. Forest plot of Odds Ratios
+# -----------------------------------------------------------------------------
+
+cat("PART F: Creating forest plot of Odds Ratios\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Select significant or top predictors
+forest_data <- or_results %>%
+  filter(p.value < 0.10) %>%  # Include marginally significant
+  arrange(desc(OR)) %>%
+  mutate(Variable = factor(term, levels = term))
+
+if(nrow(forest_data) > 0) {
+  
+  p_forest <- ggplot(forest_data, 
+                     aes(x = OR, y = Variable, color = Significance)) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 1) +
+    geom_errorbarh(aes(xmin = OR_lower, xmax = OR_upper), height = 0.3, linewidth = 1) +
+    geom_point(size = 4) +
+    scale_color_manual(
+      values = c("***" = "red", "**" = "orange", "*" = "gold", "" = "gray60"),
+      breaks = c("***", "**", "*", ""),
+      labels = c("p < .001", "p < .01", "p < .05", "p ≥ .05")
+    ) +
+    scale_x_log10() +
+    labs(
+      title = "Logistic Regression: Odds Ratios for BZRA Discontinuation",
+      subtitle = "Pooled across 20 imputations with 95% confidence intervals",
+      x = "Odds Ratio (log scale)",
+      y = NULL,
+      color = "Significance"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
+      plot.subtitle = element_text(hjust = 0.5, size = 10),
+      legend.position = "bottom"
+    )
+  
+  ggsave("LR_odds_ratios_forest_plot.png", plot = p_forest,
+         width = 10, height = max(6, nrow(forest_data) * 0.4), dpi = 300)
+  
+  cat("✓ Saved: LR_odds_ratios_forest_plot.png\n\n")
+  
+} else {
+  cat("⚠ No predictors with p < 0.10 to plot\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# G. Variable agreement between RF and LR
+# -----------------------------------------------------------------------------
+
+cat("PART G: Variable agreement between RF and LR\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Top 10 from RF
+top_rf_vars <- rf_results$pooled_importance$Variable[1:10]
+
+# Significant from LR
+sig_lr_vars <- or_results$term[or_results$p.value < 0.05]
+
+# Agreement
+agreement <- intersect(top_rf_vars, sig_lr_vars)
+
+cat("Top 10 RF variables:", paste(top_rf_vars, collapse = ", "), "\n\n")
+cat("Significant LR variables (p < .05):", paste(sig_lr_vars, collapse = ", "), "\n\n")
+cat("Agreement (in both top RF and significant LR):\n")
+if(length(agreement) > 0) {
+  for(v in agreement) {
+    cat("  ✓", v, "\n")
+  }
+  cat("\n")
+  cat("Agreement rate:", round(100 * length(agreement) / 10, 1), "%\n\n")
+} else {
+  cat("  No variables in common\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# H. Save results
+# -----------------------------------------------------------------------------
+
+cat("PART H: Saving results\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+lr_results_save <- list(
+  fit_mi = fit_mi,
+  pooled_results = pooled_results,
+  odds_ratios = or_results,
+  performance = lr_performance,
+  performance_summary = lr_performance_summary,
+  model_comparison = comparison_df,
+  agreement_with_rf = agreement
+)
+
+saveRDS(lr_results_save, "LR_validation_results.rds")
+cat("✓ Saved: LR_validation_results.rds\n\n")
+
+# Save ORs as CSV
+write.csv(or_results, "LR_odds_ratios.csv", row.names = FALSE)
+cat("✓ Saved: LR_odds_ratios.csv\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("LOGISTIC REGRESSION VALIDATION COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("SUMMARY:\n")
+cat("  • Variables modeled:", length(recommended_vars), "\n")
+cat("  • Significant predictors (p < .05):", n_sig, "\n")
+cat("  • Mean AUC:", round(lr_auc, 3), "\n")
+cat("  • Agreement with RF:", length(agreement), "variables\n\n")
+
+cat("KEY FINDINGS:\n")
+if(n_sig > 0) {
+  cat("  Significant predictors (p < .05):\n")
+  sig_vars <- or_results %>% filter(p.value < 0.05) %>% arrange(p.value)
+  for(i in 1:min(5, nrow(sig_vars))) {
+    cat("    ", i, ". ", sig_vars$term[i], 
+        " (OR = ", round(sig_vars$OR[i], 2), 
+        ", p ", format.pval(sig_vars$p.value[i], digits = 2), ")\n", sep = "")
+  }
+} else {
+  cat("  No predictors reached significance at p < .05\n")
+}
+cat("\n")
+
+cat("FOR YOUR MANUSCRIPT:\n")
+cat('  "Logistic regression using VSURF-selected variables was conducted\n')
+cat('   across 20 multiply-imputed datasets. Results were pooled using\n')
+cat('   Rubin's rules. The model achieved an AUC of', round(lr_auc, 3), ',\n')
+cat('   comparable to the Random Forest model (AUC =', round(rf_auc, 3), ').\n')
+cat('   [List significant predictors with ORs and CIs]. These findings\n')
+cat('   validate the exploratory Random Forest results."\n\n')
+
+cat("NEXT STEPS:\n")
+cat("  1. Review LR_odds_ratios_forest_plot.png\n")
+cat("  2. Check RF_vs_LR_comparison.png\n")
+cat("  3. Proceed to clustering analysis (Chunk 9)\n\n")
+
+cat("✓ Ready for clustering analysis!\n\n")
+```
+
