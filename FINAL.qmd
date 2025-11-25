@@ -4331,7 +4331,6 @@ cat("✓ Random Forest modeling complete and ready for validation!\n\n")
 # Purpose: Confirmatory analysis using VSURF-selected variables
 #          Provides interpretable effect sizes (Odds Ratios)
 # Strategy: Fit models on all imputations, pool using Rubin's rules
-# FIX: Added robust error handling for zero-item errors in forest plot
 #==============================================================================
 
 library(mice)
@@ -5339,38 +5338,6 @@ cat("Ready to proceed to Chunk 9 (Clustering Analysis) if desired.\n\n")
 ## Cluster Analysis
 ```{r}
 #==============================================================================
-# CHUNK 9: CLUSTERING ANALYSIS (PATIENT PROFILES)
-#==============================================================================
-# NARRATIVE SUMMARY:
-# ------------------
-# WHAT: Unsupervised machine learning (k-means or hierarchical clustering) to 
-# identify natural groupings of patients based on their personality traits, 
-# demographics, and clinical characteristics. Instead of asking "which measures 
-# predict discontinuation?", we ask "what types of patients exist, and which 
-# types are more successful?"
-#
-# WHY IT MATTERS:
-# - Clinicians don't think in terms of regression coefficients - they think in 
-#   patient types ("Oh, this is a high-anxiety, socially-isolated patient")
-# - Clustering provides CLINICAL INTUITION - memorable patient profiles that 
-#   guide real-world decision-making
-# - It's HYPOTHESIS-GENERATING - may reveal unexpected combinations of risk factors
-# - Creates foundation for PERSONALIZED INTERVENTION - different clusters might 
-#   need different approaches to discontinuation support
-#
-# DECISION POINTS:
-# 1. How many clusters? (3-5 optimal - too few oversimplifies, too many uninterpretable)
-# 2. Which variables to cluster on? (All predictors? Only significant ones? Only personality?)
-# 3. How to name/describe clusters? (Need clinically meaningful labels)
-# 4. How to validate clusters? (Do they differ on discontinuation? Are they stable?)
-#
-# WHAT YOU'LL LEARN:
-# - Are there distinct "types" of older adults using BZRAs?
-# - What characterizes each type? (e.g., "High Health Burden", "Anxiety-Driven")
-# - Which patient profiles are most/least likely to discontinue?
-# - Do personality, demographics, and clinical factors cluster together meaningfully?
-#==============================================================================
-#==============================================================================
 # CHUNK 9: CLUSTERING ANALYSIS (PATIENT PROFILES) - FIXED VERSION
 #==============================================================================
 
@@ -5868,41 +5835,7 @@ cat("═════════════════════════
 ## Sensitivity Analysis
 ```{r}
 #==============================================================================
-# CHUNK 10: MANDATORY SENSITIVITY ANALYSES
-#==============================================================================
-# NARRATIVE SUMMARY:
-# ------------------
-# WHAT: A series of robustness checks that re-run your main analyses (both 
-# clustering and prediction) under different assumptions to test whether 
-# findings hold up.
-#
-# Tests include:
-# - CISS sensitivity: Analyze with/without CISS (based on Chunk 1 findings)
-# - Imputation sensitivity: Compare multiply imputed vs complete-case analysis
-# - Outlier sensitivity: Check if extreme values drive results
-# - Modeling sensitivity: Compare different variable selection approaches
-#
-# WHY IT MATTERS:
-# - Your committee WILL ask "but what if your imputation assumptions are wrong?" 
-#   or "what if those outliers are driving everything?" - this answers those 
-#   questions preemptively
-# - Demonstrates SCIENTIFIC RIGOR - you're not just hoping your choices were 
-#   right, you're testing them
-# - If main findings hold across all sensitivity analyses → strong, robust conclusions
-# - If findings change → you've identified important boundary conditions
-#
-# DECISION POINTS:
-# 1. Which CISS approach? (Depends on Chunk 1 - may need items 1-10 only, 
-#    drop CISS entirely, or use all 21)
-# 2. How different can results be before we worry? (Small differences = robust; 
-#    large differences = need to report both)
-# 3. Do we need delta-adjustment for MNAR? (If missingness is truly non-random)
-#
-# WHAT YOU'LL LEARN:
-# - Are your clustering results stable when you change assumptions?
-# - Do prediction results hold in complete-case analysis?
-# - Are any findings driven by outliers or influential observations?
-# - How much do your conclusions depend on the CISS decision?
+# CHUNK 10: MANDATORY SENSITIVITY ANALYSES - FIXED VERSION
 #==============================================================================
 
 library(tidyverse)
@@ -5919,15 +5852,39 @@ cat("═════════════════════════
 cat("PURPOSE: Test robustness of findings under different assumptions\n")
 cat("APPROACH: Re-run key analyses with variations, compare results\n\n")
 
-# Load all previous results
-mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
-CISS_investigation <- readRDS("CISS_investigation_results.rds")
+# Load all previous results - USE CORRECT FILE WITH SUBSCALES
+mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")  # FIXED
+subscale_results <- readRDS("subscale_creation_results.rds")  # NEW - contains predictor lists
 rf_results <- readRDS("RF_modeling_results.rds")
 lr_results <- readRDS("LR_validation_results.rds")
 clustering_results <- readRDS("clustering_results.rds")
-recommended_vars <- readRDS("VSURF_recommended_variables.rds")
+
+# Load recommended variables
+if(file.exists("VSURF_recommended_variables.rds")) {
+  recommended_vars <- readRDS("VSURF_recommended_variables.rds")
+  cat("Loaded VSURF-recommended variables:", length(recommended_vars), "\n")
+} else {
+  # Fallback: use final predictor set from subscale creation
+  cat("⚠ VSURF results not found, using all predictors from subscale creation\n")
+  recommended_vars <- subscale_results$final_predictor_set
+}
+
+# Get outcome variable name
+outcome_var <- subscale_results$outcome
+cat("Outcome variable:", outcome_var, "\n\n")
 
 cat("Loaded all previous results.\n\n")
+
+# Verify recommended variables exist in the data
+test_data <- complete(mids_with_subscales, 1)
+missing_vars <- recommended_vars[!recommended_vars %in% names(test_data)]
+if(length(missing_vars) > 0) {
+  cat("⚠ WARNING: Some recommended variables not found in data:\n")
+  print(missing_vars)
+  cat("\nRemoving missing variables from analysis...\n")
+  recommended_vars <- recommended_vars[recommended_vars %in% names(test_data)]
+}
+cat("Final variables for sensitivity analysis:", length(recommended_vars), "\n\n")
 
 # -----------------------------------------------------------------------------
 # A. CISS Sensitivity Analysis
@@ -5937,83 +5894,74 @@ cat("═════════════════════════
 cat("PART A: CISS Sensitivity Analysis\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("Your CISS investigation decision:", CISS_investigation$decision, "\n\n")
+# Check if CISS was included
+ciss_vars_in_model <- recommended_vars[grepl("CISS", recommended_vars, ignore.case = TRUE)]
 
-if(CISS_investigation$decision == "drop_CISS") {
+if(length(ciss_vars_in_model) > 0) {
   
-  cat("Since you dropped CISS, no CISS sensitivity analysis needed.\n")
-  cat("Your main analysis already excludes CISS.\n\n")
-  
-  ciss_sensitivity_needed <- FALSE
-  
-} else {
-  
-  cat("CISS was included in main analysis.\n")
+  cat("CISS variables in model:", paste(ciss_vars_in_model, collapse = ", "), "\n\n")
   cat("Testing: What happens if we EXCLUDE CISS?\n\n")
   
   ciss_sensitivity_needed <- TRUE
   
-  # Identify CISS variables in recommended set
-  ciss_vars <- recommended_vars[grepl("CISS", recommended_vars, ignore.case = TRUE)]
+  # Create alternative predictor set WITHOUT CISS
+  vars_without_ciss <- recommended_vars[!grepl("CISS", recommended_vars, ignore.case = TRUE)]
   
-  if(length(ciss_vars) > 0) {
-    cat("CISS variables in model:", paste(ciss_vars, collapse = ", "), "\n\n")
-    
-    # Create alternative predictor set WITHOUT CISS
-    vars_without_ciss <- recommended_vars[!grepl("CISS", recommended_vars, ignore.case = TRUE)]
-    
-    cat("Re-running Random Forest WITHOUT CISS...\n")
-    cat("  Original predictors:", length(recommended_vars), "\n")
-    cat("  Without CISS:", length(vars_without_ciss), "\n\n")
-    
-    # Fit RF on first imputation without CISS
-    imp1_data <- complete(mids_with_subscales, 1) %>%
-      select(scrn_stopped_bzra, all_of(vars_without_ciss)) %>%
-      na.omit() %>%
-      mutate(scrn_stopped_bzra = factor(scrn_stopped_bzra, 
-                                        levels = c(0, 1),
-                                        labels = c("Still_Using", "Discontinued")))
-    
-    set.seed(123)
-    train_idx <- createDataPartition(imp1_data$scrn_stopped_bzra, p = 0.8, list = FALSE)
-    train_data <- imp1_data[train_idx, ]
-    test_data <- imp1_data[-train_idx, ]
-    
-    rf_no_ciss <- randomForest(
-      scrn_stopped_bzra ~ .,
-      data = train_data,
-      ntree = 1000,
-      importance = TRUE
-    )
-    
-    # Evaluate
-    pred_prob <- predict(rf_no_ciss, test_data, type = "prob")[, "Discontinued"]
-    roc_no_ciss <- roc(test_data$scrn_stopped_bzra, pred_prob, quiet = TRUE)
-    auc_no_ciss <- as.numeric(auc(roc_no_ciss))
-    
-    cat("RESULTS:\n")
-    cat("  Main analysis AUC (with CISS):", round(rf_results$mean_auc, 3), "\n")
-    cat("  Sensitivity AUC (without CISS):", round(auc_no_ciss, 3), "\n")
-    cat("  Difference:", round(abs(rf_results$mean_auc - auc_no_ciss), 3), "\n\n")
-    
-    if(abs(rf_results$mean_auc - auc_no_ciss) < 0.03) {
-      cat("✓ ROBUST: Results very similar with/without CISS\n")
-      cat("  → CISS not driving findings\n\n")
-    } else if(abs(rf_results$mean_auc - auc_no_ciss) < 0.05) {
-      cat("✓ ACCEPTABLE: Small difference with/without CISS\n")
-      cat("  → Some contribution but not critical\n\n")
-    } else {
-      cat("⚠ CONCERNING: Large difference with/without CISS\n")
-      cat("  → CISS may be driving findings, interpret with caution\n\n")
-    }
-    
-    ciss_sensitivity_auc <- auc_no_ciss
-    
+  cat("Re-running Random Forest WITHOUT CISS...\n")
+  cat("  Original predictors:", length(recommended_vars), "\n")
+  cat("  Without CISS:", length(vars_without_ciss), "\n\n")
+  
+  # Fit RF on first imputation without CISS
+  imp1_data <- complete(mids_with_subscales, 1) %>%
+    select(all_of(c(outcome_var, vars_without_ciss))) %>%
+    na.omit() %>%
+    mutate(!!outcome_var := factor(.data[[outcome_var]], 
+                                   levels = c(0, 1),
+                                   labels = c("Still_Using", "Discontinued")))
+  
+  set.seed(123)
+  train_idx <- createDataPartition(imp1_data[[outcome_var]], p = 0.8, list = FALSE)
+  train_data <- imp1_data[train_idx, ]
+  test_data <- imp1_data[-train_idx, ]
+  
+  # Create formula
+  formula_no_ciss <- as.formula(paste(outcome_var, "~ ."))
+  
+  rf_no_ciss <- randomForest(
+    formula_no_ciss,
+    data = train_data,
+    ntree = 1000,
+    importance = TRUE
+  )
+  
+  # Evaluate
+  pred_prob <- predict(rf_no_ciss, test_data, type = "prob")[, "Discontinued"]
+  roc_no_ciss <- roc(test_data[[outcome_var]], pred_prob, quiet = TRUE)
+  auc_no_ciss <- as.numeric(auc(roc_no_ciss))
+  
+  cat("RESULTS:\n")
+  cat("  Main analysis AUC (with CISS):", round(rf_results$mean_auc, 3), "\n")
+  cat("  Sensitivity AUC (without CISS):", round(auc_no_ciss, 3), "\n")
+  cat("  Difference:", round(abs(rf_results$mean_auc - auc_no_ciss), 3), "\n\n")
+  
+  if(abs(rf_results$mean_auc - auc_no_ciss) < 0.03) {
+    cat("✓ ROBUST: Results very similar with/without CISS\n")
+    cat("  → CISS not driving findings\n\n")
+  } else if(abs(rf_results$mean_auc - auc_no_ciss) < 0.05) {
+    cat("✓ ACCEPTABLE: Small difference with/without CISS\n")
+    cat("  → Some contribution but not critical\n\n")
   } else {
-    cat("No CISS variables were selected by VSURF.\n")
-    cat("CISS not in model, so no sensitivity analysis needed.\n\n")
-    ciss_sensitivity_needed <- FALSE
+    cat("⚠ CONCERNING: Large difference with/without CISS\n")
+    cat("  → CISS may be driving findings, interpret with caution\n\n")
   }
+  
+  ciss_sensitivity_auc <- auc_no_ciss
+  
+} else {
+  cat("No CISS variables in the model.\n")
+  cat("CISS sensitivity analysis not needed.\n\n")
+  ciss_sensitivity_needed <- FALSE
+  ciss_sensitivity_auc <- NA
 }
 
 # -----------------------------------------------------------------------------
@@ -6028,19 +5976,26 @@ cat("QUESTION: Do results change if we use only complete cases\n")
 cat("          (no imputation)?\n\n")
 
 # Get original data before imputation
-SIMOA_original <- readRDS("variable_reduction_results.rds")$analysis_data
+if(file.exists("imputation_preparation_reduced.rds")) {
+  var_reduction <- readRDS("imputation_preparation_reduced.rds")
+  SIMOA_original <- var_reduction$analysis_data
+} else {
+  cat("⚠ WARNING: Original data file not found\n")
+  cat("Using first imputation as proxy (not a true sensitivity test)\n")
+  SIMOA_original <- complete(mids_with_subscales, 1)
+}
 
 # Create complete-case dataset
 complete_case_data <- SIMOA_original %>%
-  select(scrn_stopped_bzra, all_of(recommended_vars)) %>%
+  select(all_of(c(outcome_var, recommended_vars))) %>%
   na.omit() %>%
-  mutate(scrn_stopped_bzra = factor(scrn_stopped_bzra,
-                                    levels = c(0, 1),
-                                    labels = c("Still_Using", "Discontinued")))
+  mutate(!!outcome_var := factor(.data[[outcome_var]],
+                                 levels = c(0, 1),
+                                 labels = c("Still_Using", "Discontinued")))
 
 n_complete <- nrow(complete_case_data)
 n_imputed <- nrow(complete(mids_with_subscales, 1) %>%
-                   select(scrn_stopped_bzra, all_of(recommended_vars)) %>%
+                   select(all_of(c(outcome_var, recommended_vars))) %>%
                    na.omit())
 
 cat("SAMPLE SIZES:\n")
@@ -6059,13 +6014,15 @@ if(n_complete >= 50) {
   cat("Fitting Random Forest on complete cases...\n")
   
   set.seed(123)
-  train_idx_cc <- createDataPartition(complete_case_data$scrn_stopped_bzra, 
+  train_idx_cc <- createDataPartition(complete_case_data[[outcome_var]], 
                                       p = 0.8, list = FALSE)
   train_cc <- complete_case_data[train_idx_cc, ]
   test_cc <- complete_case_data[-train_idx_cc, ]
   
+  formula_cc <- as.formula(paste(outcome_var, "~ ."))
+  
   rf_complete_case <- randomForest(
-    scrn_stopped_bzra ~ .,
+    formula_cc,
     data = train_cc,
     ntree = 1000,
     importance = TRUE
@@ -6073,7 +6030,7 @@ if(n_complete >= 50) {
   
   # Evaluate
   pred_prob_cc <- predict(rf_complete_case, test_cc, type = "prob")[, "Discontinued"]
-  roc_cc <- roc(test_cc$scrn_stopped_bzra, pred_prob_cc, quiet = TRUE)
+  roc_cc <- roc(test_cc[[outcome_var]], pred_prob_cc, quiet = TRUE)
   auc_cc <- as.numeric(auc(roc_cc))
   
   cat("\nRESULTS:\n")
@@ -6110,7 +6067,7 @@ cat("QUESTION: Are results driven by extreme values?\n\n")
 
 # Use first imputation
 imp1_full <- complete(mids_with_subscales, 1) %>%
-  select(scrn_stopped_bzra, all_of(recommended_vars)) %>%
+  select(all_of(c(outcome_var, recommended_vars))) %>%
   na.omit()
 
 # Identify outliers on continuous variables
@@ -6126,11 +6083,15 @@ if(length(continuous_vars) > 0) {
   })
   
   cat("Outliers by variable:\n")
-  print(outlier_counts[outlier_counts > 0])
+  if(sum(outlier_counts) > 0) {
+    print(outlier_counts[outlier_counts > 0])
+  } else {
+    cat("  No outliers detected (> 3 SD)\n")
+  }
   cat("\n")
   
   # Flag any observation with outlier on ANY variable
-  outlier_flags <- apply(imp1_full[, continuous_vars], 1, function(row) {
+  outlier_flags <- apply(imp1_full[, continuous_vars, drop = FALSE], 1, function(row) {
     any(abs(scale(row)) > 3, na.rm = TRUE)
   })
   
@@ -6144,25 +6105,27 @@ if(length(continuous_vars) > 0) {
     cat("Re-running Random Forest WITHOUT outliers...\n\n")
     
     imp1_no_outliers <- imp1_full[!outlier_flags, ] %>%
-      mutate(scrn_stopped_bzra = factor(scrn_stopped_bzra,
-                                        levels = c(0, 1),
-                                        labels = c("Still_Using", "Discontinued")))
+      mutate(!!outcome_var := factor(.data[[outcome_var]],
+                                     levels = c(0, 1),
+                                     labels = c("Still_Using", "Discontinued")))
     
     set.seed(123)
-    train_idx_no <- createDataPartition(imp1_no_outliers$scrn_stopped_bzra,
+    train_idx_no <- createDataPartition(imp1_no_outliers[[outcome_var]],
                                         p = 0.8, list = FALSE)
     train_no <- imp1_no_outliers[train_idx_no, ]
     test_no <- imp1_no_outliers[-train_idx_no, ]
     
+    formula_no_outliers <- as.formula(paste(outcome_var, "~ ."))
+    
     rf_no_outliers <- randomForest(
-      scrn_stopped_bzra ~ .,
+      formula_no_outliers,
       data = train_no,
       ntree = 1000,
       importance = TRUE
     )
     
     pred_prob_no <- predict(rf_no_outliers, test_no, type = "prob")[, "Discontinued"]
-    roc_no <- roc(test_no$scrn_stopped_bzra, pred_prob_no, quiet = TRUE)
+    roc_no <- roc(test_no[[outcome_var]], pred_prob_no, quiet = TRUE)
     auc_no_outliers <- as.numeric(auc(roc_no))
     
     cat("RESULTS:\n")
@@ -6202,7 +6165,7 @@ cat("═════════════════════════
 cat("QUESTION: Do cluster assignments change with different assumptions?\n\n")
 
 # Test: Bootstrap resampling stability
-cat("Testing bootstrap stability (1000 resamples)...\n\n")
+cat("Testing bootstrap stability (100 resamples)...\n\n")
 
 set.seed(123)
 
@@ -6216,7 +6179,9 @@ cluster_data_full <- clustering_results$data_with_clusters
 # Bootstrap function
 bootstrap_cluster_stability <- function(data, k, B = 100) {
   
-  cluster_vars <- setdiff(names(data), c("scrn_stopped_bzra", "cluster", "cluster_named"))
+  # Identify clustering variables (exclude outcome and cluster assignments)
+  cluster_vars <- setdiff(names(data), c(outcome_var, "scrn_stopped_bzra", 
+                                         "cluster", "cluster_named"))
   
   agreements <- numeric(B)
   
@@ -6265,9 +6230,8 @@ cat("═════════════════════════
 
 cat("QUESTION: What if we used ALL variables (no VSURF selection)?\n\n")
 
-# Get all available predictors
-var_reduction <- readRDS("variable_reduction_results.rds")
-all_available_vars <- var_reduction$final_predictors
+# Get all available predictors from subscale creation
+all_available_vars <- subscale_results$final_predictor_set
 
 cat("Variables:\n")
 cat("  VSURF-selected:", length(recommended_vars), "\n")
@@ -6278,27 +6242,29 @@ if(length(all_available_vars) > length(recommended_vars) + 5) {
   cat("Testing model with ALL variables...\n\n")
   
   imp1_all_vars <- complete(mids_with_subscales, 1) %>%
-    select(scrn_stopped_bzra, all_of(all_available_vars)) %>%
+    select(all_of(c(outcome_var, all_available_vars))) %>%
     na.omit() %>%
-    mutate(scrn_stopped_bzra = factor(scrn_stopped_bzra,
-                                      levels = c(0, 1),
-                                      labels = c("Still_Using", "Discontinued")))
+    mutate(!!outcome_var := factor(.data[[outcome_var]],
+                                   levels = c(0, 1),
+                                   labels = c("Still_Using", "Discontinued")))
   
   set.seed(123)
-  train_idx_all <- createDataPartition(imp1_all_vars$scrn_stopped_bzra,
+  train_idx_all <- createDataPartition(imp1_all_vars[[outcome_var]],
                                        p = 0.8, list = FALSE)
   train_all <- imp1_all_vars[train_idx_all, ]
   test_all <- imp1_all_vars[-train_idx_all, ]
   
+  formula_all <- as.formula(paste(outcome_var, "~ ."))
+  
   rf_all_vars <- randomForest(
-    scrn_stopped_bzra ~ .,
+    formula_all,
     data = train_all,
     ntree = 1000,
     importance = TRUE
   )
   
   pred_prob_all <- predict(rf_all_vars, test_all, type = "prob")[, "Discontinued"]
-  roc_all <- roc(test_all$scrn_stopped_bzra, pred_prob_all, quiet = TRUE)
+  roc_all <- roc(test_all[[outcome_var]], pred_prob_all, quiet = TRUE)
   auc_all_vars <- as.numeric(auc(roc_all))
   
   cat("RESULTS:\n")
@@ -6340,24 +6306,15 @@ sensitivity_summary <- data.frame(
   ),
   AUC = c(
     rf_results$mean_auc,
-    if(ciss_sensitivity_needed && exists("ciss_sensitivity_auc")) ciss_sensitivity_auc else NA,
+    if(exists("ciss_sensitivity_auc")) ciss_sensitivity_auc else NA,
     if(exists("complete_case_auc")) complete_case_auc else NA,
     if(exists("auc_no_outliers")) auc_no_outliers else NA,
     if(exists("auc_all_vars")) auc_all_vars else NA
   ),
-  Difference_from_Main = c(
-    0,
-    if(ciss_sensitivity_needed && exists("ciss_sensitivity_auc")) 
-      ciss_sensitivity_auc - rf_results$mean_auc else NA,
-    if(exists("complete_case_auc")) 
-      complete_case_auc - rf_results$mean_auc else NA,
-    if(exists("auc_no_outliers")) 
-      auc_no_outliers - rf_results$mean_auc else NA,
-    if(exists("auc_all_vars")) 
-      auc_all_vars - rf_results$mean_auc else NA
-  )
+  stringsAsFactors = FALSE
 ) %>%
   mutate(
+    Difference_from_Main = AUC - rf_results$mean_auc,
     AUC = round(AUC, 3),
     Difference_from_Main = round(Difference_from_Main, 3),
     Assessment = case_when(
@@ -6404,7 +6361,8 @@ p_sensitivity <- ggplot(sensitivity_summary_plot,
   geom_text(aes(label = round(AUC, 3)), vjust = -0.5, size = 3.5) +
   scale_fill_manual(values = c("Robust" = "darkgreen", 
                                "Acceptable" = "gold",
-                               "Concerning" = "red")) +
+                               "Concerning" = "red",
+                               "Not tested" = "gray")) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   labs(title = "Sensitivity Analysis Results",
@@ -6438,14 +6396,16 @@ sensitivity_results <- list(
   ) else NA,
   outlier_sensitivity = if(exists("auc_no_outliers")) list(
     auc = auc_no_outliers,
-    n_outliers = n_outlier_obs
+    n_outliers = if(exists("n_outlier_obs")) n_outlier_obs else NA
   ) else NA,
   all_vars_sensitivity = if(exists("auc_all_vars")) list(
     auc = auc_all_vars
   ) else NA,
   bootstrap_stability = list(
     mean = mean(boot_results),
-    sd = sd(boot_results)
+    sd = sd(boot_results),
+    ci_lower = quantile(boot_results, 0.025),
+    ci_upper = quantile(boot_results, 0.975)
   ),
   overall_assessment = list(
     n_robust = n_robust,
@@ -6487,41 +6447,6 @@ cat("✓ Ready for FDR correction!\n\n")
 ```{r}
 #==============================================================================
 # CHUNK 11: FDR-CORRECTED CLUSTER COMPARISONS
-#==============================================================================
-# NARRATIVE SUMMARY:
-# ------------------
-# WHAT: Once you have clusters, you want to know "how do these patient types 
-# differ?" This chunk compares clusters on EVERY variable in your dataset 
-# (personality, demographics, clinical factors), but applies False Discovery 
-# Rate (FDR) correction SEPARATELY BY DOMAIN to avoid falsely declaring 
-# differences that are just due to chance.
-#
-# WHY IT MATTERS:
-# - MULTIPLE TESTING PROBLEM: If you compare 3 clusters on 40 variables, that's 
-#   40 statistical tests. By chance alone, you'd expect 2 false positives at 
-#   p<.05. FDR controls this.
-# - DOMAIN-SPECIFIC CORRECTION (your excellent decision): Personality traits 
-#   should be corrected together, clinical variables together, demographics 
-#   together - because they're conceptually related families of tests
-# - CHARACTERIZING CLUSTERS: This tells you what TRULY distinguishes each 
-#   patient type (not just what looks different by chance)
-# - PUBLICATION QUALITY: Reviewers will require multiple testing correction - 
-#   this shows statistical sophistication
-#
-# DECISION POINTS:
-# 1. FDR threshold: q = 0.05 (standard) or q = 0.10 (more lenient)?
-# 2. Domain definitions: Which variables go in which family?
-#    - Personality: All BFI, SURPS, DBAS, CISS subscales
-#    - Clinical: Health conditions, medications, PHQ-2, OSSS-3, side effects
-#    - Demographics: Age, sex, education, income, employment
-# 3. Effect size reporting: Even with significance, need to report how BIG 
-#    differences are (Cohen's d, Cramér's V)
-#
-# WHAT YOU'LL LEARN:
-# - Which differences between clusters are STATISTICALLY ROBUST (survive FDR)?
-# - Which apparent differences are likely FALSE POSITIVES (don't survive FDR)?
-# - What are the DEFINING FEATURES of each patient type?
-# - Are personality differences bigger than demographic differences?
 #==============================================================================
 
 library(tidyverse)
@@ -7119,33 +7044,6 @@ cat("✓ Ready for final documentation!\n\n")
 ```{r}
 #==============================================================================
 # CHUNK 12: FINAL DOCUMENTATION AND REPORTING
-#==============================================================================
-# NARRATIVE SUMMARY:
-# ------------------
-# WHAT: The grand finale - bringing together clustering results, prediction 
-# results, sensitivity analyses, and FDR-corrected comparisons into a coherent 
-# story with professional tables, figures, and narrative summaries ready for 
-# your dissertation/manuscript.
-#
-# WHY IT MATTERS:
-# - Your committee wants to see THE COMPLETE PICTURE - how do all pieces fit?
-# - You need PUBLICATION-READY OUTPUTS - can't just have R output, need 
-#   formatted tables and figures
-# - This is your DEFENSE PREPARATION - organized materials you can present 
-#   and discuss
-# - Creates a PERMANENT RECORD of your decisions and findings for future reference
-#
-# DECISION POINTS:
-# 1. Primary message: What's the one-sentence takeaway?
-# 2. Figure selection: Which 4-5 figures tell the story best?
-# 3. Table priorities: Which results go in main text vs. supplementary materials?
-# 4. Clinical translation: How do you frame findings for clinician audience?
-#
-# WHAT YOU'LL LEARN:
-# - Your COMPLETE NARRATIVE ARC: From data → findings → clinical implications
-# - How CLUSTERING and PREDICTION complement each other
-# - Your study's STRENGTHS and LIMITATIONS
-# - NEXT STEPS for future research
 #==============================================================================
 
 library(tidyverse)
