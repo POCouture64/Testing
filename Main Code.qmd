@@ -66,6 +66,20 @@ cat("Original sample:", n_original, "\n")
 cat("After age filtering:", n_after_age, "(removed:", n_original - n_after_age, ")\n")
 cat("After c_sp filtering:", n_final, "(removed:", n_after_age - n_final, ")\n")
 cat("Total removed:", n_original - n_final, "\n")
+
+## Eligible Particpants 
+Below I am going to create a new object including only those that we can prove are ≥ 65 and are using a BZRA by answering the question (c_sp). This is to ensure they are not using other medications that may have sedating properties such as antihistamines or SSRI's and that they are older adults and fit into the research population we want.
+
+```{r}
+#| label: Eligible Participant Code
+
+SIMOA_ELIGIBLE <- SIMOA %>% 
+  # Applying the filtering based on age_cat and age
+  fitler(age_cat == 1 | (age_cat == 0 & age >= 65)) %>% 
+  # Applying the filtering to keep only rows where any of c_sp___1 to c_sp___14 == 1
+
+filter(c_sp)
+
 ```
 
 
