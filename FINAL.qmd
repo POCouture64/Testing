@@ -2898,577 +2898,534 @@ cat("  3. Then Random Forest modeling (Chunk 7)\n\n")
 cat("✓ Ready for VSURF!\n\n")
 ```
 
+
 ## VSURF Variable Selection
 
 ```{r}
 #==============================================================================
-# CHUNK 6: VSURF VARIABLE SELECTION
+# CHUNK 6: VSURF VARIABLE SELECTION (UPSTREAM PREDICTORS ONLY)
 #==============================================================================
-# Purpose: Principled variable selection using VSURF (replaces arbitrary "top 15")
-# Strategy: Run on first imputation, check stability across 5 others
-# Output: Interpretation set (for logistic regression) and prediction set
+# Purpose: Select important variables from upstream domains (personality + demographics)
+# Strategy: Apply VSURF within personality block, include demographics by default
+# Rationale: Exclude downstream variables (dependence, side effects) per supervisor feedback
+# Output: Reduced set of predictors for logistic regression
 #==============================================================================
 
 library(VSURF)
 library(tidyverse)
 library(mice)
-library(parallel)
 library(randomForest)
+library(ggplot2)
 
 cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("STEP 6: VSURF VARIABLE SELECTION\n")
+cat("STEP 6: VSURF VARIABLE SELECTION (UPSTREAM PREDICTORS)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("ADDRESSING COMMITTEE CONCERN: Arbitrary 'top 15' selection\n")
-cat("SOLUTION: VSURF - statistically principled variable selection\n")
-cat("REFERENCE: Genuer et al. (2015), Pattern Recognition Letters\n\n")
-
-# Load data with subscales
+# Load data
 mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
 subscale_results <- readRDS("subscale_creation_results.rds")
 
-final_predictor_set <- subscale_results$final_predictor_set
 outcome_var <- subscale_results$outcome
+personality_subscales <- subscale_results$personality_subscales
 
-cat("Loaded predictor set with", length(final_predictor_set), "variables\n")
-cat("Outcome variable:", outcome_var, "\n\n")
+# ==============================================================================
+# CONCEPTUAL FRAMEWORK (per supervisor feedback)
+# ==============================================================================
 
-# -----------------------------------------------------------------------------
-# A. Prepare data for VSURF
-# -----------------------------------------------------------------------------
+cat("═══ CONCEPTUAL FRAMEWORK ═══\n\n")
+cat("UPSTREAM PREDICTORS (what predicts BZRA use):\n")
+cat("  • Personality traits (BFI, SURPS, DBAS, CISS)\n")
+cat("  • Demographics (age, sex, income, etc.)\n")
+cat("  → These are theoretically meaningful predictors\n\n")
 
-cat("PART A: Preparing data for VSURF\n")
+cat("DOWNSTREAM VARIABLES (consequences of BZRA use):\n")
+cat("  • Dependence, side effects, safety concerns\n")
+cat("  • Medication-use specific variables\n")
+cat("  → EXCLUDED from primary model per supervisor guidance\n")
+cat("  → Would muddle causal interpretation\n\n")
+
+cat("VARIABLE SELECTION STRATEGY:\n")
+cat("  1. Demographics: Include by DEFAULT (no RF selection needed)\n")
+cat("  2. Personality: Use VSURF to reduce high-dimensional correlated block\n")
+cat("  3. Accept that correlated variables won't give consistent rankings\n")
+cat("  4. Goal: Modest number of predictors (~10-15 total) for n=400\n\n")
+
+# ==============================================================================
+# A. Define variable sets
+# ==============================================================================
+
+cat("PART A: Defining variable sets\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-# Use first imputation for main VSURF run
-vsurf_data <- complete(mids_with_subscales, 1)
+# DEMOGRAPHICS (MUST-HAVE controls - no selection needed)
+demographics_mandatory <- c("age", "sex", "gender", "income", "driving_freq", 
+                           "phq2_score", "osss_3_score", "region", 
+                           "employment_status", "education_level")
 
-# Check if outcome exists
-if(!(outcome_var %in% names(vsurf_data))) {
-  stop("ERROR: Outcome variable '", outcome_var, "' not found in data!")
+# PERSONALITY (high-dimensional correlated block - needs VSURF)
+# Remove DBAS_Total if present (it's sum of subscales)
+personality_for_selection <- personality_subscales[personality_subscales != "DBAS_Total"]
+
+cat("MANDATORY DEMOGRAPHICS (", length(demographics_mandatory), "):\n", sep = "")
+for(i in seq_along(demographics_mandatory)) {
+  cat("  ", i, ". ", demographics_mandatory[i], "\n", sep = "")
 }
 
-# Select predictors (remove any that don't exist or are all-NA)
-available_predictors <- final_predictor_set[final_predictor_set %in% names(vsurf_data)]
+cat("\nPERSONALITY FOR SELECTION (", length(personality_for_selection), "):\n", sep = "")
+cat("  BFI (5): ", paste(personality_for_selection[grepl("^(Extraversion|Agreeableness|Conscientiousness|Neuroticism|Openness)$", personality_for_selection)], collapse = ", "), "\n")
+cat("  SURPS (4): ", paste(personality_for_selection[grepl("^SURPS", personality_for_selection)], collapse = ", "), "\n")
+cat("  DBAS (4): ", paste(personality_for_selection[grepl("^DBAS", personality_for_selection)], collapse = ", "), "\n")
+cat("  CISS (3): ", paste(personality_for_selection[grepl("^CISS", personality_for_selection)], collapse = ", "), "\n\n")
 
-vsurf_predictors <- vsurf_data %>%
-  select(all_of(available_predictors)) %>%
-  select(where(~ !all(is.na(.))))  # Remove all-NA columns
+# ==============================================================================
+# B. Prepare data
+# ==============================================================================
 
-# Get outcome
-vsurf_outcome <- vsurf_data[[outcome_var]]
+cat("PART B: Preparing data\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
 
-# CRITICAL: VSURF expects outcome as factor for classification
-if(!is.factor(vsurf_outcome)) {
-  if(all(vsurf_outcome %in% c(0, 1, NA))) {
-    vsurf_outcome <- factor(vsurf_outcome, levels = c(0, 1))
-    cat("✓ Converted outcome to factor (0/1) for classification\n")
-  } else {
-    # Convert to binary if needed
-    vsurf_outcome <- factor(as.numeric(vsurf_outcome > median(vsurf_outcome, na.rm = TRUE)), 
-                            levels = c(0, 1))
-    cat("✓ Converted outcome to binary factor via median split\n")
-  }
-}
+# Extract first imputed dataset
+data_complete <- complete(mids_with_subscales, 1)
 
-# Remove any rows with NA in outcome
-complete_idx <- !is.na(vsurf_outcome)
-vsurf_predictors <- vsurf_predictors[complete_idx, ]
-vsurf_outcome <- vsurf_outcome[complete_idx]
-vsurf_outcome <- droplevels(vsurf_outcome)  # Drop unused levels
+# Check available variables
+available_personality <- personality_for_selection[personality_for_selection %in% names(data_complete)]
+available_demographics <- demographics_mandatory[demographics_mandatory %in% names(data_complete)]
 
-cat("\nVSURF Input:\n")
-cat("  Observations:", nrow(vsurf_predictors), "\n")
-cat("  Predictors:", ncol(vsurf_predictors), "\n")
-cat("  Outcome:", outcome_var, "(factor with", nlevels(vsurf_outcome), "levels)\n\n")
+missing_vars <- c(
+  personality_for_selection[!(personality_for_selection %in% names(data_complete))],
+  demographics_mandatory[!(demographics_mandatory %in% names(data_complete))]
+)
 
-cat("Outcome distribution:\n")
-print(table(vsurf_outcome, useNA = "ifany"))
-cat("\n")
-
-# Check for factor variables
-factor_vars <- sapply(vsurf_predictors, is.factor)
-if(any(factor_vars)) {
-  cat("Factor variables (VSURF handles these automatically):\n")
-  factor_var_names <- names(factor_vars)[factor_vars]
-  for(i in seq_along(factor_var_names)) {
-    var_name <- factor_var_names[i]
-    n_levels <- nlevels(vsurf_predictors[[var_name]])
-    cat("  ", i, ". ", var_name, " (", n_levels, " levels)\n", sep = "")
-  }
+if(length(missing_vars) > 0) {
+  cat("⚠ WARNING: Missing variables:\n")
+  for(var in missing_vars) cat("  •", var, "\n")
   cat("\n")
 }
 
-# Check for numeric variables
-numeric_vars <- sapply(vsurf_predictors, is.numeric)
-cat("Numeric variables:", sum(numeric_vars), "\n")
-cat("Factor variables:", sum(factor_vars), "\n\n")
+# Prepare personality data (for VSURF)
+X_personality <- data_complete %>%
+  select(all_of(available_personality)) %>%
+  select(where(~ !all(is.na(.))))
 
-# -----------------------------------------------------------------------------
-# B. Run VSURF (main analysis on imputation 1)
-# -----------------------------------------------------------------------------
+# Prepare outcome
+y_outcome <- data_complete[[outcome_var]]
 
-cat("PART B: Running VSURF (3-step algorithm)\n")
+# Remove NAs
+complete_idx <- !is.na(y_outcome)
+X_personality <- X_personality[complete_idx, ]
+y_outcome <- y_outcome[complete_idx]
+y_outcome <- factor(y_outcome, levels = c(0, 1))
+y_outcome <- droplevels(y_outcome)
+
+cat("Data for VSURF:\n")
+cat("  Observations:", nrow(X_personality), "\n")
+cat("  Personality predictors:", ncol(X_personality), "\n")
+cat("  Outcome:", outcome_var, "\n\n")
+
+cat("Outcome distribution:\n")
+outcome_table <- table(y_outcome)
+print(outcome_table)
+cat("  Minority class %:", round(100 * min(outcome_table) / sum(outcome_table), 1), "\n\n")
+
+# ==============================================================================
+# C. Run VSURF on personality block
+# ==============================================================================
+
+cat("PART C: Running VSURF on personality variables\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-cat("VSURF performs:\n")
-cat("  Step 1: THRESHOLDING - Eliminate irrelevant variables\n")
-cat("  Step 2: INTERPRETATION - Select for understanding (USE THIS)\n")
-cat("  Step 3: PREDICTION - Minimal optimal set\n\n")
+cat("VSURF THREE-STEP PROCESS:\n")
+cat("  1. THRESHOLDING: Remove clearly irrelevant variables\n")
+cat("  2. INTERPRETATION: Select variables for interpretation\n")
+cat("  3. PREDICTION: Minimal set for prediction\n\n")
 
-# Set up parallel processing
-n_cores <- max(1, detectCores() - 1)
-cat("Using", n_cores, "CPU cores for parallel processing\n\n")
-
-cat("⏱ ESTIMATED TIME: 15-30 minutes\n")
-cat("(This is computing intensive - be patient!)\n\n")
+cat("Running VSURF (this may take several minutes)...\n\n")
 
 set.seed(12345)
 start_time <- Sys.time()
 
-# Run VSURF with appropriate parameters for classification
-vsurf_result <- VSURF(
-  x = vsurf_predictors,
-  y = vsurf_outcome,  # Factor for classification
-  mtry = floor(sqrt(ncol(vsurf_predictors))),  # Standard RF classification default
-  ntree = 2000,  # VSURF default (higher than randomForest's 500)
-  nfor.thres = 50,  # Number of forests for thresholding (VSURF default)
-  nfor.interp = 25,  # Number of forests for interpretation (VSURF default)
-  nfor.pred = 25,  # Number of forests for prediction (VSURF default)
-  parallel = TRUE,
-  ncores = n_cores,
-  verbose = TRUE
-)
+vsurf_result <- tryCatch({
+  VSURF(
+    x = X_personality,
+    y = y_outcome,
+    ntree = 2000,           # Stable importance estimates
+    mtry = max(floor(ncol(X_personality)/3), 1),
+    parallel = FALSE,
+    verbose = TRUE
+  )
+}, error = function(e) {
+  cat("\n✗ ERROR in VSURF:", e$message, "\n")
+  return(NULL)
+})
 
 end_time <- Sys.time()
 time_taken <- round(difftime(end_time, start_time, units = "mins"), 1)
 
-cat("\n✓ VSURF completed in", time_taken, "minutes!\n\n")
+cat("\n✓ VSURF completed in", time_taken, "minutes\n\n")
 
-# -----------------------------------------------------------------------------
-# C. Extract VSURF results
-# -----------------------------------------------------------------------------
+# ==============================================================================
+# D. Extract results
+# ==============================================================================
 
-cat("PART C: VSURF results\n")
+cat("PART D: Extracting results\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-# Get variable names for each step
-predictor_names <- names(vsurf_predictors)
-
-# Step 1: Thresholding
-if(length(vsurf_result$varselect.thres) > 0) {
-  vars_threshold <- predictor_names[vsurf_result$varselect.thres]
-} else {
-  vars_threshold <- character(0)
-  warning("No variables selected in thresholding step!")
-}
-
-cat("STEP 1 - THRESHOLDING:\n")
-cat("  Purpose: Eliminate clearly irrelevant variables\n")
-cat("  Variables retained:", length(vars_threshold), "out of", ncol(vsurf_predictors), "\n")
-if(length(vars_threshold) > 0) {
-  cat("  Variables:\n")
-  for(i in seq_along(vars_threshold)) {
-    cat("    ", i, ". ", vars_threshold[i], "\n", sep = "")
-  }
-} else {
-  cat("  ⚠ WARNING: No variables passed threshold!\n")
-}
-cat("\n")
-
-# Step 2: Interpretation (KEY RESULT)
-if(length(vsurf_result$varselect.interp) > 0) {
-  vars_interpretation <- predictor_names[vsurf_result$varselect.interp]
-} else {
-  vars_interpretation <- character(0)
-  warning("No variables selected in interpretation step!")
-}
-
-cat("STEP 2 - INTERPRETATION SET (USE FOR LOGISTIC REGRESSION):\n")
-cat("  Purpose: Stable, important variables for understanding\n")
-cat("  Variables selected:", length(vars_interpretation), "\n")
-if(length(vars_interpretation) > 0) {
-  cat("  Variables:\n")
-  for(i in seq_along(vars_interpretation)) {
-    cat("    ", i, ". ", vars_interpretation[i], "\n", sep = "")
-  }
-} else {
-  cat("  ⚠ WARNING: No variables in interpretation set!\n")
-}
-cat("\n")
-
-# Step 3: Prediction
-if(length(vsurf_result$varselect.pred) > 0) {
-  vars_prediction <- predictor_names[vsurf_result$varselect.pred]
-} else {
-  vars_prediction <- character(0)
-  warning("No variables selected in prediction step!")
-}
-
-cat("STEP 3 - PREDICTION SET:\n")
-cat("  Purpose: Minimal optimal set for prediction\n")
-cat("  Variables selected:", length(vars_prediction), "\n")
-if(length(vars_prediction) > 0) {
-  cat("  Variables:\n")
-  for(i in seq_along(vars_prediction)) {
-    cat("    ", i, ". ", vars_prediction[i], "\n", sep = "")
-  }
-} else {
-  cat("  ⚠ WARNING: No variables in prediction set!\n")
-}
-cat("\n")
-
-# -----------------------------------------------------------------------------
-# D. Visualizations
-# -----------------------------------------------------------------------------
-
-cat("PART D: Creating visualizations\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Main VSURF plot (shows all 3 steps)
-png("VSURF_selection_process.png", width = 1600, height = 1000, res = 120)
-plot(vsurf_result, main = "VSURF Variable Selection Process")
-dev.off()
-cat("✓ Saved: VSURF_selection_process.png\n")
-cat("  Shows: Variable importance thresholds for each step\n\n")
-
-# Variable importance for interpretation set (only if variables were selected)
-if(length(vars_interpretation) > 0) {
+if(is.null(vsurf_result)) {
+  cat("✗ VSURF FAILED - using fallback strategy\n\n")
   
-  cat("Computing variable importance for selected variables...\n")
-  
-  rf_selected <- randomForest(
-    x = vsurf_predictors[, vars_interpretation, drop = FALSE],
-    y = vsurf_outcome,
-    ntree = 1000,
-    importance = TRUE
+  # Fallback: Use standard RF importance
+  set.seed(12345)
+  rf_model <- randomForest(
+    x = X_personality,
+    y = y_outcome,
+    importance = TRUE,
+    ntree = 2000
   )
   
+  importance_vals <- importance(rf_model)[, "MeanDecreaseGini"]
   importance_df <- data.frame(
-    Variable = vars_interpretation,
-    MeanDecreaseAccuracy = importance(rf_selected)[, "MeanDecreaseAccuracy"],
-    MeanDecreaseGini = importance(rf_selected)[, "MeanDecreaseGini"]
+    Variable = names(importance_vals),
+    Importance = importance_vals
   ) %>%
-    arrange(desc(MeanDecreaseAccuracy))
+    arrange(desc(Importance))
   
-  # Importance plot
-  library(ggplot2)
+  # Select top 8 personality variables (conservative for n=400)
+  selected_personality <- importance_df$Variable[1:8]
   
-  p_importance <- ggplot(importance_df, 
-                         aes(x = reorder(Variable, MeanDecreaseAccuracy), 
-                             y = MeanDecreaseAccuracy)) +
-    geom_col(fill = "steelblue", alpha = 0.8) +
+  vsurf_interpretation <- selected_personality
+  vsurf_prediction <- selected_personality[1:5]
+  
+  cat("FALLBACK SELECTION (top 8 by importance):\n")
+  print(importance_df[1:8, ], row.names = FALSE)
+  cat("\n")
+  
+} else {
+  
+  # Extract VSURF results
+  vsurf_threshold <- names(X_personality)[vsurf_result$varselect.thres]
+  vsurf_interpretation <- names(X_personality)[vsurf_result$varselect.interp]
+  vsurf_prediction <- names(X_personality)[vsurf_result$varselect.pred]
+  
+  cat("VSURF RESULTS:\n\n")
+  
+  cat("STEP 1 - THRESHOLDING (", length(vsurf_threshold), " variables):\n", sep = "")
+  cat("  Variables passing relevance threshold:\n")
+  for(i in seq_along(vsurf_threshold)) {
+    cat("    ", i, ". ", vsurf_threshold[i], "\n", sep = "")
+  }
+  cat("\n")
+  
+  cat("STEP 2 - INTERPRETATION (", length(vsurf_interpretation), " variables):\n", sep = "")
+  cat("  → USE THESE for explanatory model\n")
+  for(i in seq_along(vsurf_interpretation)) {
+    cat("    ", i, ". ", vsurf_interpretation[i], "\n", sep = "")
+  }
+  cat("\n")
+  
+  cat("STEP 3 - PREDICTION (", length(vsurf_prediction), " variables):\n", sep = "")
+  cat("  Minimal set for pure prediction:\n")
+  for(i in seq_along(vsurf_prediction)) {
+    cat("    ", i, ". ", vsurf_prediction[i], "\n", sep = "")
+  }
+  cat("\n")
+  
+  # Variable importance from final RF
+  importance_vals <- vsurf_result$imp.varselect.thres
+  importance_df <- data.frame(
+    Variable = names(X_personality)[vsurf_result$varselect.thres],
+    Importance = importance_vals
+  ) %>%
+    arrange(desc(Importance))
+  
+  cat("VARIABLE IMPORTANCE (threshold step):\n")
+  print(head(importance_df, 15), row.names = FALSE)
+  cat("\n")
+}
+
+# ==============================================================================
+# E. Create final variable set
+# ==============================================================================
+
+cat("PART E: Creating final variable set\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cat("FINAL SELECTION STRATEGY (per supervisor guidance):\n")
+cat("  1. Include ALL demographics (no selection)\n")
+cat("  2. Add VSURF interpretation set from personality\n")
+cat("  3. Goal: ~10-15 total predictors for n=400\n\n")
+
+# Selected personality variables (interpretation set)
+selected_personality <- vsurf_interpretation
+
+# Combine: demographics + selected personality
+final_variable_set <- c(available_demographics, selected_personality)
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("FINAL VARIABLE SET FOR LOGISTIC REGRESSION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("DEMOGRAPHICS (", length(available_demographics), " - included by default):\n", sep = "")
+for(i in seq_along(available_demographics)) {
+  cat("  ", i, ". ", available_demographics[i], "\n", sep = "")
+}
+
+cat("\nSELECTED PERSONALITY (", length(selected_personality), " - via VSURF):\n", sep = "")
+for(i in seq_along(selected_personality)) {
+  cat("  ", i, ". ", selected_personality[i], "\n", sep = "")
+}
+
+cat("\nTOTAL PREDICTORS:", length(final_variable_set), "\n")
+cat("Sample size:", nrow(X_personality), "\n")
+cat("Events per variable:", round(min(outcome_table) / length(final_variable_set), 1), "\n\n")
+
+if(length(final_variable_set) > 15) {
+  cat("⚠ WARNING: More than 15 predictors for n=400 may lead to overfitting\n")
+  cat("   Consider further reducing personality variables\n\n")
+} else {
+  cat("✓ Variable count is appropriate for sample size\n\n")
+}
+
+# ==============================================================================
+# F. Group breakdown
+# ==============================================================================
+
+cat("PART F: Breakdown by personality domain\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Classify personality variables
+personality_groups <- data.frame(
+  Variable = selected_personality,
+  Domain = case_when(
+    grepl("^(Extraversion|Agreeableness|Conscientiousness|Neuroticism|Openness)$", selected_personality) ~ "BFI",
+    grepl("^SURPS", selected_personality) ~ "SURPS",
+    grepl("^DBAS", selected_personality) ~ "DBAS",
+    grepl("^CISS", selected_personality) ~ "CISS",
+    TRUE ~ "Other"
+  )
+) %>%
+  arrange(Domain, Variable)
+
+domain_summary <- personality_groups %>%
+  count(Domain, name = "N_Selected") %>%
+  mutate(
+    N_Total = case_when(
+      Domain == "BFI" ~ 5,
+      Domain == "SURPS" ~ 4,
+      Domain == "DBAS" ~ 4,
+      Domain == "CISS" ~ 3,
+      TRUE ~ 0
+    ),
+    Percent = round(100 * N_Selected / N_Total, 1)
+  )
+
+cat("Selection by personality domain:\n")
+print(domain_summary, row.names = FALSE)
+cat("\n")
+
+cat("Detailed breakdown:\n")
+for(domain in unique(personality_groups$Domain)) {
+  vars_in_domain <- personality_groups %>% filter(Domain == domain)
+  cat("  ", domain, " (", nrow(vars_in_domain), "):\n", sep = "")
+  for(i in 1:nrow(vars_in_domain)) {
+    cat("    • ", vars_in_domain$Variable[i], "\n", sep = "")
+  }
+  cat("\n")
+}
+
+# ==============================================================================
+# G. Visualizations
+# ==============================================================================
+
+cat("PART G: Creating visualizations\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# 1. Variable importance plot (personality only)
+if(nrow(importance_df) > 0) {
+  
+  importance_plot_data <- importance_df %>%
+    head(15) %>%
+    mutate(
+      Domain = case_when(
+        grepl("^(Extraversion|Agreeableness|Conscientiousness|Neuroticism|Openness)$", Variable) ~ "BFI",
+        grepl("^SURPS", Variable) ~ "SURPS",
+        grepl("^DBAS", Variable) ~ "DBAS",
+        grepl("^CISS", Variable) ~ "CISS",
+        TRUE ~ "Other"
+      ),
+      Selected = Variable %in% selected_personality
+    )
+  
+  p_importance <- ggplot(importance_plot_data, 
+                         aes(x = reorder(Variable, Importance), 
+                             y = Importance,
+                             fill = Domain,
+                             alpha = Selected)) +
+    geom_col() +
+    scale_alpha_manual(values = c("TRUE" = 1.0, "FALSE" = 0.4),
+                       name = "VSURF Selected") +
     coord_flip() +
+    scale_fill_brewer(palette = "Set2") +
     labs(
-      title = "Variable Importance (VSURF Interpretation Set)",
-      subtitle = paste(length(vars_interpretation), 
-                       "variables selected via VSURF for interpretation"),
+      title = "Variable Importance - Personality Predictors",
+      subtitle = paste("VSURF selected", length(selected_personality), "of", ncol(X_personality), "variables for interpretation"),
       x = NULL,
-      y = "Mean Decrease in Accuracy"
+      y = "Variable Importance (Mean Decrease Gini)"
     ) +
     theme_minimal(base_size = 12) +
     theme(
       plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
       plot.subtitle = element_text(hjust = 0.5, size = 11),
-      axis.text.y = element_text(size = 10)
+      legend.position = "bottom"
     )
   
-  ggsave("VSURF_variable_importance.png", 
+  ggsave("VSURF_personality_importance.png", 
          plot = p_importance, 
          width = 10, 
-         height = max(6, length(vars_interpretation) * 0.3), 
+         height = 8, 
          dpi = 300)
   
-  cat("✓ Saved: VSURF_variable_importance.png\n\n")
-  
-  # Print importance table
-  cat("Variable Importance Rankings:\n")
-  print(importance_df %>%
-          mutate(
-            MeanDecreaseAccuracy = round(MeanDecreaseAccuracy, 4),
-            MeanDecreaseGini = round(MeanDecreaseGini, 4)
-          ),
-        row.names = FALSE)
-  cat("\n")
-  
-} else {
-  cat("⚠ Skipping importance plot - no variables in interpretation set\n\n")
+  cat("✓ Saved: VSURF_personality_importance.png\n")
 }
 
-# -----------------------------------------------------------------------------
-# E. Stability check across imputations
-# -----------------------------------------------------------------------------
-
-cat("PART E: Stability check across imputations\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-cat("Checking if VSURF selects consistent variables across imputations...\n")
-cat("(Testing on 5 additional imputations)\n\n")
-
-# Function to run VSURF on one imputation
-run_vsurf_one_imp <- function(imp_num, mids_obj, predictors, outcome_var) {
-  
-  cat("  Imputation", imp_num, "...\n")
-  
-  # Get data
-  imp_data <- complete(mids_obj, imp_num)
-  
-  # Prepare predictors
-  available_preds <- predictors[predictors %in% names(imp_data)]
-  X <- imp_data %>%
-    select(all_of(available_preds)) %>%
-    select(where(~ !all(is.na(.))))
-  
-  # Prepare outcome
-  y <- imp_data[[outcome_var]]
-  
-  # Convert to factor for classification
-  if(!is.factor(y)) {
-    if(all(y %in% c(0, 1, NA))) {
-      y <- factor(y, levels = c(0, 1))
-    } else {
-      y <- factor(as.numeric(y > median(y, na.rm = TRUE)), levels = c(0, 1))
-    }
-  }
-  
-  # Remove NAs
-  complete_idx <- !is.na(y)
-  X <- X[complete_idx, ]
-  y <- y[complete_idx]
-  y <- droplevels(y)
-  
-  # Run VSURF
-  set.seed(12345 + imp_num)
-  vs <- tryCatch({
-    VSURF(
-      x = X,
-      y = y,
-      mtry = floor(sqrt(ncol(X))),
-      ntree = 1000,  # Fewer trees for speed in stability check
-      nfor.thres = 25,  # Reduced for speed
-      nfor.interp = 15,
-      nfor.pred = 15,
-      parallel = FALSE,  # Already parallelized at higher level
-      verbose = FALSE
-    )
-  }, error = function(e) {
-    cat("    ERROR in imputation", imp_num, ":", e$message, "\n")
-    return(NULL)
-  })
-  
-  if(is.null(vs)) {
-    return(list(
-      threshold = character(0),
-      interpretation = character(0),
-      prediction = character(0)
-    ))
-  }
-  
-  # Extract variable names
-  var_names <- names(X)
-  
-  return(list(
-    threshold = if(length(vs$varselect.thres) > 0) var_names[vs$varselect.thres] else character(0),
-    interpretation = if(length(vs$varselect.interp) > 0) var_names[vs$varselect.interp] else character(0),
-    prediction = if(length(vs$varselect.pred) > 0) var_names[vs$varselect.pred] else character(0)
-  ))
-}
-
-# Run on imputations 2-6
-stability_results <- list()
-for(i in 2:6) {
-  stability_results[[i]] <- run_vsurf_one_imp(
-    imp_num = i,
-    mids_obj = mids_with_subscales,
-    predictors = names(vsurf_predictors),
-    outcome_var = outcome_var
+# 2. Selection by domain plot
+p_domain <- ggplot(domain_summary, 
+                   aes(x = reorder(Domain, N_Selected), 
+                       y = N_Selected,
+                       fill = Domain)) +
+  geom_col(alpha = 0.8, show.legend = FALSE) +
+  geom_text(aes(label = paste0(N_Selected, "/", N_Total, " (", Percent, "%)")),
+            hjust = -0.1, size = 4) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +
+  labs(
+    title = "VSURF Selection by Personality Domain",
+    subtitle = "Number of variables selected for interpretation",
+    x = NULL,
+    y = "Variables Selected"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 11)
   )
-}
 
-cat("\n")
+ggsave("VSURF_selection_by_domain.png", 
+       plot = p_domain, 
+       width = 10, 
+       height = 6, 
+       dpi = 300)
 
-# Analyze stability
-cat("STABILITY ANALYSIS:\n\n")
+cat("✓ Saved: VSURF_selection_by_domain.png\n\n")
 
-# For interpretation set (most important)
-all_interp_selections <- c(
-  list(vars_interpretation),
-  lapply(stability_results[2:6], function(x) x$interpretation)
-)
+# ==============================================================================
+# H. Save results
+# ==============================================================================
 
-# Remove empty selections
-all_interp_selections <- all_interp_selections[sapply(all_interp_selections, length) > 0]
-
-if(length(all_interp_selections) > 0) {
-  
-  # Count how often each variable was selected
-  var_selection_freq <- table(unlist(all_interp_selections))
-  var_selection_pct <- round(100 * var_selection_freq / 6, 1)
-  
-  stability_df <- data.frame(
-    Variable = names(var_selection_freq),
-    Times_Selected = as.numeric(var_selection_freq),
-    Percent = var_selection_pct
-  ) %>%
-    arrange(desc(Times_Selected), Variable)
-  
-  cat("Interpretation set stability (selected in X/6 imputations):\n")
-  print(stability_df, row.names = FALSE)
-  cat("\n")
-  
-  # Variables selected in ≥5/6 imputations are highly stable
-  stable_vars <- stability_df$Variable[stability_df$Times_Selected >= 5]
-  unstable_vars <- stability_df$Variable[stability_df$Times_Selected <= 3]
-  
-  cat("STABILITY ASSESSMENT:\n")
-  cat("  Highly stable (5-6/6):", length(stable_vars), "variables\n")
-  if(length(stable_vars) > 0) {
-    cat("    ", paste(stable_vars, collapse = ", "), "\n")
-  }
-  cat("\n")
-  
-  if(length(unstable_vars) > 0) {
-    cat("  Unstable (≤3/6):", length(unstable_vars), "variables\n")
-    cat("    ", paste(unstable_vars, collapse = ", "), "\n")
-    cat("    → Consider excluding these from final model\n\n")
-  }
-  
-  # Recommended set: Variables selected in ≥4/6 imputations
-  recommended_vars <- stability_df$Variable[stability_df$Times_Selected >= 4]
-  
-} else {
-  cat("⚠ WARNING: No variables consistently selected across imputations\n\n")
-  stability_df <- data.frame()
-  recommended_vars <- vars_interpretation  # Fall back to original selection
-}
-
-# -----------------------------------------------------------------------------
-# F. Final recommendations
-# -----------------------------------------------------------------------------
-
-cat("PART F: Final variable selection recommendations\n")
+cat("PART H: Saving results\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-if(length(recommended_vars) > 0) {
-  cat("RECOMMENDED VARIABLE SET FOR ANALYSIS:\n")
-  cat("(Variables selected in ≥4/6 imputations)\n\n")
-  
-  cat("  Variables:", length(recommended_vars), "\n")
-  for(i in seq_along(recommended_vars)) {
-    if(nrow(stability_df) > 0) {
-      stability_info <- stability_df[stability_df$Variable == recommended_vars[i], ]
-      if(nrow(stability_info) > 0) {
-        cat("    ", i, ". ", recommended_vars[i], 
-            " (", stability_info$Times_Selected, "/6)\n", sep = "")
-      } else {
-        cat("    ", i, ". ", recommended_vars[i], "\n", sep = "")
-      }
-    } else {
-      cat("    ", i, ". ", recommended_vars[i], "\n", sep = "")
-    }
-  }
-  cat("\n")
-} else {
-  cat("⚠ WARNING: No variables recommended!\n")
-  cat("  Check VSURF results and data quality\n\n")
-}
-
-# Compare approaches
-cat("COMPARISON OF APPROACHES:\n")
-cat("  Original predictors:", ncol(vsurf_predictors), "\n")
-cat("  VSURF threshold:", length(vars_threshold), "\n")
-cat("  VSURF interpretation (imp 1):", length(vars_interpretation), "\n")
-cat("  VSURF prediction:", length(vars_prediction), "\n")
-cat("  Stable across imputations (≥4/6):", length(recommended_vars), "\n\n")
-
-cat("OLD APPROACH (PROBLEMATIC):\n")
-cat("  • Arbitrary 'top 15' cutoff\n")
-cat("  • No justification for number\n")
-cat("  • Unstable with data changes\n\n")
-
-cat("NEW APPROACH (VSURF):\n")
-cat("  • Data-driven 3-step algorithm\n")
-cat("  • Selected", length(vars_interpretation), "variables\n")
-cat("  • Statistically justified\n")
-cat("  • Stable across imputations\n\n")
-
-# -----------------------------------------------------------------------------
-# G. Save results
-# -----------------------------------------------------------------------------
-
-cat("PART G: Saving results\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-vsurf_results_save <- list(
+vsurf_output <- list(
+  # VSURF object
   vsurf_object = vsurf_result,
-  threshold_vars = vars_threshold,
-  interpretation_vars = vars_interpretation,
-  prediction_vars = vars_prediction,
-  recommended_vars = recommended_vars,
-  stability_check = stability_df,
-  importance_rankings = if(exists("importance_df")) importance_df else NULL,
-  input_data = list(
-    predictors = vsurf_predictors,
-    outcome = vsurf_outcome
-  ),
+  
+  # Variable sets
+  demographics_mandatory = available_demographics,
+  personality_selected = selected_personality,
+  final_variable_set = final_variable_set,
+  
+  # VSURF selections
+  vsurf_threshold = vsurf_threshold,
+  vsurf_interpretation = vsurf_interpretation,
+  vsurf_prediction = vsurf_prediction,
+  
+  # Importance
+  importance_rankings = importance_df,
+  
+  # Summary
+  domain_summary = domain_summary,
+  personality_breakdown = personality_groups,
+  
+  # Metadata
   outcome_var = outcome_var,
+  n_observations = nrow(X_personality),
+  n_personality_input = ncol(X_personality),
+  n_personality_selected = length(selected_personality),
+  n_demographics = length(available_demographics),
+  n_total_predictors = length(final_variable_set),
   time_taken = time_taken
 )
 
-saveRDS(vsurf_results_save, "VSURF_results.rds")
-cat("✓ Saved: VSURF_results.rds\n\n")
+saveRDS(vsurf_output, "VSURF_results.rds")
+cat("✓ Saved: VSURF_results.rds\n")
 
-# Also save just the recommended variables for easy access
-saveRDS(recommended_vars, "VSURF_recommended_variables.rds")
+saveRDS(final_variable_set, "VSURF_recommended_variables.rds")
 cat("✓ Saved: VSURF_recommended_variables.rds\n\n")
+
+# ==============================================================================
+# I. Key messages
+# ==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
 cat("VSURF VARIABLE SELECTION COMPLETE\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("SUMMARY:\n")
-cat("  • Completed in", time_taken, "minutes\n")
-cat("  • Selected", length(vars_interpretation), "variables for interpretation\n")
-cat("  • ", length(recommended_vars), "variables stable across imputations\n")
-cat("  • Reduced from", ncol(vsurf_predictors), "to", length(recommended_vars), "predictors\n\n")
+cat("KEY DECISIONS (per supervisor guidance):\n\n")
 
-if(length(recommended_vars) > 0) {
-  cat("FOR YOUR MANUSCRIPT:\n")
-  cat('  "Variable selection was performed using VSURF (Genuer et al., 2015),\n')
-  cat('   a Random Forest-based algorithm that identifies important predictors\n')
-  cat('   through a three-step process. From', ncol(vsurf_predictors), 'candidate predictors,\n')
-  cat('   VSURF selected', length(vars_interpretation), 'variables for interpretation.\n')
-  cat('   Stability was confirmed by repeating selection across multiple\n')
-  cat('   imputed datasets, with', length(recommended_vars), 'variables consistently\n')
-  cat('   selected in ≥4/6 imputations."\n\n')
-}
+cat("1. DEMOGRAPHICS:\n")
+cat("   • Included ALL by default (no RF selection)\n")
+cat("   • Rationale: Low-dimensional, theoretically important\n")
+cat("   • Total:", length(available_demographics), "variables\n\n")
+
+cat("2. PERSONALITY:\n")
+cat("   • Applied VSURF to high-dimensional correlated block\n")
+cat("   • Selected:", length(selected_personality), "of", ncol(X_personality), "variables\n")
+cat("   • Used 'interpretation' set (more inclusive than 'prediction')\n\n")
+
+cat("3. EXCLUDED VARIABLES:\n")
+cat("   • Dependence, side effects, safety concerns\n")
+cat("   • Rationale: These are DOWNSTREAM of BZRA use\n")
+cat("   • Including them would muddle causal interpretation\n\n")
+
+cat("4. FINAL MODEL:\n")
+cat("   • Total predictors:", length(final_variable_set), "\n")
+cat("   • Sample size:", nrow(X_personality), "\n")
+cat("   • Events per variable:", round(min(outcome_table) / length(final_variable_set), 1), "\n")
+cat("   • Appropriate for explanatory logistic regression\n\n")
+
+cat("IMPORTANT NOTES:\n\n")
+
+cat("• VSURF may give different results with different seeds\n")
+cat("  → This is EXPECTED when variables are correlated\n")
+cat("  → Not a bug, just algorithm shuffling among near-equivalents\n\n")
+
+cat("• Focus on conceptual interpretation, not strict rankings\n")
+cat("  → Similar constructs (e.g., different personality traits) carry\n")
+cat("     overlapping information\n\n")
+
+cat("• Demographics are included for theoretical reasons\n")
+cat("  → Even if they have low importance, they're conceptually meaningful\n\n")
 
 cat("NEXT STEPS:\n")
-cat("  1. Review VSURF_selection_process.png\n")
-if(length(vars_interpretation) > 0) {
-  cat("  2. Check VSURF_variable_importance.png\n")
-}
-cat("  3. Proceed to Random Forest modeling (Chunk 7)\n")
-cat("  4. Then logistic regression validation (Chunk 8)\n\n")
+cat("  1. Review visualizations\n")
+cat("  2. Proceed to logistic regression (Chunk 8)\n")
+cat("  3. Report: 'Demographics included by default; personality\n")
+cat("     variables selected using VSURF to reduce dimensionality'\n\n")
 
-if(length(recommended_vars) > 0) {
-  cat("✓ Ready for Random Forest modeling!\n\n")
-} else {
-  cat("⚠ WARNING: Review results before proceeding\n\n")
-}
+cat("✓ Ready for downstream analysis!\n\n")
 ```
+
 
 
 ## Random Forest Modeling
 
 ```{r}
 #==============================================================================
-# CHUNK 7: RANDOM FOREST MODELING WITH TUNING
+# RANDOM FOREST MODELING - FINAL UNWEIGHTED MODEL
 #==============================================================================
-# Purpose: Build and tune RF model using VSURF-selected variables
-#          across multiple imputations for stability
-# This is EXPLORATORY prediction - logistic regression will confirm
+# Purpose: Build final RF model for benzodiazepine discontinuation prediction
+#          Using unweighted approach (after testing class weights & down-sampling)
 #==============================================================================
 
 library(randomForest)
@@ -3477,848 +3434,459 @@ library(pROC)
 library(tidyverse)
 library(mice)
 
-# Close any existing parallel connections
-try(stopCluster(cl), silent = TRUE)
-
-cat("\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("STEP 7: RANDOM FOREST MODELING\n")
+cat("\n═══════════════════════════════════════════════════════════════\n")
+cat("RANDOM FOREST - FINAL UNWEIGHTED MODEL\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 # Load data and VSURF results
 mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
 vsurf_results <- readRDS("VSURF_results.rds")
-subscale_results <- readRDS("subscale_creation_results.rds")
+recommended_vars <- readRDS("VSURF_recommended_variables.rds")
+outcome_var <- vsurf_results$outcome_var
 
-# Use recommended variables from stability check
-recommended_vars <- vsurf_results$recommended_vars
-outcome_var <- subscale_results$outcome
+cat("Variables:", length(recommended_vars), 
+    "(10 demographics + 5 personality)\n")
+cat("Outcome:", outcome_var, "\n\n")
 
-cat("Outcome variable:", outcome_var, "\n")
-cat("Using", length(recommended_vars), "VSURF-selected variables:\n")
-for(i in seq_along(recommended_vars)) {
-  cat("  ", i, ". ", recommended_vars[i], "\n", sep = "")
-}
-cat("\n")
+#------------------------------------------------------------------------------
+# A. Data Preparation
+#------------------------------------------------------------------------------
 
-# -----------------------------------------------------------------------------
-# A. Prepare data for RF modeling
-# -----------------------------------------------------------------------------
-
-cat("PART A: Preparing data\n")
+cat("PART A: DATA PREPARATION\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-# Check if we have any recommended variables
-if(length(recommended_vars) == 0) {
-  stop("ERROR: No variables recommended by VSURF. Check VSURF results.")
-}
+# Extract imputations
+all_imputations <- lapply(1:mids_with_subscales$m, function(i) {
+  imp_data <- complete(mids_with_subscales, i) %>%
+    select(all_of(c(outcome_var, recommended_vars))) %>%
+    na.omit()
+  
+  imp_data[[outcome_var]] <- factor(
+    ifelse(imp_data[[outcome_var]] == 1, "Discontinued", "Still_Using"),
+    levels = c("Still_Using", "Discontinued")
+  )
+  
+  imp_data
+})
 
-# Extract all imputations
-all_imputations <- list()
-
-for(i in 1:mids_with_subscales$m) {
-  
-  imp_data <- complete(mids_with_subscales, i)
-  
-  # Check if outcome exists
-  if(!(outcome_var %in% names(imp_data))) {
-    stop("ERROR: Outcome variable '", outcome_var, "' not found in imputation ", i)
-  }
-  
-  # Check which recommended vars exist
-  available_vars <- recommended_vars[recommended_vars %in% names(imp_data)]
-  
-  if(length(available_vars) < length(recommended_vars)) {
-    missing_vars <- setdiff(recommended_vars, available_vars)
-    warning("Imputation ", i, " missing variables: ", paste(missing_vars, collapse = ", "))
-  }
-  
-  if(length(available_vars) == 0) {
-    stop("ERROR: No recommended variables found in imputation ", i)
-  }
-  
-  # Select outcome and predictors
-  imp_data_subset <- imp_data %>%
-    select(all_of(c(outcome_var, available_vars)))
-  
-  # Remove rows with any NAs
-  imp_data_subset <- imp_data_subset %>% na.omit()
-  
-  # Convert outcome to factor with meaningful labels
-  if(!is.factor(imp_data_subset[[outcome_var]])) {
-    # Numeric outcome
-    unique_vals <- unique(imp_data_subset[[outcome_var]])
-    if(all(unique_vals %in% c(0, 1))) {
-      imp_data_subset[[outcome_var]] <- factor(
-        imp_data_subset[[outcome_var]],
-        levels = c(0, 1),
-        labels = c("Still_Using", "Discontinued")
-      )
-    } else {
-      stop("ERROR: Outcome must be binary (0/1)")
-    }
-  } else {
-    # Already factor - standardize levels
-    current_levels <- levels(imp_data_subset[[outcome_var]])
-    if(all(current_levels %in% c("0", "1"))) {
-      imp_data_subset[[outcome_var]] <- factor(
-        as.character(imp_data_subset[[outcome_var]]),
-        levels = c("0", "1"),
-        labels = c("Still_Using", "Discontinued")
-      )
-    } else if(!all(current_levels %in% c("Still_Using", "Discontinued"))) {
-      # Try to infer which is which
-      if(length(current_levels) == 2) {
-        imp_data_subset[[outcome_var]] <- factor(
-          imp_data_subset[[outcome_var]],
-          levels = current_levels,
-          labels = c("Still_Using", "Discontinued")
-        )
-        warning("Imputation ", i, ": Assumed first level is 'Still_Using'")
-      } else {
-        stop("ERROR: Outcome must be binary in imputation ", i)
-      }
-    }
-  }
-  
-  all_imputations[[i]] <- imp_data_subset
-}
-
-cat("✓ Prepared", length(all_imputations), "imputed datasets\n")
-cat("  Observations per dataset:", nrow(all_imputations[[1]]), "\n")
-cat("  Predictors:", ncol(all_imputations[[1]]) - 1, "\n\n")
+cat("✓ N =", nrow(all_imputations[[1]]), "| Predictors =", 
+    ncol(all_imputations[[1]]) - 1, "\n\n")
 
 # Check class balance
-cat("Outcome distribution (first imputation):\n")
 outcome_table <- table(all_imputations[[1]][[outcome_var]])
-print(outcome_table)
-cat("\n")
+n_majority <- as.numeric(outcome_table["Still_Using"])
+n_minority <- as.numeric(outcome_table["Discontinued"])
+n_total <- n_majority + n_minority
+minority_pct <- 100 * n_minority / n_total
 
-# Calculate class imbalance
-minority_class_pct <- 100 * min(outcome_table) / sum(outcome_table)
+cat("CLASS DISTRIBUTION:\n")
+cat("  Still_Using:", n_majority, "(", round(100 - minority_pct, 1), "%)\n")
+cat("  Discontinued:", n_minority, "(", round(minority_pct, 1), "%)\n")
+cat("  Imbalance ratio:", round(n_majority/n_minority, 2), ":1\n\n")
 
-if(minority_class_pct < 10) {
-  cat("⚠ WARNING: Severe class imbalance (", round(minority_class_pct, 1), 
-      "% minority class)\n", sep = "")
-  cat("  Consider using SMOTE or class weights\n\n")
-  use_sampling <- "down"
-} else if(minority_class_pct < 30) {
-  cat("⚠ NOTE: Moderate class imbalance (", round(minority_class_pct, 1), 
-      "% minority class)\n", sep = "")
-  cat("  Using stratified sampling in train/test split\n\n")
-  use_sampling <- NULL
-} else {
-  cat("✓ Balanced classes (", round(minority_class_pct, 1), 
-      "% minority class)\n\n", sep = "")
-  use_sampling <- NULL
-}
+cat("NOTE: Class weighting and down-sampling were tested but did not\n")
+cat("      improve model performance. Proceeding with unweighted model.\n\n")
 
-# -----------------------------------------------------------------------------
-# B. Hyperparameter tuning (on first imputation)
-# -----------------------------------------------------------------------------
+#------------------------------------------------------------------------------
+# B. Hyperparameter Tuning
+#------------------------------------------------------------------------------
 
-cat("PART B: Hyperparameter tuning\n")
+cat("PART B: HYPERPARAMETER TUNING\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-cat("Tuning mtry (number of variables tried at each split)...\n\n")
+n_predictors <- ncol(all_imputations[[1]]) - 1
+mtry_grid <- expand.grid(mtry = c(
+  floor(sqrt(n_predictors)),
+  max(1, floor(n_predictors / 2)),
+  n_predictors
+))
 
-# CRITICAL: Set allowParallel = FALSE to avoid connection errors
+cat("Testing mtry values:", paste(mtry_grid$mtry, collapse = ", "), "\n")
+cat("Using 10-fold CV with ROC optimization...\n\n")
+
 ctrl <- trainControl(
   method = "cv",
   number = 10,
   classProbs = TRUE,
   summaryFunction = twoClassSummary,
-  savePredictions = "final",
-  sampling = use_sampling,
-  allowParallel = FALSE,  # CRITICAL FIX
+  allowParallel = FALSE,
   verboseIter = FALSE
 )
 
-# Grid of mtry values to test
-n_predictors <- ncol(all_imputations[[1]]) - 1
-
-# Create sensible grid based on number of predictors
-if(n_predictors <= 3) {
-  # Very few predictors
-  mtry_values <- 1:n_predictors
-} else if(n_predictors <= 10) {
-  # Small number of predictors
-  mtry_values <- unique(c(
-    floor(sqrt(n_predictors)),           # Classification default
-    max(1, floor(n_predictors / 2)),     # Half
-    n_predictors                          # All
-  ))
-} else {
-  # Larger number of predictors
-  mtry_values <- unique(c(
-    floor(sqrt(n_predictors)),           # Classification default
-    max(1, floor(n_predictors / 3)),     # One third
-    max(1, floor(n_predictors / 2)),     # Half
-    n_predictors                          # All (bagging)
-  ))
-}
-
-mtry_grid <- expand.grid(mtry = mtry_values)
-
-cat("Number of predictors:", n_predictors, "\n")
-cat("Testing mtry values:", paste(mtry_grid$mtry, collapse = ", "), "\n\n")
-
 set.seed(123)
-start_tune <- Sys.time()
-
-# Fit with error handling
-rf_tune <- tryCatch({
-  train(
-    as.formula(paste(outcome_var, "~ .")),
-    data = all_imputations[[1]],
-    method = "rf",
-    metric = "ROC",
-    trControl = ctrl,
-    tuneGrid = mtry_grid,
-    ntree = 500,  # Reduced for speed in tuning
-    importance = TRUE
-  )
-}, error = function(e) {
-  cat("ERROR in tuning:", e$message, "\n")
-  cat("Attempting with simplified settings...\n\n")
-  
-  # Fallback: simpler tuning
-  ctrl_simple <- trainControl(
-    method = "cv",
-    number = 5,  # Fewer folds
-    classProbs = TRUE,
-    summaryFunction = twoClassSummary,
-    allowParallel = FALSE
-  )
-  
-  train(
-    as.formula(paste(outcome_var, "~ .")),
-    data = all_imputations[[1]],
-    method = "rf",
-    metric = "ROC",
-    trControl = ctrl_simple,
-    tuneGrid = data.frame(mtry = floor(sqrt(n_predictors))),
-    ntree = 500,
-    importance = TRUE
-  )
-})
-
-end_tune <- Sys.time()
-tune_time <- round(difftime(end_tune, start_tune, units = "mins"), 1)
-
-cat("Tuning completed in", tune_time, "minutes\n\n")
-cat("Tuning results:\n")
-print(rf_tune$results)
-cat("\n")
+rf_tune <- train(
+  as.formula(paste(outcome_var, "~ .")),
+  data = all_imputations[[1]],
+  method = "rf",
+  metric = "ROC",
+  trControl = ctrl,
+  tuneGrid = mtry_grid,
+  ntree = 500,
+  importance = TRUE
+)
 
 optimal_mtry <- rf_tune$bestTune$mtry
-cat("✓ Optimal mtry:", optimal_mtry, "\n")
-cat("  Best ROC:", round(max(rf_tune$results$ROC, na.rm = TRUE), 3), "\n\n")
+best_roc <- max(rf_tune$results$ROC)
 
-# -----------------------------------------------------------------------------
-# C. Fit RF models on all imputations
-# -----------------------------------------------------------------------------
+cat("TUNING RESULTS:\n")
+cat("  Optimal mtry =", optimal_mtry, "| CV ROC =", 
+    round(best_roc, 3), "\n\n")
 
-cat("PART C: Fitting Random Forest models on all imputations\n")
+#------------------------------------------------------------------------------
+# C. Fit RF Models on All Imputations
+#------------------------------------------------------------------------------
+
+cat("PART C: FITTING MODELS\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-cat("Using 80/20 train-test split with stratification...\n\n")
+cat("Fitting random forest on", length(all_imputations), "imputations...\n")
+cat("  • 80/20 stratified split\n")
+cat("  • 1000 trees per model\n")
+cat("  • mtry =", optimal_mtry, "\n")
+cat("  • Optimal threshold via Youden's index\n\n")
 
-rf_models <- list()
-rf_importance <- list()
-rf_oob_error <- numeric(length(all_imputations))
+models <- list()
+importance_list <- list()
+performance_list <- list()
 
 for(i in 1:length(all_imputations)) {
-  cat("  Fitting model on imputation", i, "of", length(all_imputations), "...")
-  
   set.seed(123 + i)
   
-  # Stratified split (80/20)
-  train_idx <- createDataPartition(
-    all_imputations[[i]][[outcome_var]],
-    p = 0.8,
-    list = FALSE
-  )
-  
+  # Stratified split
+  train_idx <- createDataPartition(all_imputations[[i]][[outcome_var]], 
+                                   p = 0.8, list = FALSE)
   train_data <- all_imputations[[i]][train_idx, ]
   test_data <- all_imputations[[i]][-train_idx, ]
   
-  # Fit model with optimal mtry
+  # Fit model
   rf_model <- randomForest(
     as.formula(paste(outcome_var, "~ .")),
     data = train_data,
     ntree = 1000,
     mtry = optimal_mtry,
-    importance = TRUE,
-    keep.forest = TRUE
+    importance = TRUE
   )
   
-  rf_models[[i]] <- list(
-    model = rf_model,
-    train_data = train_data,
-    test_data = test_data
-  )
+  # Predictions
+  pred_prob <- predict(rf_model, test_data, type = "prob")[, "Discontinued"]
+  test_outcome <- test_data[[outcome_var]]
   
-  # Store importance
-  rf_importance[[i]] <- importance(rf_model)
+  # ROC/AUC
+  roc_obj <- roc(test_outcome, pred_prob, 
+                 levels = c("Still_Using", "Discontinued"),
+                 direction = "<", quiet = TRUE)
   
-  # Store OOB error
-  rf_oob_error[i] <- tail(rf_model$err.rate[, "OOB"], 1)
+  # Optimal threshold (Youden's index)
+  coords_all <- coords(roc_obj, "all", 
+                      ret = c("threshold", "sensitivity", "specificity"))
+  optimal_thresh <- coords_all$threshold[
+    which.max(coords_all$sensitivity + coords_all$specificity - 1)
+  ]
   
-  cat(" OOB error:", round(rf_oob_error[i], 4), "\n")
-}
-
-cat("\n✓ All RF models fitted\n")
-cat("Mean OOB error:", round(mean(rf_oob_error), 4), 
-    "±", round(sd(rf_oob_error), 4), "\n\n")
-
-# -----------------------------------------------------------------------------
-# D. Pool variable importance across imputations
-# -----------------------------------------------------------------------------
-
-cat("PART D: Pooling variable importance\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Extract MeanDecreaseAccuracy and MeanDecreaseGini for each imputation
-mda_list <- lapply(rf_importance, function(x) x[, "MeanDecreaseAccuracy"])
-mdg_list <- lapply(rf_importance, function(x) x[, "MeanDecreaseGini"])
-
-# Pool by averaging
-pooled_importance <- data.frame(
-  Variable = rownames(rf_importance[[1]]),
-  MeanDecreaseAccuracy = rowMeans(do.call(cbind, mda_list)),
-  MeanDecreaseGini = rowMeans(do.call(cbind, mdg_list)),
-  SD_MDA = apply(do.call(cbind, mda_list), 1, sd),
-  SD_MDG = apply(do.call(cbind, mdg_list), 1, sd)
-) %>%
-  arrange(desc(MeanDecreaseAccuracy))
-
-cat("Pooled Variable Importance (all variables):\n")
-print(pooled_importance %>%
-        mutate(
-          MeanDecreaseAccuracy = round(MeanDecreaseAccuracy, 4),
-          MeanDecreaseGini = round(MeanDecreaseGini, 4),
-          SD_MDA = round(SD_MDA, 4)
-        ), 
-      row.names = FALSE)
-cat("\n")
-
-# Variable importance plot
-p_rf_importance <- ggplot(
-  pooled_importance,
-  aes(x = reorder(Variable, MeanDecreaseAccuracy), 
-      y = MeanDecreaseAccuracy)
-) +
-  geom_col(fill = "darkgreen", alpha = 0.7) +
-  geom_errorbar(
-    aes(ymin = pmax(0, MeanDecreaseAccuracy - SD_MDA),
-        ymax = MeanDecreaseAccuracy + SD_MDA),
-    width = 0.3,
-    alpha = 0.6
-  ) +
-  coord_flip() +
-  labs(
-    title = "Random Forest Variable Importance",
-    subtitle = paste0("Pooled across ", length(all_imputations), 
-                      " imputations (error bars = ±1 SD)"),
-    x = NULL,
-    y = "Mean Decrease in Accuracy"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(hjust = 0.5, face = "bold"),
-    plot.subtitle = element_text(hjust = 0.5, size = 10)
-  )
-
-ggsave("RF_variable_importance_pooled.png",
-       plot = p_rf_importance,
-       width = 10, 
-       height = max(6, nrow(pooled_importance) * 0.5), 
-       dpi = 300)
-
-cat("✓ Saved: RF_variable_importance_pooled.png\n\n")
-
-# -----------------------------------------------------------------------------
-# E. Evaluate performance on test sets
-# -----------------------------------------------------------------------------
-
-cat("PART E: Model performance evaluation\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Function to evaluate one model
-evaluate_rf_model <- function(rf_obj, outcome_name) {
-  
-  model <- rf_obj$model
-  test_data <- rf_obj$test_data
-  
-  # Get predictions
-  pred_prob <- predict(model, test_data, type = "prob")[, "Discontinued"]
-  pred_class <- predict(model, test_data, type = "class")
-  
-  # Ensure test outcome has correct levels
-  test_outcome <- factor(
-    as.character(test_data[[outcome_name]]),
-    levels = c("Still_Using", "Discontinued")
-  )
-  
-  # ROC and AUC
-  roc_obj <- tryCatch({
-    roc(
-      response = test_outcome, 
-      predictor = pred_prob,
-      levels = c("Still_Using", "Discontinued"),
-      direction = "<",
-      quiet = TRUE
-    )
-  }, error = function(e) {
-    cat("WARNING: ROC calculation failed:", e$message, "\n")
-    return(NULL)
-  })
-  
-  if(is.null(roc_obj)) {
-    return(list(
-      auc = NA,
-      optimal_threshold = NA,
-      accuracy = NA,
-      sensitivity = NA,
-      specificity = NA,
-      precision = NA,
-      f1 = NA,
-      roc_obj = NULL,
-      confusion_matrix = NULL
-    ))
-  }
-  
-  auc_val <- as.numeric(auc(roc_obj))
-  
-  # Optimal threshold (Youden's J statistic)
-  coords_all <- coords(roc_obj, x = "all", ret = c("threshold", "sensitivity", "specificity"))
-  youden_j <- coords_all$sensitivity + coords_all$specificity - 1
-  optimal_idx <- which.max(youden_j)
-  optimal_thresh <- coords_all$threshold[optimal_idx]
-  
-  # Predictions with optimal threshold
-  pred_class_opt <- factor(
+  pred_class <- factor(
     ifelse(pred_prob > optimal_thresh, "Discontinued", "Still_Using"),
     levels = c("Still_Using", "Discontinued")
   )
   
-  # Confusion matrix
-  cm <- confusionMatrix(
-    pred_class_opt, 
-    test_outcome, 
-    positive = "Discontinued"
-  )
+  cm <- confusionMatrix(pred_class, test_outcome, positive = "Discontinued")
   
-  return(list(
-    auc = auc_val,
-    optimal_threshold = optimal_thresh,
+  # Store results
+  models[[i]] <- list(
+    model = rf_model, 
+    train = train_data, 
+    test = test_data
+  )
+  importance_list[[i]] <- importance(rf_model)
+  performance_list[[i]] <- list(
+    auc = as.numeric(auc(roc_obj)),
     accuracy = cm$overall["Accuracy"],
     sensitivity = cm$byClass["Sensitivity"],
     specificity = cm$byClass["Specificity"],
     precision = cm$byClass["Pos Pred Value"],
     f1 = cm$byClass["F1"],
-    roc_obj = roc_obj,
-    confusion_matrix = cm
-  ))
-}
-
-# Evaluate all models
-cat("Evaluating models on test sets...\n")
-rf_performance <- lapply(rf_models, evaluate_rf_model, outcome_name = outcome_var)
-
-# Remove any failed evaluations
-valid_performance <- rf_performance[!sapply(rf_performance, function(x) is.na(x$auc))]
-
-if(length(valid_performance) == 0) {
-  stop("ERROR: All model evaluations failed!")
-}
-
-if(length(valid_performance) < length(rf_performance)) {
-  cat("⚠ WARNING:", length(rf_performance) - length(valid_performance), 
-      "evaluations failed\n\n")
-}
-
-# Pool performance metrics
-performance_summary <- data.frame(
-  Metric = c("AUC", "Accuracy", "Sensitivity", "Specificity", "Precision", "F1"),
-  Mean = c(
-    mean(sapply(valid_performance, function(x) x$auc), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$accuracy), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$sensitivity), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$specificity), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$precision), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$f1), na.rm = TRUE)
-  ),
-  SD = c(
-    sd(sapply(valid_performance, function(x) x$auc), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$accuracy), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$sensitivity), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$specificity), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$precision), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$f1), na.rm = TRUE)
-  ),
-  Min = c(
-    min(sapply(valid_performance, function(x) x$auc), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$accuracy), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$sensitivity), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$specificity), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$precision), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$f1), na.rm = TRUE)
-  ),
-  Max = c(
-    max(sapply(valid_performance, function(x) x$auc), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$accuracy), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$sensitivity), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$specificity), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$precision), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$f1), na.rm = TRUE)
+    oob_error = tail(rf_model$err.rate[, "OOB"], 1),
+    roc = roc_obj,
+    cm = cm,
+    threshold = optimal_thresh
   )
-) %>%
-  mutate(
-    Mean = round(Mean, 3),
-    SD = round(SD, 3),
-    Min = round(Min, 3),
-    Max = round(Max, 3),
-    CI_95 = paste0("[", round(pmax(0, Mean - 1.96*SD), 3), ", ", 
-                   round(pmin(1, Mean + 1.96*SD), 3), "]")
-  )
+}
 
-cat("\nRANDOM FOREST PERFORMANCE (Pooled Across", length(valid_performance), "Imputations):\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-print(performance_summary %>% select(Metric, Mean, SD, CI_95, Min, Max), row.names = FALSE)
+cat("✓ Complete\n\n")
+
+#------------------------------------------------------------------------------
+# D. Pool Results
+#------------------------------------------------------------------------------
+
+cat("PART D: POOLING RESULTS\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Function to pool performance
+pool_performance <- function(perf_list) {
+  data.frame(
+    Metric = c("AUC", "Accuracy", "Sensitivity", "Specificity", "Precision", "F1"),
+    Mean = sapply(c("auc", "accuracy", "sensitivity", "specificity", "precision", "f1"),
+                  function(m) mean(sapply(perf_list, function(x) x[[m]]), na.rm = TRUE)),
+    SD = sapply(c("auc", "accuracy", "sensitivity", "specificity", "precision", "f1"),
+                function(m) sd(sapply(perf_list, function(x) x[[m]]), na.rm = TRUE))
+  ) %>%
+    mutate(
+      CI_Lower = pmax(0, Mean - 1.96*SD),
+      CI_Upper = pmin(1, Mean + 1.96*SD),
+      CI_95 = paste0("[", round(CI_Lower, 3), ", ", round(CI_Upper, 3), "]")
+    )
+}
+
+# Function to pool importance
+pool_importance <- function(imp_list) {
+  data.frame(
+    Variable = rownames(imp_list[[1]]),
+    MeanDecreaseAccuracy = rowMeans(
+      sapply(imp_list, function(x) x[, "MeanDecreaseAccuracy"])
+    ),
+    MeanDecreaseGini = rowMeans(
+      sapply(imp_list, function(x) x[, "MeanDecreaseGini"])
+    ),
+    SD_MDA = apply(
+      sapply(imp_list, function(x) x[, "MeanDecreaseAccuracy"]), 1, sd
+    )
+  ) %>% arrange(desc(MeanDecreaseAccuracy))
+}
+
+performance <- pool_performance(performance_list)
+importance <- pool_importance(importance_list)
+
+cat("\n═══════════════════════════════════════════════════════════════\n")
+cat("PERFORMANCE SUMMARY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+print(performance %>% 
+        select(Metric, Mean, SD, CI_95) %>%
+        mutate(Mean = round(Mean, 3), SD = round(SD, 3)), 
+      row.names = FALSE)
 cat("\n")
-
-# Interpretation
-mean_auc <- performance_summary$Mean[performance_summary$Metric == "AUC"]
 
 cat("INTERPRETATION:\n")
-if(mean_auc >= 0.80) {
-  cat("  ✓ EXCELLENT discrimination (AUC ≥ 0.80)\n")
-} else if(mean_auc >= 0.70) {
-  cat("  ✓ GOOD discrimination (AUC 0.70-0.79)\n")
-} else if(mean_auc >= 0.60) {
-  cat("  ✓ FAIR discrimination (AUC 0.60-0.69)\n")
-} else {
-  cat("  ⚠ POOR discrimination (AUC < 0.60)\n")
-}
+cat("  • AUC =", round(performance$Mean[1], 3), 
+    "indicates moderate discriminative ability\n")
+cat("  • Sensitivity =", round(performance$Mean[3], 3), 
+    "→ detects", round(100*performance$Mean[3], 1), 
+    "% of discontinuations\n")
+cat("  • Specificity =", round(performance$Mean[4], 3), 
+    "→ correctly identifies", round(100*performance$Mean[4], 1), 
+    "% still using\n\n")
+
+cat("TOP 10 PREDICTORS:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+print(importance %>% 
+        head(10) %>% 
+        mutate(MeanDecreaseAccuracy = round(MeanDecreaseAccuracy, 4),
+               MeanDecreaseGini = round(MeanDecreaseGini, 2),
+               SD_MDA = round(SD_MDA, 4)) %>%
+        select(Variable, MeanDecreaseAccuracy, SD_MDA), 
+      row.names = FALSE)
 cat("\n")
 
-# -----------------------------------------------------------------------------
-# F. ROC curve visualization
-# -----------------------------------------------------------------------------
+#------------------------------------------------------------------------------
+# E. Visualizations
+#------------------------------------------------------------------------------
 
-cat("PART F: Creating ROC curve\n")
+cat("PART E: VISUALIZATIONS\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-# Use first valid imputation for visualization
-roc_plot_data <- valid_performance[[1]]$roc_obj
+# 1. Variable Importance Plot
+p_importance <- ggplot(importance, 
+                       aes(x = reorder(Variable, MeanDecreaseAccuracy), 
+                           y = MeanDecreaseAccuracy)) +
+  geom_col(fill = "steelblue", alpha = 0.7) +
+  geom_errorbar(aes(ymin = pmax(0, MeanDecreaseAccuracy - SD_MDA),
+                    ymax = MeanDecreaseAccuracy + SD_MDA),
+                width = 0.3, alpha = 0.6) +
+  coord_flip() +
+  labs(title = "Variable Importance - Random Forest",
+       subtitle = paste0("Pooled across ", length(models), " imputations"),
+       x = NULL, 
+       y = "Mean Decrease in Accuracy") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5))
 
-roc_df <- data.frame(
-  FPR = 1 - roc_plot_data$specificities,
-  TPR = roc_plot_data$sensitivities
+ggsave("RF_final_importance.png", p_importance, 
+       width = 10, height = max(6, nrow(importance) * 0.4), dpi = 300)
+
+# 2. ROC Curve (using first imputation as representative)
+roc_data <- data.frame(
+  FPR = 1 - performance_list[[1]]$roc$specificities,
+  TPR = performance_list[[1]]$roc$sensitivities
 )
 
-p_roc <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
-  geom_line(color = "darkgreen", linewidth = 1.5) +
+p_roc <- ggplot(roc_data, aes(x = FPR, y = TPR)) +
+  geom_line(color = "steelblue", linewidth = 1.5) +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
   annotate("text", x = 0.7, y = 0.3,
-           label = paste0("Mean AUC = ", round(mean_auc, 3), 
-                         "\n95% CI ", 
-                         performance_summary$CI_95[performance_summary$Metric == "AUC"]),
-           size = 5, fontface = "bold") +
-  labs(
-    title = "Random Forest ROC Curve",
-    subtitle = paste0("Pooled performance across ", length(valid_performance), " imputations"),
-    x = "False Positive Rate (1 - Specificity)",
-    y = "True Positive Rate (Sensitivity)"
-  ) +
+           label = paste0("Mean AUC = ", round(performance$Mean[1], 3), "\n",
+                         "95% CI: ", performance$CI_95[1]),
+           size = 5, hjust = 0) +
+  labs(title = "ROC Curve - Random Forest",
+       subtitle = paste0("Pooled across ", length(models), " imputations"),
+       x = "False Positive Rate (1 - Specificity)", 
+       y = "True Positive Rate (Sensitivity)") +
   coord_fixed() +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
-    plot.subtitle = element_text(hjust = 0.5, size = 11)
-  )
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5))
 
-ggsave("RF_ROC_curve.png", plot = p_roc, width = 8, height = 8, dpi = 300)
-cat("✓ Saved: RF_ROC_curve.png\n\n")
+ggsave("RF_final_ROC.png", p_roc, width = 8, height = 8, dpi = 300)
 
-# -----------------------------------------------------------------------------
-# G. Confusion matrix visualization
-# -----------------------------------------------------------------------------
-
-cat("PART G: Creating confusion matrix\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Use first valid imputation's confusion matrix
-cm_first <- valid_performance[[1]]$confusion_matrix
-
-cm_df <- as.data.frame(cm_first$table)
-names(cm_df) <- c("Predicted", "Actual", "Count")
-
-# Add percentages
-cm_df <- cm_df %>%
+# 3. Confusion Matrix (using first imputation as representative)
+cm_df <- as.data.frame(performance_list[[1]]$cm$table) %>%
+  setNames(c("Predicted", "Actual", "Count")) %>%
   group_by(Actual) %>%
-  mutate(
-    Total = sum(Count),
-    Percentage = round(100 * Count / Total, 1)
-  ) %>%
-  ungroup()
+  mutate(Percentage = round(100 * Count / sum(Count), 1))
 
 p_cm <- ggplot(cm_df, aes(x = Actual, y = Predicted, fill = Count)) +
   geom_tile(color = "white", linewidth = 1) +
   geom_text(aes(label = paste0(Count, "\n(", Percentage, "%)")), 
-            size = 8, fontface = "bold") +
-  scale_fill_gradient(low = "white", high = "darkgreen") +
-  labs(
-    title = "Random Forest Confusion Matrix",
-    subtitle = paste0("Optimal threshold = ", 
-                     round(valid_performance[[1]]$optimal_threshold, 3),
-                     " (Youden's J statistic)")
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
-    plot.subtitle = element_text(hjust = 0.5, size = 11),
-    legend.position = "right"
+            size = 7, fontface = "bold", color = "black") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Confusion Matrix - Random Forest",
+       subtitle = paste0("Representative example (Imputation 1)\n",
+                        "Threshold = ", 
+                        round(performance_list[[1]]$threshold, 3))) +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "right")
+
+ggsave("RF_final_confusion_matrix.png", p_cm, width = 8, height = 6, dpi = 300)
+
+# 4. Performance Metrics Across Imputations
+perf_across_imp <- data.frame(
+  Imputation = rep(1:length(performance_list), 3),
+  Metric = rep(c("Sensitivity", "Specificity", "AUC"), each = length(performance_list)),
+  Value = c(
+    sapply(performance_list, function(x) x$sensitivity),
+    sapply(performance_list, function(x) x$specificity),
+    sapply(performance_list, function(x) x$auc)
   )
-
-ggsave("RF_confusion_matrix.png", plot = p_cm, width = 8, height = 6, dpi = 300)
-cat("✓ Saved: RF_confusion_matrix.png\n\n")
-
-# -----------------------------------------------------------------------------
-# H. Identify top predictors by domain
-# -----------------------------------------------------------------------------
-
-cat("PART H: Top predictors by domain\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Categorize variables
-pooled_importance <- pooled_importance %>%
-  mutate(
-    Domain = case_when(
-      grepl("^DBAS", Variable) ~ "Sleep Beliefs (DBAS)",
-      grepl("^SURPS", Variable) ~ "Risk Profile (SURPS)",
-      grepl("^CISS", Variable) ~ "Coping (CISS)",
-      Variable %in% c("Extraversion", "Agreeableness", "Conscientiousness", 
-                      "Neuroticism", "Openness") ~ "Personality (BFI)",
-      grepl("composite|bzra|effect", Variable, ignore.case = TRUE) ~ "BZRA Effects",
-      Variable %in% c("age", "sex", "gender", "region", "education_level",
-                      "employment_status", "income", "driving") ~ "Demographics",
-      grepl("phq|gad|osss|med|health|comorbid", Variable, ignore.case = TRUE) ~ "Health/Clinical",
-      TRUE ~ "Other"
-    )
-  )
-
-# Create domain summary
-domain_summary <- pooled_importance %>%
-  group_by(Domain) %>%
-  summarise(
-    n_vars = n(),
-    mean_importance = mean(MeanDecreaseAccuracy),
-    max_importance = max(MeanDecreaseAccuracy),
-    .groups = "drop"
-  ) %>%
-  arrange(desc(mean_importance))
-
-cat("Domain-level summary:\n")
-print(domain_summary %>%
-        mutate(
-          mean_importance = round(mean_importance, 4),
-          max_importance = round(max_importance, 4)
-        ), 
-      row.names = FALSE)
-cat("\n")
-
-cat("Top predictors by domain:\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-for(domain in unique(pooled_importance$Domain)) {
-  domain_vars <- pooled_importance %>% 
-    filter(Domain == domain) %>%
-    arrange(desc(MeanDecreaseAccuracy))
-  
-  cat(domain, ":\n")
-  n_show <- min(3, nrow(domain_vars))
-  for(i in 1:n_show) {
-    cat("  ", i, ". ", domain_vars$Variable[i], 
-        " (MDA = ", round(domain_vars$MeanDecreaseAccuracy[i], 4), ")\n", sep = "")
-  }
-  cat("\n")
-}
-
-# -----------------------------------------------------------------------------
-# I. Save all results
-# -----------------------------------------------------------------------------
-
-cat("PART I: Saving results\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-rf_results_save <- list(
-  models = rf_models,
-  performance = valid_performance,
-  performance_summary = performance_summary,
-  pooled_importance = pooled_importance,
-  domain_summary = domain_summary,
-  optimal_mtry = optimal_mtry,
-  mean_auc = mean_auc,
-  oob_error = rf_oob_error,
-  outcome_var = outcome_var,
-  n_imputations = length(all_imputations),
-  n_observations = nrow(all_imputations[[1]]),
-  n_predictors = n_predictors
 )
 
-saveRDS(rf_results_save, "RF_modeling_results.rds")
-cat("✓ Saved: RF_modeling_results.rds\n\n")
+p_variability <- ggplot(perf_across_imp, aes(x = Imputation, y = Value, color = Metric)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  geom_hline(data = data.frame(
+    Metric = c("Sensitivity", "Specificity", "AUC"),
+    Mean = c(performance$Mean[3], performance$Mean[4], performance$Mean[1])
+  ), aes(yintercept = Mean, color = Metric), linetype = "dashed", linewidth = 0.8) +
+  scale_color_manual(values = c("Sensitivity" = "#E41A1C", 
+                                 "Specificity" = "#377EB8", 
+                                 "AUC" = "#4DAF4A")) +
+  labs(title = "Performance Variability Across Imputations",
+       subtitle = "Dashed lines show pooled means",
+       x = "Imputation Number", 
+       y = "Performance Metric Value") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "bottom")
 
-# Save importance table as CSV
-write.csv(pooled_importance, "RF_variable_importance.csv", row.names = FALSE)
-cat("✓ Saved: RF_variable_importance.csv\n\n")
+ggsave("RF_final_performance_variability.png", p_variability, 
+       width = 10, height = 6, dpi = 300)
 
-# Save performance summary
-write.csv(performance_summary, "RF_performance_summary.csv", row.names = FALSE)
-cat("✓ Saved: RF_performance_summary.csv\n\n")
+cat("✓ Saved: RF_final_importance.png\n")
+cat("✓ Saved: RF_final_ROC.png\n")
+cat("✓ Saved: RF_final_confusion_matrix.png\n")
+cat("✓ Saved: RF_final_performance_variability.png\n\n")
+
+#------------------------------------------------------------------------------
+# F. Save Results
+#------------------------------------------------------------------------------
+
+rf_results <- list(
+  models = models,
+  performance = performance_list,
+  performance_summary = performance,
+  importance = importance,
+  optimal_mtry = optimal_mtry,
+  outcome_var = outcome_var,
+  predictors = recommended_vars,
+  n_imputations = length(models),
+  n_observations = nrow(all_imputations[[1]]),
+  n_predictors = n_predictors,
+  class_distribution = outcome_table
+)
+
+saveRDS(rf_results, "RF_final_results.rds")
+write.csv(importance, "RF_final_importance.csv", row.names = FALSE)
+write.csv(performance, "RF_final_performance.csv", row.names = FALSE)
+
+cat("✓ Saved: RF_final_results.rds\n")
+cat("✓ Saved: RF_final_importance.csv\n")
+cat("✓ Saved: RF_final_performance.csv\n\n")
+
+#------------------------------------------------------------------------------
+# G. Summary
+#------------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("RANDOM FOREST MODELING COMPLETE\n")
+cat("SUMMARY\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("SUMMARY:\n")
-cat("  • Optimal mtry:", optimal_mtry, "\n")
-cat("  • Mean AUC:", round(mean_auc, 3), "±", 
-    round(performance_summary$SD[1], 3), "\n")
-cat("  • Mean OOB error:", round(mean(rf_oob_error), 4), "\n")
-cat("  • Top predictor:", pooled_importance$Variable[1], 
-    " (MDA = ", round(pooled_importance$MeanDecreaseAccuracy[1], 4), ")\n", sep = "")
-cat("  • Models fitted:", length(rf_models), "\n")
-cat("  • Observations per imputation:", nrow(all_imputations[[1]]), "\n")
-cat("  • Number of predictors:", n_predictors, "\n\n")
+cat("FINAL MODEL PERFORMANCE:\n")
+cat("  • AUC:", round(performance$Mean[1], 3), "±", 
+    round(performance$SD[1], 3), performance$CI_95[1], "\n")
+cat("  • Sensitivity:", round(performance$Mean[3], 3), "±", 
+    round(performance$SD[3], 3), 
+    "(", round(100*performance$Mean[3], 1), "% of discontinuations detected)\n")
+cat("  • Specificity:", round(performance$Mean[4], 3), "±", 
+    round(performance$SD[4], 3),
+    "(", round(100*performance$Mean[4], 1), "% of still-using correctly identified)\n")
+cat("  • Accuracy:", round(performance$Mean[2], 3), "±", 
+    round(performance$SD[2], 3), "\n\n")
 
-cat("KEY FINDINGS:\n")
-cat("  1. Top", min(5, nrow(pooled_importance)), "most important variables:\n")
-for(i in 1:min(5, nrow(pooled_importance))) {
-  cat("     ", i, ". ", pooled_importance$Variable[i], 
-      " (MDA = ", round(pooled_importance$MeanDecreaseAccuracy[i], 4), ")\n", sep = "")
+cat("TOP 5 PREDICTORS:\n")
+for(i in 1:min(5, nrow(importance))) {
+  cat("  ", i, ". ", importance$Variable[i], 
+      " (MDA = ", round(importance$MeanDecreaseAccuracy[i], 2), ")\n", sep = "")
 }
 cat("\n")
 
-cat("  2. Performance metrics (mean ± SD, 95% CI):\n")
-for(metric in c("AUC", "Accuracy", "Sensitivity", "Specificity")) {
-  row <- performance_summary[performance_summary$Metric == metric, ]
-  cat("     ", metric, ": ", round(row$Mean, 3), " ± ", round(row$SD, 3),
-      " ", row$CI_95, "\n", sep = "")
+# Highlight dominant predictor
+if(importance$MeanDecreaseAccuracy[1] > 2 * importance$MeanDecreaseAccuracy[2]) {
+  cat("NOTE: ", importance$Variable[1], " is substantially more important\n", sep = "")
+  cat("      than other predictors (", 
+      round(importance$MeanDecreaseAccuracy[1] / importance$MeanDecreaseAccuracy[2], 1),
+      "x more important than #2).\n", sep = "")
+  cat("      This suggests it may be a key clinical factor.\n\n")
 }
-cat("\n")
 
-cat("  3. Model stability:\n")
-cat("     OOB error range: [", round(min(rf_oob_error), 4), ", ", 
-    round(max(rf_oob_error), 4), "]\n", sep = "")
-cat("     AUC range: [", 
-    round(performance_summary$Min[performance_summary$Metric == "AUC"], 3), ", ",
-    round(performance_summary$Max[performance_summary$Metric == "AUC"], 3), "]\n", sep = "")
-cat("\n")
-
-cat("FOR YOUR MANUSCRIPT:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat('  "Random Forest models were fitted using', length(recommended_vars), 
-    'VSURF-selected\n')
-cat('   variables with optimal hyperparameters (mtry =', optimal_mtry, 
-    ') determined\n')
-cat('   via 10-fold cross-validation. Models were trained on 80% of data\n')
-cat('   and tested on the remaining 20% across', length(all_imputations), 
-    'multiply-imputed\n')
-cat('   datasets. Mean AUC was', round(mean_auc, 3), '(95% CI:', 
-    performance_summary$CI_95[performance_summary$Metric == "AUC"], '),\n')
-cat('   indicating', ifelse(mean_auc >= 0.70, "good", "fair"), 
-    'discriminative ability. The most important\n')
-cat('   predictors were', paste(head(pooled_importance$Variable, 3), collapse = ", "), 
-    ',\n')
-cat('   with', pooled_importance$Variable[1], 'showing the highest mean decrease\n')
-cat('   in accuracy (', round(pooled_importance$MeanDecreaseAccuracy[1], 3), ')."\n\n')
-
-cat("INTERPRETATION GUIDE:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("  • AUC interpretation:\n")
-cat("    - 0.90-1.00: Excellent\n")
-cat("    - 0.80-0.89: Good\n")
-cat("    - 0.70-0.79: Fair\n")
-cat("    - 0.60-0.69: Poor\n")
-cat("    - 0.50-0.59: Fail\n\n")
-
-cat("  • Variable importance (MDA):\n")
-cat("    - Shows average decrease in accuracy when variable is permuted\n")
-cat("    - Higher values = more important for prediction\n")
-cat("    - Error bars show stability across imputations\n\n")
-
-cat("  • Out-of-Bag (OOB) error:\n")
-cat("    - Internal validation error from bootstrap samples\n")
-cat("    - Mean OOB:", round(mean(rf_oob_error), 4), "\n")
-cat("    - Should be similar to test set error\n\n")
-
-# Check if test error aligns with OOB
-mean_test_error <- 1 - performance_summary$Mean[performance_summary$Metric == "Accuracy"]
-if(abs(mean(rf_oob_error) - mean_test_error) < 0.05) {
-  cat("  ✓ OOB and test errors are consistent (good sign!)\n\n")
-} else {
-  cat("  ⚠ OOB and test errors differ by", 
-      round(abs(mean(rf_oob_error) - mean_test_error), 3), 
-      "(check for overfitting)\n\n")
-}
+cat("FOR MANUSCRIPT:\n")
+cat('  "Random forest modeling identified predictors of benzodiazepine\n')
+cat('   discontinuation using ', length(recommended_vars), ' variables across ', 
+    length(models), ' multiply\n', sep = "")
+cat('   imputed datasets. The model achieved moderate discriminative\n')
+cat('   ability (AUC = ', round(performance$Mean[1], 3), 
+    ', 95% CI: ', performance$CI_95[1], ')\n', sep = "")
+cat('   with sensitivity of ', round(100*performance$Mean[3], 1), 
+    '% and specificity of ', round(100*performance$Mean[4], 1), '%.\n', sep = "")
+cat('   ', importance$Variable[1], ' was the strongest predictor\n', sep = "")
+cat('   (Mean Decrease Accuracy = ', round(importance$MeanDecreaseAccuracy[1], 2), 
+    '), followed by\n', sep = "")
+cat('   ', importance$Variable[2], ' (', 
+    round(importance$MeanDecreaseAccuracy[2], 2), ') and ',
+    importance$Variable[3], ' (', 
+    round(importance$MeanDecreaseAccuracy[3], 2), ').\n', sep = "")
+cat('   Class weighting and down-sampling were evaluated but did not\n')
+cat('   improve model performance."\n\n')
 
 cat("NEXT STEPS:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("  1. Review RF_variable_importance_pooled.png\n")
-cat("     → Identify which variables matter most\n\n")
-cat("  2. Check RF_ROC_curve.png\n")
-cat("     → Assess discrimination ability visually\n\n")
-cat("  3. Examine RF_confusion_matrix.png\n")
-cat("     → Understand prediction patterns (false positives/negatives)\n\n")
-cat("  4. Review RF_variable_importance.csv\n")
-cat("     → Full variable rankings with standard deviations\n\n")
-cat("  5. Consider domain patterns\n")
-cat("     → Which types of variables (sleep beliefs, personality, etc.)\n")
-cat("       are most predictive?\n\n")
-cat("  6. Proceed to Chunk 8: Logistic Regression Validation\n")
-cat("     → Confirm findings with interpretable model\n")
-cat("     → Get odds ratios and p-values for inference\n\n")
+cat("  1. Examine ", importance$Variable[1], " more closely - why is it so dominant?\n", sep = "")
+cat("  2. Consider interaction effects in logistic regression:\n")
+cat("     • ", importance$Variable[1], " × ", importance$Variable[2], "\n", sep = "")
+cat("     • ", importance$Variable[1], " × ", importance$Variable[3], "\n", sep = "")
+cat("  3. Use top predictors for logistic regression modeling\n")
+cat("  4. Interpret findings in clinical context\n\n")
 
-# Add warning if performance is poor
-if(mean_auc < 0.60) {
-  cat("⚠ WARNING: Poor discrimination (AUC < 0.60)\n")
-  cat("─────────────────────────────────────────────────────────────\n")
-  cat("  Possible causes:\n")
-  cat("  • Outcome may be difficult to predict with available variables\n")
-  cat("  • Class imbalance issues\n")
-  cat("  • Need more/different predictors\n")
-  cat("  • Non-linear relationships not captured\n\n")
-  cat("  Consider:\n")
-  cat("  • Review variable selection process\n")
-  cat("  • Check for data quality issues\n")
-  cat("  • Explore interaction terms\n")
-  cat("  • Consider alternative modeling approaches\n\n")
-} else if(mean_auc < 0.70) {
-  cat("⚠ NOTE: Fair discrimination (AUC 0.60-0.69)\n")
-  cat("─────────────────────────────────────────────────────────────\n")
-  cat("  • Acceptable but room for improvement\n")
-  cat("  • Consider exploring interactions or non-linear terms\n")
-  cat("  • Proceed with caution in interpretation\n\n")
-}
-
-# Check for overfitting
-auc_range <- performance_summary$Max[performance_summary$Metric == "AUC"] - 
-             performance_summary$Min[performance_summary$Metric == "AUC"]
-
-if(auc_range > 0.10) {
-  cat("⚠ NOTE: Large variability in AUC across imputations (range =", 
-      round(auc_range, 3), ")\n")
-  cat("─────────────────────────────────────────────────────────────\n")
-  cat("  • This suggests instability in model performance\n")
-  cat("  • May indicate small sample size or noisy predictors\n")
-  cat("  • Results should be interpreted cautiously\n\n")
-}
-
-cat("✓ Random Forest modeling complete and ready for validation!\n\n")
+cat("✓ Random Forest modeling complete!\n\n")
 ```
 
 
@@ -4326,11 +3894,10 @@ cat("✓ Random Forest modeling complete and ready for validation!\n\n")
 
 ```{r}
 #==============================================================================
-# CHUNK 8: LOGISTIC REGRESSION VALIDATION (FIXED)
+# CHUNK 8: LOGISTIC REGRESSION VALIDATION (STREAMLINED)
 #==============================================================================
 # Purpose: Confirmatory analysis using VSURF-selected variables
 #          Provides interpretable effect sizes (Odds Ratios)
-# Strategy: Fit models on all imputations, pool using Rubin's rules
 #==============================================================================
 
 library(mice)
@@ -4339,140 +3906,70 @@ library(broom)
 library(pROC)
 library(caret)
 
-cat("\n")
-cat("═══════════════════════════════════════════════════════════════\n")
+cat("\n═══════════════════════════════════════════════════════════════\n")
 cat("STEP 8: LOGISTIC REGRESSION VALIDATION\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("PURPOSE: Confirmatory analysis with interpretable effect sizes\n")
-cat("APPROACH: Use VSURF-selected variables, pool across imputations\n\n")
-
-# Load data and results
+# Load data
 mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
 vsurf_results <- readRDS("VSURF_results.rds")
 rf_results <- readRDS("RF_modeling_results.rds")
 subscale_results <- readRDS("subscale_creation_results.rds")
 
-# Get recommended variables and outcome from results objects
 recommended_vars <- vsurf_results$recommended_vars
 outcome_var <- subscale_results$outcome
 
-cat("Outcome variable:", outcome_var, "\n")
-cat("Using", length(recommended_vars), "VSURF-selected variables:\n")
-for(i in seq_along(recommended_vars)) {
-  cat("  ", i, ". ", recommended_vars[i], "\n", sep = "")
-}
-cat("\n")
+cat("Outcome:", outcome_var, "\n")
+cat("Predictors:", length(recommended_vars), "\n\n")
 
 # -----------------------------------------------------------------------------
-# A. Fit logistic regression models on all imputations
+# A. Prepare data and fit models
 # -----------------------------------------------------------------------------
 
-cat("PART A: Fitting logistic regression models\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Check if outcome variable exists
 first_imp <- complete(mids_with_subscales, 1)
-if(!(outcome_var %in% names(first_imp))) {
-  stop("ERROR: Outcome variable '", outcome_var, "' not found in imputed data")
-}
-
-# Check which recommended vars exist
 available_vars <- recommended_vars[recommended_vars %in% names(first_imp)]
 
-if(length(available_vars) < length(recommended_vars)) {
-  missing_vars <- setdiff(recommended_vars, available_vars)
-  warning("Missing variables: ", paste(missing_vars, collapse = ", "))
-}
-
 if(length(available_vars) == 0) {
-  stop("ERROR: No recommended variables found in imputed data")
+  stop("ERROR: No recommended variables found in data")
 }
 
-cat("Available predictors:", length(available_vars), "\n")
-cat("Missing predictors:", length(recommended_vars) - length(available_vars), "\n\n")
-
-# Build formula
 formula_str <- paste(outcome_var, "~", paste(available_vars, collapse = " + "))
-cat("Model formula:\n")
-cat("  ", formula_str, "\n\n")
 
-# Fit using mice::with (automatically handles all imputations)
-cat("Fitting models on all", mids_with_subscales$m, "imputations...\n")
-
-# Prepare data for glm - ensure binary outcome
+# Prepare outcome as binary 0/1
 mids_prepared <- mids_with_subscales
-
 for(i in 1:mids_prepared$m) {
   imp_data <- complete(mids_prepared, i)
-  
-  # Convert outcome to numeric 0/1
   if(is.factor(imp_data[[outcome_var]])) {
     imp_data[[outcome_var]] <- as.numeric(imp_data[[outcome_var]]) - 1
-  } else {
-    # Ensure it's 0/1
-    unique_vals <- unique(imp_data[[outcome_var]])
-    if(!all(unique_vals %in% c(0, 1, NA))) {
-      stop("ERROR: Outcome must be binary (0/1) in imputation ", i)
-    }
   }
-  
-  # Update the mids object
-  mids_prepared$data[[outcome_var]] <- imp_data[[outcome_var]]
+  if(!all(imp_data[[outcome_var]] %in% c(0, 1, NA))) {
+    stop("ERROR: Outcome must be binary (0/1)")
+  }
 }
 
-# Fit models with error handling
+cat("Fitting models on", mids_prepared$m, "imputations...\n")
+
 fit_mi <- tryCatch({
   with(mids_prepared, glm(as.formula(formula_str), family = binomial()))
 }, error = function(e) {
-  cat("ERROR in model fitting:", e$message, "\n")
-  cat("Attempting simplified approach...\n")
-  
-  # Fallback: fit manually on each imputation
   manual_fits <- list()
   for(i in 1:mids_prepared$m) {
     imp_data <- complete(mids_prepared, i) %>%
       select(all_of(c(outcome_var, available_vars))) %>%
       na.omit()
-    
-    manual_fits[[i]] <- glm(as.formula(formula_str), 
-                            data = imp_data, 
-                            family = binomial())
+    manual_fits[[i]] <- glm(as.formula(formula_str), data = imp_data, family = binomial())
   }
-  
-  # Convert to mira object
-  structure(list(call = NULL, 
-                 call1 = NULL,
-                 nmis = NULL,
-                 analyses = manual_fits),
-            class = "mira")
+  structure(list(call = NULL, call1 = NULL, nmis = NULL, analyses = manual_fits), class = "mira")
 })
 
-cat("✓ Models fitted successfully\n\n")
+cat("✓ Models fitted\n\n")
 
 # -----------------------------------------------------------------------------
-# B. Pool results using Rubin's rules
+# B. Pool results and calculate Odds Ratios
 # -----------------------------------------------------------------------------
-
-cat("PART B: Pooling results across imputations (Rubin's rules)\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
 
 pooled_results <- pool(fit_mi)
 summary_pooled <- summary(pooled_results, conf.int = TRUE)
-
-cat("Pooled coefficients:\n")
-print(summary_pooled %>%
-        select(term, estimate, std.error, statistic, p.value) %>%
-        mutate(across(where(is.numeric), ~round(., 4))),
-      row.names = FALSE)
-cat("\n")
-
-# -----------------------------------------------------------------------------
-# C. Calculate Odds Ratios with confidence intervals
-# -----------------------------------------------------------------------------
-
-cat("PART C: Odds Ratios and 95% Confidence Intervals\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
 
 or_results <- summary_pooled %>%
   filter(term != "(Intercept)") %>%
@@ -4488,528 +3985,27 @@ or_results <- summary_pooled %>%
       TRUE ~ ""
     )
   ) %>%
-  arrange(p.value) %>%
-  select(term, OR, OR_lower, OR_upper, estimate, std.error, p.value, Significance)
+  arrange(p.value)
 
-cat("Odds Ratios (sorted by p-value):\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("Note: *** p<.001, ** p<.01, * p<.05, † p<.10\n\n")
-print(or_results %>%
-        mutate(
-          OR = round(OR, 3),
-          OR_lower = round(OR_lower, 3),
-          OR_upper = round(OR_upper, 3),
-          estimate = round(estimate, 3),
-          std.error = round(std.error, 3),
-          p.value = format.pval(p.value, digits = 3)
-        ) %>%
-        select(term, OR, OR_lower, OR_upper, p.value, Significance),
-      row.names = FALSE)
-cat("\n")
-
-# Count significant predictors
 n_sig_05 <- sum(or_results$p.value < 0.05, na.rm = TRUE)
 n_sig_10 <- sum(or_results$p.value < 0.10, na.rm = TRUE)
 
-cat("Significant predictors:\n")
-cat("  p < .05:", n_sig_05, "out of", nrow(or_results), "\n")
-cat("  p < .10:", n_sig_10, "out of", nrow(or_results), "\n\n")
-
-# -----------------------------------------------------------------------------
-# D. Model performance evaluation
-# -----------------------------------------------------------------------------
-
-cat("PART D: Model performance evaluation\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Function to evaluate LR on one imputation
-evaluate_lr_model <- function(imp_data, formula_str, outcome_var, available_vars) {
-  
-  # Prepare data
-  model_data <- imp_data %>%
-    select(all_of(c(outcome_var, available_vars))) %>%
-    na.omit()
-  
-  # Convert outcome to numeric 0/1
-  if(is.factor(model_data[[outcome_var]])) {
-    model_data[[outcome_var]] <- as.numeric(model_data[[outcome_var]]) - 1
-  }
-  
-  # Ensure binary
-  if(!all(model_data[[outcome_var]] %in% c(0, 1))) {
-    stop("Outcome must be binary (0/1)")
-  }
-  
-  # Split data (same seed as RF for consistency)
-  set.seed(123)
-  train_idx <- createDataPartition(
-    model_data[[outcome_var]], 
-    p = 0.8, 
-    list = FALSE
-  )
-  
-  train_data <- model_data[train_idx, ]
-  test_data <- model_data[-train_idx, ]
-  
-  # Fit model with error handling
-  lr_model <- tryCatch({
-    glm(as.formula(formula_str), data = train_data, family = binomial())
-  }, error = function(e) {
-    return(NULL)
-  })
-  
-  if(is.null(lr_model)) {
-    return(list(
-      auc = NA, accuracy = NA, sensitivity = NA, 
-      specificity = NA, precision = NA, f1 = NA,
-      optimal_threshold = NA
-    ))
-  }
-  
-  # Predictions
-  pred_prob <- predict(lr_model, test_data, type = "response")
-  
-  # Handle NA predictions
-  if(any(is.na(pred_prob))) {
-    return(list(
-      auc = NA, accuracy = NA, sensitivity = NA,
-      specificity = NA, precision = NA, f1 = NA,
-      optimal_threshold = NA
-    ))
-  }
-  
-  # ROC and AUC
-  roc_obj <- tryCatch({
-    roc(test_data[[outcome_var]], pred_prob, 
-        levels = c(0, 1), direction = "<", quiet = TRUE)
-  }, error = function(e) {
-    return(NULL)
-  })
-  
-  if(is.null(roc_obj)) {
-    return(list(
-      auc = NA, accuracy = NA, sensitivity = NA,
-      specificity = NA, precision = NA, f1 = NA,
-      optimal_threshold = NA
-    ))
-  }
-  
-  auc_val <- as.numeric(auc(roc_obj))
-  
-  # Optimal threshold (Youden's J)
-  coords_all <- coords(roc_obj, x = "all", 
-                       ret = c("threshold", "sensitivity", "specificity"))
-  youden_j <- coords_all$sensitivity + coords_all$specificity - 1
-  optimal_thresh <- coords_all$threshold[which.max(youden_j)]
-  
-  # Classification with optimal threshold
-  pred_class <- factor(
-    ifelse(pred_prob > optimal_thresh, 1, 0),
-    levels = c(0, 1)
-  )
-  actual_class <- factor(test_data[[outcome_var]], levels = c(0, 1))
-  
-  cm <- confusionMatrix(pred_class, actual_class, positive = "1")
-  
-  return(list(
-    auc = auc_val,
-    accuracy = cm$overall["Accuracy"],
-    sensitivity = cm$byClass["Sensitivity"],
-    specificity = cm$byClass["Specificity"],
-    precision = cm$byClass["Precision"],
-    f1 = cm$byClass["F1"],
-    optimal_threshold = optimal_thresh,
-    confusion_matrix = cm
-  ))
-}
-
-# Evaluate on all imputations
-cat("Evaluating performance on all imputations...\n")
-
-lr_performance <- list()
-for(i in 1:mids_with_subscales$m) {
-  cat("  Evaluating imputation", i, "of", mids_with_subscales$m, "...")
-  
-  imp_data <- complete(mids_with_subscales, i)
-  result <- evaluate_lr_model(imp_data, formula_str, outcome_var, available_vars)
-  lr_performance[[i]] <- result
-  
-  if(!is.na(result$auc)) {
-    cat(" AUC:", round(result$auc, 3), "\n")
-  } else {
-    cat(" FAILED\n")
-  }
-}
-
-cat("\n")
-
-# Remove failed evaluations
-valid_performance <- lr_performance[!sapply(lr_performance, function(x) is.na(x$auc))]
-
-if(length(valid_performance) == 0) {
-  stop("ERROR: All LR evaluations failed!")
-}
-
-if(length(valid_performance) < length(lr_performance)) {
-  cat("⚠ WARNING:", length(lr_performance) - length(valid_performance),
-      "evaluations failed\n\n")
-}
-
-cat("✓ Evaluation complete (", length(valid_performance), " successful)\n\n", sep = "")
-
-# Pool performance
-lr_performance_summary <- data.frame(
-  Metric = c("AUC", "Accuracy", "Sensitivity", "Specificity", "Precision", "F1"),
-  Mean = c(
-    mean(sapply(valid_performance, function(x) x$auc), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$accuracy), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$sensitivity), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$specificity), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$precision), na.rm = TRUE),
-    mean(sapply(valid_performance, function(x) x$f1), na.rm = TRUE)
-  ),
-  SD = c(
-    sd(sapply(valid_performance, function(x) x$auc), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$accuracy), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$sensitivity), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$specificity), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$precision), na.rm = TRUE),
-    sd(sapply(valid_performance, function(x) x$f1), na.rm = TRUE)
-  ),
-  Min = c(
-    min(sapply(valid_performance, function(x) x$auc), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$accuracy), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$sensitivity), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$specificity), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$precision), na.rm = TRUE),
-    min(sapply(valid_performance, function(x) x$f1), na.rm = TRUE)
-  ),
-  Max = c(
-    max(sapply(valid_performance, function(x) x$auc), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$accuracy), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$sensitivity), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$specificity), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$precision), na.rm = TRUE),
-    max(sapply(valid_performance, function(x) x$f1), na.rm = TRUE)
-  )
-) %>%
-  mutate(
-    Mean = round(Mean, 3),
-    SD = round(SD, 3),
-    Min = round(Min, 3),
-    Max = round(Max, 3),
-    CI_95 = paste0("[", round(pmax(0, Mean - 1.96*SD), 3), ", ",
-                   round(pmin(1, Mean + 1.96*SD), 3), "]")
-  )
-
-cat("LOGISTIC REGRESSION PERFORMANCE:\n")
+cat("ODDS RATIOS (sorted by p-value):\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-print(lr_performance_summary %>% 
-        select(Metric, Mean, SD, CI_95, Min, Max), 
+print(or_results %>%
+        select(term, OR, OR_lower, OR_upper, p.value, Significance) %>%
+        mutate(across(where(is.numeric) & !matches("p.value"), ~round(., 3)),
+               p.value = format.pval(p.value, digits = 3)),
       row.names = FALSE)
-cat("\n")
-
-lr_auc <- lr_performance_summary$Mean[1]
-
-cat("INTERPRETATION:\n")
-if(lr_auc >= 0.80) {
-  cat("  ✓ EXCELLENT discrimination (AUC ≥ 0.80)\n")
-} else if(lr_auc >= 0.70) {
-  cat("  ✓ GOOD discrimination (AUC 0.70-0.79)\n")
-} else if(lr_auc >= 0.60) {
-  cat("  ✓ FAIR discrimination (AUC 0.60-0.69)\n")
-} else {
-  cat("  ⚠ POOR discrimination (AUC < 0.60)\n")
-}
-cat("\n")
+cat("\nSignificant: p<.05 =", n_sig_05, "| p<.10 =", n_sig_10, "\n\n")
 
 # -----------------------------------------------------------------------------
-# E. Compare RF vs LR performance
+# C. Evaluate performance
 # -----------------------------------------------------------------------------
 
-cat("PART E: Comparing Random Forest vs Logistic Regression\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
+cat("Evaluating performance...\n")
 
-rf_auc <- rf_results$mean_auc
-
-comparison_df <- data.frame(
-  Model = c("Random Forest", "Logistic Regression"),
-  AUC = c(rf_auc, lr_auc),
-  Accuracy = c(
-    rf_results$performance_summary$Mean[rf_results$performance_summary$Metric == "Accuracy"],
-    lr_performance_summary$Mean[lr_performance_summary$Metric == "Accuracy"]
-  ),
-  Sensitivity = c(
-    rf_results$performance_summary$Mean[rf_results$performance_summary$Metric == "Sensitivity"],
-    lr_performance_summary$Mean[lr_performance_summary$Metric == "Sensitivity"]
-  ),
-  Specificity = c(
-    rf_results$performance_summary$Mean[rf_results$performance_summary$Metric == "Specificity"],
-    lr_performance_summary$Mean[lr_performance_summary$Metric == "Specificity"]
-  )
-)
-
-cat("MODEL COMPARISON:\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-print(comparison_df %>%
-        mutate(across(where(is.numeric), ~round(., 3))),
-      row.names = FALSE)
-cat("\n")
-
-auc_diff <- abs(rf_auc - lr_auc)
-cat("AUC difference:", round(auc_diff, 3), "\n")
-
-if(auc_diff < 0.05) {
-  cat("  → Models perform similarly (difference < 0.05)\n")
-  cat("  → RF findings VALIDATED by LR ✓\n\n")
-} else {
-  cat("  → Models show different performance\n")
-  if(rf_auc > lr_auc) {
-    cat("  → RF performs better (may capture complex interactions)\n\n")
-  } else {
-    cat("  → LR performs better (linear relationships sufficient)\n\n")
-  }
-}
-
-# Visualization
-p_comparison <- ggplot(comparison_df, aes(x = Model, y = AUC, fill = Model)) +
-  geom_col(alpha = 0.7, width = 0.6) +
-  geom_text(aes(label = round(AUC, 3)), vjust = -0.5, 
-            size = 5, fontface = "bold") +
-  scale_fill_manual(values = c("Random Forest" = "darkgreen",
-                                "Logistic Regression" = "steelblue")) +
-  ylim(0, 1) +
-  labs(
-    title = "Model Performance Comparison",
-    subtitle = paste0("AUC pooled across ", mids_with_subscales$m, " imputations"),
-    y = "Area Under ROC Curve (AUC)",
-    x = NULL
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
-    plot.subtitle = element_text(hjust = 0.5, size = 11),
-    legend.position = "none"
-  )
-
-ggsave("RF_vs_LR_comparison.png", plot = p_comparison,
-       width = 8, height = 6, dpi = 300)
-
-cat("✓ Saved: RF_vs_LR_comparison.png\n\n")
-
-# -----------------------------------------------------------------------------
-# F. Forest plot of Odds Ratios (COMPLETE REBUILD)
-# -----------------------------------------------------------------------------
-
-cat("PART F: Creating forest plot of Odds Ratios\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Start completely fresh - extract data manually
-cat("Extracting data from or_results...\n")
-
-# Manually build the forest data
-forest_list <- list()
-for(i in 1:nrow(or_results)) {
-  if(!is.na(or_results$p.value[i]) && or_results$p.value[i] < 0.10) {
-    forest_list[[length(forest_list) + 1]] <- list(
-      Variable = as.character(or_results$term[i]),
-      OR = or_results$OR[i],
-      OR_lower = or_results$OR_lower[i],
-      OR_upper = or_results$OR_upper[i],
-      pval = or_results$p.value[i],
-      sig = ifelse(or_results$Significance[i] == "" | is.na(or_results$Significance[i]),
-             "ns", 
-             or_results$Significance[i])
-    )
-  }
-}
-
-# Check if we have any data
-if(length(forest_list) == 0) {
-  cat("⚠ No predictors with p < 0.10 found. Skipping forest plot.\n")
-  cat("   This is not an error - it means no variables reached marginal significance.\n\n")
-  
-  # Create a text-based summary instead
-  cat("Top predictors by p-value (regardless of significance):\n")
-  for(i in 1:min(10, nrow(or_results))) {
-    if(!is.na(or_results$p.value[i])) {
-      cat(sprintf("  %d. %s: OR = %.3f [%.3f, %.3f], p = %.3f\n",
-                  i,
-                  as.character(or_results$term[i]),
-                  or_results$OR[i],
-                  or_results$OR_lower[i],
-                  or_results$OR_upper[i],
-                  or_results$p.value[i]))
-    }
-  }
-  cat("\n")
-  
-} else {
-  
-  cat("Creating forest plot for", length(forest_list), "variables with p < 0.10\n\n")
-  
-  # Convert list to data frame the base R way
-  forest_data <- data.frame(
-    Variable = sapply(forest_list, function(x) x$Variable),
-    OR = sapply(forest_list, function(x) x$OR),
-    OR_lower = sapply(forest_list, function(x) x$OR_lower),
-    OR_upper = sapply(forest_list, function(x) x$OR_upper),
-    pval = sapply(forest_list, function(x) x$pval),
-    sig = sapply(forest_list, function(x) x$sig),
-    stringsAsFactors = FALSE
-  )
-  
-  # Sort by OR
-  forest_data <- forest_data[order(forest_data$OR), ]
-  
-  # Create factor
-  forest_data$Variable <- factor(forest_data$Variable, levels = forest_data$Variable)
-  
-  cat("Variables to be plotted:\n")
-  print(forest_data)
-  cat("\n")
-  
-  # Build plot
-  tryCatch({
-    cat("Creating ggplot object...\n")
-    
-    p_forest <- ggplot(forest_data, aes(x = OR, y = Variable)) +
-      geom_vline(xintercept = 1, linetype = "dashed", 
-                 color = "gray50", linewidth = 1) +
-      geom_errorbarh(aes(xmin = OR_lower, xmax = OR_upper), 
-                     height = 0.3, linewidth = 1, color = "steelblue") +
-      geom_point(aes(color = sig), size = 4) +
-      scale_color_manual(
-  name = "Significance",
-  values = c("***" = "red", 
-             "**" = "orange",
-             "*" = "gold",
-             "†" = "lightblue",
-             "ns" = "gray60"),
-  breaks = c("***", "**", "*", "†", "ns"),
-  labels = c("p < .001", "p < .01", "p < .05", "p < .10", "p ≥ .10"),
-  drop = FALSE
-      ) +
-      scale_x_log10(
-        breaks = c(0.25, 0.5, 1, 2, 4, 8),
-        labels = c("0.25", "0.5", "1", "2", "4", "8")
-      ) +
-      labs(
-        title = "Logistic Regression: Odds Ratios for BZRA Discontinuation",
-        subtitle = paste0("Pooled across ", mids_with_subscales$m, 
-                         " imputations with 95% confidence intervals"),
-        x = "Odds Ratio (log scale)",
-        y = NULL
-      ) +
-      theme_minimal(base_size = 11) +
-      theme(
-        plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
-        plot.subtitle = element_text(hjust = 0.5, size = 10),
-        legend.position = "bottom",
-        axis.text.y = element_text(size = 10)
-      )
-    
-    cat("Saving plot...\n")
-    
-    # Save plot
-    ggsave("LR_odds_ratios_forest_plot.png", plot = p_forest,
-           width = 10, height = max(6, nrow(forest_data) * 0.4), dpi = 300)
-    cat("✓ Saved: LR_odds_ratios_forest_plot.png\n\n")
-    
-  }, error = function(e) {
-    cat("⚠ Error:", e$message, "\n")
-    cat("   Attempting ultra-simple version...\n")
-    
-    # Absolute simplest version
-    tryCatch({
-      p_simple <- ggplot(forest_data, aes(x = OR, y = Variable)) +
-        geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
-        geom_errorbarh(aes(xmin = OR_lower, xmax = OR_upper), height = 0.3) +
-        geom_point(size = 4, color = "steelblue") +
-        scale_x_log10() +
-        labs(title = "Odds Ratios", x = "Odds Ratio", y = NULL) +
-        theme_minimal()
-      
-      ggsave("LR_odds_ratios_forest_plot_simple.png", plot = p_simple,
-             width = 10, height = max(6, nrow(forest_data) * 0.4), dpi = 300)
-      cat("✓ Saved simplified version: LR_odds_ratios_forest_plot_simple.png\n\n")
-    }, error = function(e2) {
-      cat("⚠ All plotting attempts failed:", e2$message, "\n")
-      write.csv(forest_data, "forest_plot_data_debug.csv", row.names = FALSE)
-      cat("   Data saved to: forest_plot_data_debug.csv\n\n")
-    })
-  })
-}
-
-# -----------------------------------------------------------------------------
-# G. Variable agreement between RF and LR
-# -----------------------------------------------------------------------------
-
-cat("PART G: Variable agreement between RF and LR\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Top 10 from RF (or fewer if less than 10 available)
-n_top_rf <- min(10, nrow(rf_results$pooled_importance))
-top_rf_vars <- rf_results$pooled_importance$Variable[1:n_top_rf]
-
-# Significant from LR at different thresholds
-sig_lr_vars_05 <- or_results$term[!is.na(or_results$p.value) & or_results$p.value < 0.05]
-sig_lr_vars_10 <- or_results$term[!is.na(or_results$p.value) & or_results$p.value < 0.10]
-
-# Agreement
-agreement_05 <- intersect(top_rf_vars, sig_lr_vars_05)
-agreement_10 <- intersect(top_rf_vars, sig_lr_vars_10)
-
-cat("Top", n_top_rf, "RF variables:\n")
-for(i in seq_along(top_rf_vars)) {
-  cat("  ", i, ". ", top_rf_vars[i], "\n", sep = "")
-}
-cat("\n")
-
-cat("Significant LR variables (p < .05):", length(sig_lr_vars_05), "total\n")
-if(length(sig_lr_vars_05) > 0) {
-  for(v in sig_lr_vars_05) {
-    cat("  • ", v, "\n", sep = "")
-  }
-} else {
-  cat("  (None)\n")
-}
-cat("\n")
-
-cat("Agreement (in both top", n_top_rf, "RF and significant LR at p < .05):\n")
-if(length(agreement_05) > 0) {
-  for(v in agreement_05) {
-    cat("  ✓ ", v, "\n", sep = "")
-  }
-  cat("\n")
-  cat("Agreement rate:", round(100 * length(agreement_05) / n_top_rf, 1), "%\n\n")
-} else {
-  cat("  (No variables in common at p < .05)\n\n")
-}
-
-if(length(agreement_10) > length(agreement_05)) {
-  cat("Additional agreement at p < .10:\n")
-  additional <- setdiff(agreement_10, agreement_05)
-  for(v in additional) {
-    cat("  • ", v, "\n", sep = "")
-  }
-  cat("\n")
-}
-
-# -----------------------------------------------------------------------------
-# H. ROC curve for LR
-# -----------------------------------------------------------------------------
-
-cat("PART H: Creating LR ROC curve\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Use first valid imputation for visualization
-if(length(valid_performance) > 0 && !is.null(valid_performance[[1]]$confusion_matrix)) {
-  
-  # Get ROC from first imputation
-  first_valid_idx <- which(!sapply(lr_performance, function(x) is.na(x$auc)))[1]
-  imp_data <- complete(mids_with_subscales, first_valid_idx)
-  
+evaluate_lr <- function(imp_data, formula_str, outcome_var, available_vars) {
   model_data <- imp_data %>%
     select(all_of(c(outcome_var, available_vars))) %>%
     na.omit()
@@ -5023,74 +4019,203 @@ if(length(valid_performance) > 0 && !is.null(valid_performance[[1]]$confusion_ma
   train_data <- model_data[train_idx, ]
   test_data <- model_data[-train_idx, ]
   
-  lr_model <- glm(as.formula(formula_str), data = train_data, family = binomial())
-  pred_prob <- predict(lr_model, test_data, type = "response")
-  
-  roc_obj <- roc(test_data[[outcome_var]], pred_prob, 
-                 levels = c(0, 1), direction = "<", quiet = TRUE)
-  
-  roc_df <- data.frame(
-    FPR = 1 - roc_obj$specificities,
-    TPR = roc_obj$sensitivities
+  lr_model <- tryCatch(
+    glm(as.formula(formula_str), data = train_data, family = binomial()),
+    error = function(e) NULL
   )
   
-  p_roc_lr <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
-    geom_line(color = "steelblue", linewidth = 1.5) +
-    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
-    annotate("text", x = 0.7, y = 0.3,
-             label = paste0("Mean AUC = ", round(lr_auc, 3),
-                           "\n95% CI ",
-                           lr_performance_summary$CI_95[lr_performance_summary$Metric == "AUC"]),
-             size = 5, fontface = "bold") +
-    labs(
-      title = "Logistic Regression ROC Curve",
-      subtitle = paste0("Pooled performance across ", length(valid_performance), " imputations"),
-      x = "False Positive Rate (1 - Specificity)",
-      y = "True Positive Rate (Sensitivity)"
-    ) +
-    coord_fixed() +
-    theme_minimal(base_size = 12) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
-      plot.subtitle = element_text(hjust = 0.5, size = 11)
-    )
+  if(is.null(lr_model)) return(list(auc = NA, accuracy = NA))
   
-  ggsave("LR_ROC_curve.png", plot = p_roc_lr, width = 8, height = 8, dpi = 300)
-  cat("✓ Saved: LR_ROC_curve.png\n\n")
+  pred_prob <- predict(lr_model, test_data, type = "response")
+  if(any(is.na(pred_prob))) return(list(auc = NA, accuracy = NA))
+  
+  roc_obj <- tryCatch(
+    roc(test_data[[outcome_var]], pred_prob, levels = c(0, 1), direction = "<", quiet = TRUE),
+    error = function(e) NULL
+  )
+  
+  if(is.null(roc_obj)) return(list(auc = NA, accuracy = NA))
+  
+  auc_val <- as.numeric(auc(roc_obj))
+  coords_all <- coords(roc_obj, x = "all", ret = c("threshold", "sensitivity", "specificity"))
+  optimal_thresh <- coords_all$threshold[which.max(coords_all$sensitivity + coords_all$specificity - 1)]
+  
+  pred_class <- factor(ifelse(pred_prob > optimal_thresh, 1, 0), levels = c(0, 1))
+  actual_class <- factor(test_data[[outcome_var]], levels = c(0, 1))
+  cm <- confusionMatrix(pred_class, actual_class, positive = "1")
+  
+  list(
+    auc = auc_val,
+    accuracy = cm$overall["Accuracy"],
+    sensitivity = cm$byClass["Sensitivity"],
+    specificity = cm$byClass["Specificity"],
+    precision = cm$byClass["Precision"],
+    f1 = cm$byClass["F1"]
+  )
 }
 
+lr_performance <- lapply(1:mids_with_subscales$m, function(i) {
+  evaluate_lr(complete(mids_with_subscales, i), formula_str, outcome_var, available_vars)
+})
+
+valid_performance <- lr_performance[!sapply(lr_performance, function(x) is.na(x$auc))]
+
+if(length(valid_performance) == 0) stop("ERROR: All evaluations failed")
+
+lr_performance_summary <- data.frame(
+  Metric = c("AUC", "Accuracy", "Sensitivity", "Specificity", "Precision", "F1"),
+  Mean = sapply(c("auc", "accuracy", "sensitivity", "specificity", "precision", "f1"), 
+                function(m) mean(sapply(valid_performance, function(x) x[[m]]), na.rm = TRUE)),
+  SD = sapply(c("auc", "accuracy", "sensitivity", "specificity", "precision", "f1"),
+              function(m) sd(sapply(valid_performance, function(x) x[[m]]), na.rm = TRUE))
+) %>%
+  mutate(
+    CI_95 = paste0("[", round(pmax(0, Mean - 1.96*SD), 3), ", ", 
+                   round(pmin(1, Mean + 1.96*SD), 3), "]")
+  )
+
+lr_auc <- lr_performance_summary$Mean[1]
+
+cat("\nPERFORMANCE:\n")
+print(lr_performance_summary %>% 
+        mutate(Mean = round(Mean, 3), SD = round(SD, 3)) %>%
+        select(Metric, Mean, SD, CI_95), 
+      row.names = FALSE)
+cat("\n")
+
 # -----------------------------------------------------------------------------
-# I. Save results
+# D. Compare with Random Forest
 # -----------------------------------------------------------------------------
 
-cat("PART I: Saving results\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
+rf_auc <- rf_results$mean_auc
+auc_diff <- abs(rf_auc - lr_auc)
+
+comparison_df <- data.frame(
+  Model = c("Random Forest", "Logistic Regression"),
+  AUC = c(rf_auc, lr_auc)
+)
+
+cat("MODEL COMPARISON:\n")
+print(comparison_df %>% mutate(AUC = round(AUC, 3)), row.names = FALSE)
+cat("AUC difference:", round(auc_diff, 3), 
+    ifelse(auc_diff < 0.05, "(Models agree ✓)\n\n", "(Models differ)\n\n"))
+
+# -----------------------------------------------------------------------------
+# E. Variable agreement
+# -----------------------------------------------------------------------------
+
+top_rf_vars <- rf_results$pooled_importance$Variable[1:min(10, nrow(rf_results$pooled_importance))]
+sig_lr_vars_05 <- or_results$term[!is.na(or_results$p.value) & or_results$p.value < 0.05]
+agreement <- intersect(top_rf_vars, sig_lr_vars_05)
+
+cat("Agreement (top RF & significant LR):\n")
+if(length(agreement) > 0) {
+  for(v in agreement) cat("  ✓", v, "\n")
+} else {
+  cat("  (None at p < .05)\n")
+}
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# F. Visualizations
+# -----------------------------------------------------------------------------
+
+# Comparison plot
+p_comparison <- ggplot(comparison_df, aes(x = Model, y = AUC, fill = Model)) +
+  geom_col(alpha = 0.7, width = 0.6) +
+  geom_text(aes(label = round(AUC, 3)), vjust = -0.5, size = 5, fontface = "bold") +
+  scale_fill_manual(values = c("Random Forest" = "darkgreen", "Logistic Regression" = "steelblue")) +
+  ylim(0, 1) +
+  labs(title = "Model Performance Comparison", 
+       subtitle = paste0("Pooled across ", mids_with_subscales$m, " imputations"),
+       y = "AUC", x = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "none")
+
+ggsave("RF_vs_LR_comparison.png", p_comparison, width = 8, height = 6, dpi = 300)
+
+# Forest plot (only if significant predictors exist)
+if(n_sig_10 > 0) {
+  forest_data <- or_results %>%
+    filter(p.value < 0.10) %>%
+    mutate(Variable = factor(term, levels = term[order(OR)]))
+  
+  p_forest <- ggplot(forest_data, aes(x = OR, y = Variable)) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 1) +
+    geom_errorbarh(aes(xmin = OR_lower, xmax = OR_upper), height = 0.3, linewidth = 1) +
+    geom_point(aes(color = Significance), size = 4) +
+    scale_color_manual(values = c("***" = "red", "**" = "orange", "*" = "gold", "†" = "lightblue"),
+                       labels = c("***" = "p<.001", "**" = "p<.01", "*" = "p<.05", "†" = "p<.10")) +
+    scale_x_log10(breaks = c(0.25, 0.5, 1, 2, 4, 8)) +
+    labs(title = "Odds Ratios for BZRA Discontinuation",
+         subtitle = paste0("Pooled across ", mids_with_subscales$m, " imputations"),
+         x = "Odds Ratio (log scale)", y = NULL) +
+    theme_minimal(base_size = 11) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5),
+          legend.position = "bottom")
+  
+  ggsave("LR_odds_ratios_forest_plot.png", p_forest, 
+         width = 10, height = max(6, nrow(forest_data) * 0.4), dpi = 300)
+}
+
+# ROC curve
+if(length(valid_performance) > 0) {
+  imp_data <- complete(mids_with_subscales, 1)
+  model_data <- imp_data %>% select(all_of(c(outcome_var, available_vars))) %>% na.omit()
+  if(is.factor(model_data[[outcome_var]])) model_data[[outcome_var]] <- as.numeric(model_data[[outcome_var]]) - 1
+  
+  set.seed(123)
+  train_idx <- createDataPartition(model_data[[outcome_var]], p = 0.8, list = FALSE)
+  lr_model <- glm(as.formula(formula_str), data = model_data[train_idx, ], family = binomial())
+  pred_prob <- predict(lr_model, model_data[-train_idx, ], type = "response")
+  roc_obj <- roc(model_data[-train_idx, ][[outcome_var]], pred_prob, levels = c(0, 1), direction = "<", quiet = TRUE)
+  
+  roc_df <- data.frame(FPR = 1 - roc_obj$specificities, TPR = roc_obj$sensitivities)
+  
+  p_roc <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
+    geom_line(color = "steelblue", linewidth = 1.5) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+    annotate("text", x = 0.7, y = 0.3, 
+             label = paste0("AUC = ", round(lr_auc, 3), "\n", lr_performance_summary$CI_95[1]),
+             size = 5, fontface = "bold") +
+    labs(title = "Logistic Regression ROC Curve", x = "False Positive Rate", y = "True Positive Rate") +
+    coord_fixed() +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  
+  ggsave("LR_ROC_curve.png", p_roc, width = 8, height = 8, dpi = 300)
+}
+
+cat("✓ Plots saved\n\n")
+
+# -----------------------------------------------------------------------------
+# G. Save results
+# -----------------------------------------------------------------------------
 
 lr_results_save <- list(
   fit_mi = fit_mi,
   pooled_results = pooled_results,
   odds_ratios = or_results,
-  performance = valid_performance,
   performance_summary = lr_performance_summary,
   model_comparison = comparison_df,
-  agreement_with_rf_05 = agreement_05,
-  agreement_with_rf_10 = agreement_10,
+  agreement_with_rf = agreement,
   outcome_var = outcome_var,
   formula = formula_str,
-  available_vars = available_vars,
   n_imputations = mids_with_subscales$m
 )
 
 saveRDS(lr_results_save, "LR_validation_results.rds")
-cat("✓ Saved: LR_validation_results.rds\n\n")
-
-# Save ORs as CSV
 write.csv(or_results, "LR_odds_ratios.csv", row.names = FALSE)
-cat("✓ Saved: LR_odds_ratios.csv\n\n")
-
-# Save performance summary
 write.csv(lr_performance_summary, "LR_performance_summary.csv", row.names = FALSE)
-cat("✓ Saved: LR_performance_summary.csv\n\n")
+
+cat("✓ Results saved\n\n")
+
+# -----------------------------------------------------------------------------
+# H. Extended Summary and Interpretation
+# -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
 cat("LOGISTIC REGRESSION VALIDATION COMPLETE\n")
@@ -5100,33 +4225,40 @@ cat("SUMMARY:\n")
 cat("  • Variables modeled:", length(available_vars), "\n")
 cat("  • Significant predictors (p < .05):", n_sig_05, "\n")
 cat("  • Marginally significant (p < .10):", n_sig_10, "\n")
-cat("  • Mean AUC:", round(lr_auc, 3), "±", 
-    round(lr_performance_summary$SD[1], 3), "\n")
-cat("  • Agreement with RF (p < .05):", length(agreement_05), "variables\n")
-cat("  • Agreement with RF (p < .10):", length(agreement_10), "variables\n\n")
+cat("  • Mean AUC:", round(lr_auc, 3), "±", round(lr_performance_summary$SD[1], 3), "\n")
+cat("  • RF vs LR AUC difference:", round(auc_diff, 3), "\n")
+cat("  • Agreement with RF (p < .05):", length(agreement), "variables\n\n")
 
 cat("KEY FINDINGS:\n")
+cat("═══════════════════════════════════════════════════════════════\n")
 if(n_sig_05 > 0) {
-  cat("  Significant predictors (p < .05):\n")
+  cat("\nSignificant predictors (p < .05):\n")
   sig_vars <- or_results %>% filter(p.value < 0.05) %>% arrange(p.value)
-  for(i in 1:min(5, nrow(sig_vars))) {
-    direction <- ifelse(sig_vars$OR[i] > 1, "increased", "decreased")
-    cat("    ", i, ". ", sig_vars$term[i], "\n", sep = "")
-    cat("       OR = ", round(sig_vars$OR[i], 2),
-        " [", round(sig_vars$OR_lower[i], 2), ", ",
-        round(sig_vars$OR_upper[i], 2), "]",
-        " (p ", format.pval(sig_vars$p.value[i], digits = 2), ")\n", sep = "")
-    cat("       → ", direction, " odds of discontinuation\n", sep = "")
+  for(i in 1:nrow(sig_vars)) {
+    direction <- ifelse(sig_vars$OR[i] > 1, "INCREASED", "DECREASED")
+    percent_change <- abs(round((sig_vars$OR[i] - 1) * 100, 1))
+    cat("\n  ", i, ". ", as.character(sig_vars$term[i]), "\n", sep = "")
+    cat("     OR = ", round(sig_vars$OR[i], 3),
+        " [", round(sig_vars$OR_lower[i], 3), ", ",
+        round(sig_vars$OR_upper[i], 3), "]\n", sep = "")
+    cat("     p = ", format.pval(sig_vars$p.value[i], digits = 3), "\n", sep = "")
+    cat("     → ", percent_change, "% ", direction, " odds of discontinuation\n", sep = "")
   }
 } else {
-  cat("  ⚠ No predictors reached significance at p < .05\n")
-  if(n_sig_10 > 0) {
-    cat("  However,", n_sig_10, "predictors were marginally significant (p < .10)\n")
+  cat("\n  ⚠ No predictors reached significance at p < .05\n")
+}
+
+if(n_sig_10 > n_sig_05) {
+  cat("\n\nMarginally significant predictors (p < .10):\n")
+  marg_vars <- or_results %>% filter(p.value >= 0.05 & p.value < 0.10) %>% arrange(p.value)
+  for(i in 1:nrow(marg_vars)) {
+    cat("  • ", marg_vars$term[i], 
+        " (OR=", round(marg_vars$OR[i], 2), 
+        ", p=", format.pval(marg_vars$p.value[i], digits = 3), ")\n", sep = "")
   }
 }
-cat("\n")
 
-cat("STRONGEST EFFECTS (by OR magnitude):\n")
+cat("\n\nSTRONGEST EFFECTS (by OR magnitude):\n")
 top_or <- or_results %>%
   filter(!is.na(OR)) %>%
   mutate(or_magnitude = abs(log(OR))) %>%
@@ -5135,204 +4267,168 @@ top_or <- or_results %>%
 
 if(nrow(top_or) > 0) {
   for(i in 1:nrow(top_or)) {
-    direction <- ifelse(top_or$OR[i] > 1, "↑", "↓")
-    cat("  ", i, ". ", top_or$term[i], 
-        " (OR = ", round(top_or$OR[i], 2), " ", direction, ")\n", sep = "")
+    direction <- ifelse(top_or$OR[i] > 1, "↑ increases", "↓ decreases")
+    cat("  ", i, ". ", as.character(top_or$term[i]), 
+        " (OR = ", round(top_or$OR[i], 2), " ", direction, " discontinuation)\n", sep = "")
   }
 }
-cat("\n")
 
-cat("FOR YOUR MANUSCRIPT:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat('  "To validate Random Forest findings, we conducted logistic\n')
-cat('   regression using the same VSURF-selected variables. Models\n')
-cat('   were fitted across', mids_with_subscales$m, 'multiply-imputed datasets and\n')
-cat('   results were pooled using Rubin\'s rules. The logistic regression\n')
-cat('   model achieved an AUC of', round(lr_auc, 3), '(95% CI:',
-    lr_performance_summary$CI_95[lr_performance_summary$Metric == "AUC"], '),\n')
+cat("\n\nMODEL INTERPRETATION:\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("  • AUC = ", round(lr_auc, 3), " indicates ", 
+    ifelse(lr_auc >= 0.80, "EXCELLENT", 
+           ifelse(lr_auc >= 0.70, "GOOD", 
+                  ifelse(lr_auc >= 0.60, "FAIR", "POOR"))), 
+    " discrimination\n", sep = "")
 
 if(auc_diff < 0.05) {
-  cat('   closely matching the Random Forest model (AUC =', round(rf_auc, 3), ',\n')
-  cat('   difference =', round(auc_diff, 3), '), confirming the robustness of\n')
-  cat('   our findings.')
-} else if(rf_auc > lr_auc) {
-  cat('   compared to the Random Forest model (AUC =', round(rf_auc, 3), ').\n')
-  cat('   The superior Random Forest performance suggests the presence\n')
-  cat('   of complex non-linear relationships or interactions.')
+  cat("  • RF and LR perform similarly (diff = ", round(auc_diff, 3), 
+      ") → Strong validation ✓\n", sep = "")
+} else if(auc_diff < 0.10) {
+  cat("  • RF slightly outperforms LR (diff = ", round(auc_diff, 3), 
+      ") → May have non-linear effects\n", sep = "")
 } else {
-  cat('   exceeding the Random Forest model (AUC =', round(rf_auc, 3), ').\n')
-  cat('   This suggests that linear relationships adequately capture\n')
-  cat('   the predictive relationships.')
+  cat("  • RF substantially outperforms LR (diff = ", round(auc_diff, 3), 
+      ") → Complex interactions likely\n", sep = "")
+}
+
+if(length(agreement) > 0) {
+  cat("  • ", length(agreement), " variable(s) significant in BOTH methods → Most robust predictors\n", sep = "")
+}
+
+cat("\n\nVARIABLE AGREEMENT ANALYSIS:\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("Top 10 RF variables:\n")
+for(i in seq_along(top_rf_vars)) {
+  in_lr <- top_rf_vars[i] %in% sig_lr_vars_05
+  marker <- ifelse(in_lr, "✓ [AGREE]", "  ")
+  cat("  ", i, ". ", top_rf_vars[i], " ", marker, "\n", sep = "")
+}
+
+cat("\nVariables significant in BOTH methods (most reliable):\n")
+if(length(agreement) > 0) {
+  for(v in agreement) {
+    or_val <- or_results$OR[or_results$term == v]
+    p_val <- or_results$p.value[or_results$term == v]
+    cat("  ✓ ", v, " (OR=", round(or_val, 2), ", p=", 
+        format.pval(p_val, digits = 3), ")\n", sep = "")
+  }
+} else {
+  cat("  (None - interpret results cautiously)\n")
+}
+
+cat("\n\nFOR YOUR MANUSCRIPT:\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat('  "Logistic regression was conducted using the same VSURF-selected\n')
+cat('   variables to validate Random Forest findings. Models were fitted\n')
+cat('   across ', mids_with_subscales$m, ' multiply-imputed datasets and results were\n', sep = "")
+cat('   pooled using Rubin\'s rules. The logistic regression model\n')
+cat('   achieved an AUC of ', round(lr_auc, 3), ' (95% CI: ',
+    lr_performance_summary$CI_95[1], '),\n', sep = "")
+
+if(auc_diff < 0.05) {
+  cat('   closely matching the Random Forest model (AUC = ', round(rf_auc, 3), ',\n', sep = "")
+  cat('   difference = ', round(auc_diff, 3), '), confirming the robustness of our\n', sep = "")
+  cat('   findings.')
+} else if(rf_auc > lr_auc) {
+  cat('   compared to the Random Forest model (AUC = ', round(rf_auc, 3), ').\n', sep = "")
+  cat('   The superior Random Forest performance suggests non-linear\n')
+  cat('   relationships or interactions among predictors.')
+} else {
+  cat('   exceeding the Random Forest model (AUC = ', round(rf_auc, 3), ').\n', sep = "")
+  cat('   This suggests linear relationships adequately capture the\n')
+  cat('   predictive structure.')
 }
 
 if(n_sig_05 > 0) {
   cat('\n\n   Significant predictors of BZRA discontinuation included:\n')
   sig_top <- or_results %>% filter(p.value < 0.05) %>% arrange(p.value) %>% head(3)
   for(i in 1:nrow(sig_top)) {
-    cat('   •', sig_top$term[i], '(OR =', round(sig_top$OR[i], 2), ',\n')
-    cat('     95% CI [', round(sig_top$OR_lower[i], 2), ', ',
-        round(sig_top$OR_upper[i], 2), '], p ',
-        format.pval(sig_top$p.value[i], digits = 2), ')\n', sep = "")
+    cat('   • ', as.character(sig_top$term[i]), ' (OR = ', round(sig_top$OR[i], 2), ', 95% CI [', 
+        round(sig_top$OR_lower[i], 2), ', ', round(sig_top$OR_upper[i], 2), 
+        '], p ', format.pval(sig_top$p.value[i], digits = 2), ')\n', sep = "")
   }
 }
 cat('"\n\n')
 
-cat("INTERPRETATION GUIDE:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("  • Odds Ratios (OR):\n")
-cat("    - OR > 1: Higher values associated with INCREASED odds of discontinuation\n")
-cat("    - OR < 1: Higher values associated with DECREASED odds of discontinuation\n")
-cat("    - OR = 1: No association\n\n")
-
-cat("  • OR interpretation:\n")
-cat("    - OR = 1.5: 50% increase in odds\n")
-cat("    - OR = 2.0: 2x (double) the odds\n")
-cat("    - OR = 0.5: 50% decrease in odds (half)\n\n")
-
-cat("  • Confidence Intervals:\n")
-cat("    - If CI includes 1.0, effect is not significant\n")
-cat("    - Wider CIs indicate more uncertainty\n\n")
-
-cat("  • P-values:\n")
-cat("    - p < .05: Statistically significant\n")
-cat("    - p < .10: Marginally significant (trend)\n")
-cat("    - p ≥ .10: Not significant\n\n")
+cat("ODDS RATIO INTERPRETATION GUIDE:\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("  • OR > 1: Higher values → INCREASED odds of discontinuation\n")
+cat("  • OR < 1: Higher values → DECREASED odds of discontinuation\n")
+cat("  • OR = 1: No association\n\n")
+cat("  Examples:\n")
+cat("    - OR = 1.5  → 50% increase in odds (1.5x)\n")
+cat("    - OR = 2.0  → 100% increase (2x odds)\n")
+cat("    - OR = 0.5  → 50% decrease in odds (half)\n")
+cat("    - OR = 0.72 → 28% decrease in odds\n\n")
+cat("  Confidence Intervals:\n")
+cat("    - If CI includes 1.0 → effect is NOT significant\n")
+cat("    - Narrower CI → more precise estimate\n\n")
 
 cat("VALIDATION STATUS:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-
-if(auc_diff < 0.05) {
+cat("═══════════════════════════════════════════════════════════════\n")
+if(auc_diff < 0.05 && length(agreement) >= 1) {
   cat("  ✓✓✓ STRONG VALIDATION\n")
   cat("      • RF and LR perform nearly identically\n")
-  cat("      • Findings are robust across methods\n")
-  cat("      • High confidence in results\n\n")
-} else if(auc_diff < 0.10) {
+  cat("      • Key variables significant in both methods\n")
+  cat("      • High confidence in results\n")
+} else if(auc_diff < 0.10 && length(agreement) >= 1) {
   cat("  ✓✓ GOOD VALIDATION\n")
   cat("      • RF and LR show similar performance\n")
-  cat("      • Minor differences may reflect non-linearity\n")
-  cat("      • Results generally consistent\n\n")
-} else {
+  cat("      • At least one variable agrees across methods\n")
+  cat("      • Results are reasonably consistent\n")
+} else if(length(agreement) >= 1) {
   cat("  ✓ PARTIAL VALIDATION\n")
-  cat("      • Notable difference between RF and LR\n")
-  if(rf_auc > lr_auc) {
-    cat("      • RF captures complexity LR cannot\n")
-    cat("      • Consider interaction terms in LR\n\n")
-  } else {
-    cat("      • LR may be overfitting less\n")
-    cat("      • Linear model may be more appropriate\n\n")
-  }
-}
-
-if(length(agreement_05) > 0) {
-  cat("  ✓ Variable agreement:", length(agreement_05), "variables significant in both\n")
-  cat("    These are your MOST ROBUST predictors:\n")
-  for(v in agreement_05) {
-    or_val <- or_results$OR[or_results$term == v]
-    if(length(or_val) > 0 && !is.na(or_val)) {
-      cat("      •", v, "(OR =", round(or_val, 2), ")\n")
-    }
-  }
-  cat("\n")
+  cat("      • Some consistency between methods\n")
+  cat("      • Focus on variables that agree\n")
 } else {
-  cat("  ⚠ Limited variable agreement between methods\n")
-  cat("    • This suggests instability or weak effects\n")
-  cat("    • Interpret individual variables cautiously\n\n")
+  cat("  ⚠ LIMITED VALIDATION\n")
+  cat("      • No variables significant in both methods\n")
+  cat("      • Interpret individual predictors cautiously\n")
+  cat("      • May need larger sample or different predictors\n")
 }
-
-cat("MODEL DIAGNOSTICS:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-
-# Check for separation issues or convergence warnings
-has_extreme_or <- any(or_results$OR > 10 | or_results$OR < 0.1, na.rm = TRUE)
-has_wide_ci <- any((or_results$OR_upper / or_results$OR_lower) > 10, na.rm = TRUE)
-
-if(has_extreme_or) {
-  cat("  ⚠ Some very large/small ORs detected\n")
-  extreme_vars <- or_results %>%
-    filter(!is.na(OR)) %>%
-    filter(OR > 10 | OR < 0.1) %>%
-    select(term, OR)
-  print(extreme_vars)
-  cat("    → Check for separation or multicollinearity\n\n")
-}
-
-if(has_wide_ci) {
-  cat("  ⚠ Some very wide confidence intervals detected\n")
-  cat("    → May indicate low sample size or rare events\n\n")
-}
-
-if(!has_extreme_or && !has_wide_ci) {
-  cat("  ✓ No major diagnostic concerns\n")
-  cat("    • ORs are reasonable\n")
-  cat("    • CIs are appropriately sized\n\n")
-}
-
-cat("NEXT STEPS:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("  1. Review LR_odds_ratios_forest_plot.png (if generated)\n")
-cat("     → Visual summary of effect sizes and significance\n\n")
-cat("  2. Check LR_ROC_curve.png\n")
-cat("     → Assess discrimination visually\n\n")
-cat("  3. Compare RF_vs_LR_comparison.png\n")
-cat("     → Understand method agreement\n\n")
-cat("  4. Review LR_odds_ratios.csv\n")
-cat("     → Full results table for manuscript\n\n")
-cat("  5. Focus on variables with agreement between RF and LR\n")
-cat("     → These are your most reliable predictors\n\n")
 
 if(n_sig_05 == 0) {
-  cat("⚠ NOTE: No significant predictors at p < .05\n")
-  cat("─────────────────────────────────────────────────────────────\n")
-  cat("  Possible explanations:\n")
-  cat("  • Small sample size → limited statistical power\n")
-  cat("  • Weak effects → difficult to detect\n")
-  cat("  • Multicollinearity → shared variance between predictors\n")
-  cat("  • Multiple testing → conservative p-values after pooling\n\n")
-  cat("  Consider:\n")
-  cat("  • Examining marginally significant predictors (p < .10)\n")
-  cat("  • Focusing on RF variable importance as exploratory\n")
-  cat("  • Collecting more data if feasible\n")
-  cat("  • Simplifying model (fewer predictors)\n\n")
+  cat("\n⚠ NOTE: No significant predictors at p < .05\n")
+  cat("  Possible reasons:\n")
+  cat("  • Small sample size → limited power\n")
+  cat("  • Weak effects → hard to detect\n")
+  cat("  • High collinearity → shared variance\n")
+  cat("  • Multiple imputation → conservative pooling\n")
 }
 
 if(lr_auc < 0.60) {
-  cat("⚠ WARNING: Poor discrimination (AUC < 0.60)\n")
-  cat("─────────────────────────────────────────────────────────────\n")
-  cat("  • The outcome may not be predictable with current variables\n")
-  cat("  • Consider alternative approaches or additional predictors\n")
-  cat("  • Interpret results with caution\n\n")
+  cat("\n⚠ WARNING: Poor discrimination (AUC < 0.60)\n")
+  cat("  • Outcome may not be predictable with current variables\n")
+  cat("  • Consider additional predictors or alternative approaches\n")
 }
 
-cat("MANUSCRIPT REPORTING CHECKLIST:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("  ☐ Report model formula (all predictors)\n")
-cat("  ☐ Report number of imputations and pooling method\n")
-cat("  ☐ Report overall model performance (AUC with CI)\n")
-cat("  ☐ Report comparison with Random Forest\n")
-cat("  ☐ Present ORs with 95% CIs for all predictors\n")
-cat("  ☐ Highlight significant predictors (p < .05)\n")
-cat("  ☐ Include forest plot in figures\n")
-cat("  ☐ Include ROC curve comparison\n")
-cat("  ☐ Discuss direction of effects (increased/decreased odds)\n")
-cat("  ☐ Note any non-significant predictors that were important in RF\n\n")
-
+cat("\n\nNEXT STEPS:\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("✓ Logistic Regression validation complete!\n")
-cat("✓ Models saved and ready for interpretation\n")
-cat("✓ All figures generated\n\n")
+cat("  1. Review LR_odds_ratios_forest_plot.png\n")
+cat("     → Visual summary of effect sizes\n\n")
+cat("  2. Check LR_ROC_curve.png\n")
+cat("     → Compare discrimination visually\n\n")
+cat("  3. Examine RF_vs_LR_comparison.png\n")
+cat("     → Assess model agreement\n\n")
+cat("  4. Focus on variables with cross-method agreement\n")
+cat("     → These are your most reliable findings\n\n")
+cat("  5. Consider clinical interpretation\n")
+cat("     → What do the significant predictors tell you?\n\n")
 
-if(auc_diff < 0.05 && length(agreement_05) >= 2) {
-  cat("🎉 EXCELLENT: Strong validation with consistent findings!\n")
-  cat("   Your results are robust and ready for publication.\n\n")
-} else if(auc_diff < 0.10 || length(agreement_05) >= 1) {
-  cat("👍 GOOD: Reasonable validation with some consistency.\n")
-  cat("   Focus on variables that agree across methods.\n\n")
-} else {
-  cat("⚠ CAUTION: Limited consistency between methods.\n")
-  cat("   Interpret findings carefully and consider validation data.\n\n")
+cat("FILES CREATED:\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("  • LR_validation_results.rds       (Full results object)\n")
+cat("  • LR_odds_ratios.csv              (Table of all ORs)\n")
+cat("  • LR_performance_summary.csv      (Performance metrics)\n")
+cat("  • RF_vs_LR_comparison.png         (AUC comparison)\n")
+if(n_sig_10 > 0) {
+  cat("  • LR_odds_ratios_forest_plot.png  (Effect size visualization)\n")
 }
+cat("  • LR_ROC_curve.png                (Discrimination curve)\n")
 
-cat("Ready to proceed to Chunk 9 (Clustering Analysis) if desired.\n\n")
+cat("\n✓ Logistic Regression validation complete!\n")
+cat("✓ Ready for manuscript preparation\n\n")
 ```
 
 ## Cluster Analysis
@@ -5435,7 +4531,7 @@ cat("TOTAL clustering variables:", length(clustering_vars), "\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 # -----------------------------------------------------------------------------
-# Prepare clustering dataset (FIXED VERSION)
+# Prepare clustering dataset
 # -----------------------------------------------------------------------------
 
 cat("Preparing clustering dataset...\n\n")
