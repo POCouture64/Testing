@@ -3441,11 +3441,18 @@ cat("═════════════════════════
 # Load data and VSURF results
 mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
 vsurf_results <- readRDS("VSURF_results.rds")
-recommended_vars <- readRDS("VSURF_recommended_variables.rds")
+recommended_vars <- vsurf_results$final_variable_set
 outcome_var <- vsurf_results$outcome_var
 
+# Remove gender (too correlated with sex)
+if("gender" %in% recommended_vars) {
+  cat("Removing 'gender' variable (highly correlated with 'sex')\n")
+  recommended_vars <- recommended_vars[recommended_vars != "gender"]
+  cat("✓ Gender removed\n\n")
+}
+
 cat("Variables:", length(recommended_vars), 
-    "(10 demographics + 5 personality)\n")
+    "(demographics + personality, excluding gender)\n")
 cat("Outcome:", outcome_var, "\n\n")
 
 #------------------------------------------------------------------------------
@@ -3875,8 +3882,7 @@ cat('   ', importance$Variable[2], ' (',
     round(importance$MeanDecreaseAccuracy[2], 2), ') and ',
     importance$Variable[3], ' (', 
     round(importance$MeanDecreaseAccuracy[3], 2), ').\n', sep = "")
-cat('   Class weighting and down-sampling were evaluated but did not\n')
-cat('   improve model performance."\n\n')
+cat('   Gender was excluded due to high collinearity with sex."\n\n')
 
 cat("NEXT STEPS:\n")
 cat("  1. Examine ", importance$Variable[1], " more closely - why is it so dominant?\n", sep = "")
@@ -3894,10 +3900,9 @@ cat("✓ Random Forest modeling complete!\n\n")
 
 ```{r}
 #==============================================================================
-# CHUNK 8: LOGISTIC REGRESSION VALIDATION (STREAMLINED)
+# LOGISTIC REGRESSION - FINAL MODEL
 #==============================================================================
-# Purpose: Confirmatory analysis using VSURF-selected variables
-#          Provides interpretable effect sizes (Odds Ratios)
+# Purpose: Validate RF findings with interpretable odds ratios
 #==============================================================================
 
 library(mice)
@@ -3907,66 +3912,54 @@ library(pROC)
 library(caret)
 
 cat("\n═══════════════════════════════════════════════════════════════\n")
-cat("STEP 8: LOGISTIC REGRESSION VALIDATION\n")
+cat("LOGISTIC REGRESSION - FINAL MODEL\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 # Load data
 mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
 vsurf_results <- readRDS("VSURF_results.rds")
-rf_results <- readRDS("RF_modeling_results.rds")
-subscale_results <- readRDS("subscale_creation_results.rds")
+rf_results <- readRDS("RF_final_results.rds")
 
-recommended_vars <- vsurf_results$recommended_vars
-outcome_var <- subscale_results$outcome
+# Get variables and outcome
+recommended_vars <- vsurf_results$final_variable_set
+outcome_var <- vsurf_results$outcome_var
 
-cat("Outcome:", outcome_var, "\n")
-cat("Predictors:", length(recommended_vars), "\n\n")
+cat("Variables:", length(recommended_vars), "\n")
+cat("  Demographics:", length(vsurf_results$demographics_mandatory), "\n")
+cat("  Personality:", length(vsurf_results$personality_selected), "\n")
+cat("Outcome:", outcome_var, "\n\n")
 
-# -----------------------------------------------------------------------------
-# A. Prepare data and fit models
-# -----------------------------------------------------------------------------
+#------------------------------------------------------------------------------
+# A. Fit Models
+#------------------------------------------------------------------------------
 
+cat("PART A: FITTING MODELS\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Prepare data
 first_imp <- complete(mids_with_subscales, 1)
 available_vars <- recommended_vars[recommended_vars %in% names(first_imp)]
-
-if(length(available_vars) == 0) {
-  stop("ERROR: No recommended variables found in data")
-}
-
 formula_str <- paste(outcome_var, "~", paste(available_vars, collapse = " + "))
 
-# Prepare outcome as binary 0/1
+# Convert outcome to 0/1
 mids_prepared <- mids_with_subscales
 for(i in 1:mids_prepared$m) {
   imp_data <- complete(mids_prepared, i)
   if(is.factor(imp_data[[outcome_var]])) {
     imp_data[[outcome_var]] <- as.numeric(imp_data[[outcome_var]]) - 1
   }
-  if(!all(imp_data[[outcome_var]] %in% c(0, 1, NA))) {
-    stop("ERROR: Outcome must be binary (0/1)")
-  }
 }
 
 cat("Fitting models on", mids_prepared$m, "imputations...\n")
+fit_mi <- with(mids_prepared, glm(as.formula(formula_str), family = binomial()))
+cat("✓ Complete\n\n")
 
-fit_mi <- tryCatch({
-  with(mids_prepared, glm(as.formula(formula_str), family = binomial()))
-}, error = function(e) {
-  manual_fits <- list()
-  for(i in 1:mids_prepared$m) {
-    imp_data <- complete(mids_prepared, i) %>%
-      select(all_of(c(outcome_var, available_vars))) %>%
-      na.omit()
-    manual_fits[[i]] <- glm(as.formula(formula_str), data = imp_data, family = binomial())
-  }
-  structure(list(call = NULL, call1 = NULL, nmis = NULL, analyses = manual_fits), class = "mira")
-})
+#------------------------------------------------------------------------------
+# B. Pool Results & Calculate ORs
+#------------------------------------------------------------------------------
 
-cat("✓ Models fitted\n\n")
-
-# -----------------------------------------------------------------------------
-# B. Pool results and calculate Odds Ratios
-# -----------------------------------------------------------------------------
+cat("PART B: ODDS RATIOS\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
 
 pooled_results <- pool(fit_mi)
 summary_pooled <- summary(pooled_results, conf.int = TRUE)
@@ -3981,29 +3974,27 @@ or_results <- summary_pooled %>%
       p.value < 0.001 ~ "***",
       p.value < 0.01 ~ "**",
       p.value < 0.05 ~ "*",
-      p.value < 0.10 ~ "†",
       TRUE ~ ""
     )
   ) %>%
   arrange(p.value)
 
-n_sig_05 <- sum(or_results$p.value < 0.05, na.rm = TRUE)
-n_sig_10 <- sum(or_results$p.value < 0.10, na.rm = TRUE)
+n_sig <- sum(or_results$p.value < 0.05, na.rm = TRUE)
 
 cat("ODDS RATIOS (sorted by p-value):\n")
-cat("═══════════════════════════════════════════════════════════════\n")
 print(or_results %>%
         select(term, OR, OR_lower, OR_upper, p.value, Significance) %>%
         mutate(across(where(is.numeric) & !matches("p.value"), ~round(., 3)),
                p.value = format.pval(p.value, digits = 3)),
       row.names = FALSE)
-cat("\nSignificant: p<.05 =", n_sig_05, "| p<.10 =", n_sig_10, "\n\n")
+cat("\nSignificant (p < .05):", n_sig, "\n\n")
 
-# -----------------------------------------------------------------------------
-# C. Evaluate performance
-# -----------------------------------------------------------------------------
+#------------------------------------------------------------------------------
+# C. Evaluate Performance
+#------------------------------------------------------------------------------
 
-cat("Evaluating performance...\n")
+cat("PART C: PERFORMANCE EVALUATION\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
 
 evaluate_lr <- function(imp_data, formula_str, outcome_var, available_vars) {
   model_data <- imp_data %>%
@@ -4014,80 +4005,111 @@ evaluate_lr <- function(imp_data, formula_str, outcome_var, available_vars) {
     model_data[[outcome_var]] <- as.numeric(model_data[[outcome_var]]) - 1
   }
   
+  # Store all factor levels before splitting
+  factor_levels <- list()
+  for(var in names(model_data)) {
+    if(is.factor(model_data[[var]])) {
+      factor_levels[[var]] <- levels(model_data[[var]])
+    }
+  }
+  
   set.seed(123)
   train_idx <- createDataPartition(model_data[[outcome_var]], p = 0.8, list = FALSE)
+  
   train_data <- model_data[train_idx, ]
   test_data <- model_data[-train_idx, ]
   
-  lr_model <- tryCatch(
-    glm(as.formula(formula_str), data = train_data, family = binomial()),
-    error = function(e) NULL
-  )
+  # Ensure both train and test have all original levels
+  for(var in names(factor_levels)) {
+    train_data[[var]] <- factor(train_data[[var]], levels = factor_levels[[var]])
+    test_data[[var]] <- factor(test_data[[var]], levels = factor_levels[[var]])
+  }
   
-  if(is.null(lr_model)) return(list(auc = NA, accuracy = NA))
+  # Fit model - catch convergence issues
+  lr_model <- tryCatch({
+    glm(as.formula(formula_str), data = train_data, family = binomial())
+  }, warning = function(w) {
+    glm(as.formula(formula_str), data = train_data, family = binomial())
+  }, error = function(e) {
+    return(NULL)
+  })
+  
+  if(is.null(lr_model)) {
+    return(list(auc = NA, accuracy = NA, sensitivity = NA, 
+                specificity = NA, precision = NA, f1 = NA))
+  }
   
   pred_prob <- predict(lr_model, test_data, type = "response")
-  if(any(is.na(pred_prob))) return(list(auc = NA, accuracy = NA))
   
-  roc_obj <- tryCatch(
-    roc(test_data[[outcome_var]], pred_prob, levels = c(0, 1), direction = "<", quiet = TRUE),
-    error = function(e) NULL
-  )
+  # Check for prediction issues
+  if(all(is.na(pred_prob)) || length(unique(pred_prob)) < 2) {
+    return(list(auc = NA, accuracy = NA, sensitivity = NA, 
+                specificity = NA, precision = NA, f1 = NA))
+  }
   
-  if(is.null(roc_obj)) return(list(auc = NA, accuracy = NA))
+  roc_obj <- roc(test_data[[outcome_var]], pred_prob, 
+                 levels = c(0, 1), direction = "<", quiet = TRUE)
   
-  auc_val <- as.numeric(auc(roc_obj))
-  coords_all <- coords(roc_obj, x = "all", ret = c("threshold", "sensitivity", "specificity"))
-  optimal_thresh <- coords_all$threshold[which.max(coords_all$sensitivity + coords_all$specificity - 1)]
+  coords_all <- coords(roc_obj, "all", ret = c("threshold", "sensitivity", "specificity"))
+  optimal_thresh <- coords_all$threshold[
+    which.max(coords_all$sensitivity + coords_all$specificity - 1)
+  ]
   
   pred_class <- factor(ifelse(pred_prob > optimal_thresh, 1, 0), levels = c(0, 1))
   actual_class <- factor(test_data[[outcome_var]], levels = c(0, 1))
   cm <- confusionMatrix(pred_class, actual_class, positive = "1")
   
   list(
-    auc = auc_val,
+    auc = as.numeric(auc(roc_obj)),
     accuracy = cm$overall["Accuracy"],
     sensitivity = cm$byClass["Sensitivity"],
     specificity = cm$byClass["Specificity"],
     precision = cm$byClass["Precision"],
-    f1 = cm$byClass["F1"]
+    f1 = cm$byClass["F1"],
+    roc = roc_obj,
+    threshold = optimal_thresh
   )
 }
 
+cat("Evaluating on", mids_with_subscales$m, "imputations...\n")
 lr_performance <- lapply(1:mids_with_subscales$m, function(i) {
   evaluate_lr(complete(mids_with_subscales, i), formula_str, outcome_var, available_vars)
 })
 
-valid_performance <- lr_performance[!sapply(lr_performance, function(x) is.na(x$auc))]
-
-if(length(valid_performance) == 0) stop("ERROR: All evaluations failed")
-
-lr_performance_summary <- data.frame(
+performance <- data.frame(
   Metric = c("AUC", "Accuracy", "Sensitivity", "Specificity", "Precision", "F1"),
   Mean = sapply(c("auc", "accuracy", "sensitivity", "specificity", "precision", "f1"), 
-                function(m) mean(sapply(valid_performance, function(x) x[[m]]), na.rm = TRUE)),
+                function(m) mean(sapply(lr_performance, function(x) x[[m]]), na.rm = TRUE)),
   SD = sapply(c("auc", "accuracy", "sensitivity", "specificity", "precision", "f1"),
-              function(m) sd(sapply(valid_performance, function(x) x[[m]]), na.rm = TRUE))
+              function(m) sd(sapply(lr_performance, function(x) x[[m]]), na.rm = TRUE))
 ) %>%
   mutate(
-    CI_95 = paste0("[", round(pmax(0, Mean - 1.96*SD), 3), ", ", 
-                   round(pmin(1, Mean + 1.96*SD), 3), "]")
+    CI_Lower = pmax(0, Mean - 1.96*SD),
+    CI_Upper = pmin(1, Mean + 1.96*SD),
+    CI_95 = paste0("[", round(CI_Lower, 3), ", ", round(CI_Upper, 3), "]")
   )
 
-lr_auc <- lr_performance_summary$Mean[1]
+cat("✓ Complete\n\n")
 
-cat("\nPERFORMANCE:\n")
-print(lr_performance_summary %>% 
-        mutate(Mean = round(Mean, 3), SD = round(SD, 3)) %>%
-        select(Metric, Mean, SD, CI_95), 
+cat("\n═══════════════════════════════════════════════════════════════\n")
+cat("PERFORMANCE SUMMARY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+print(performance %>% 
+        select(Metric, Mean, SD, CI_95) %>%
+        mutate(Mean = round(Mean, 3), SD = round(SD, 3)), 
       row.names = FALSE)
 cat("\n")
 
-# -----------------------------------------------------------------------------
-# D. Compare with Random Forest
-# -----------------------------------------------------------------------------
+#------------------------------------------------------------------------------
+# D. Model Comparison
+#------------------------------------------------------------------------------
 
-rf_auc <- rf_results$mean_auc
+cat("PART D: RF VS LR COMPARISON\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+rf_auc <- rf_results$performance_summary$Mean[1]
+lr_auc <- performance$Mean[1]
 auc_diff <- abs(rf_auc - lr_auc)
 
 comparison_df <- data.frame(
@@ -4097,34 +4119,84 @@ comparison_df <- data.frame(
 
 cat("MODEL COMPARISON:\n")
 print(comparison_df %>% mutate(AUC = round(AUC, 3)), row.names = FALSE)
-cat("AUC difference:", round(auc_diff, 3), 
+cat("\nAUC difference:", round(auc_diff, 3), 
     ifelse(auc_diff < 0.05, "(Models agree ✓)\n\n", "(Models differ)\n\n"))
 
-# -----------------------------------------------------------------------------
-# E. Variable agreement
-# -----------------------------------------------------------------------------
+# Variable agreement
+top_rf_vars <- rf_results$importance$Variable[1:min(10, nrow(rf_results$importance))]
+sig_lr_vars <- or_results$term[!is.na(or_results$p.value) & or_results$p.value < 0.05]
+agreement <- intersect(top_rf_vars, sig_lr_vars)
 
-top_rf_vars <- rf_results$pooled_importance$Variable[1:min(10, nrow(rf_results$pooled_importance))]
-sig_lr_vars_05 <- or_results$term[!is.na(or_results$p.value) & or_results$p.value < 0.05]
-agreement <- intersect(top_rf_vars, sig_lr_vars_05)
-
-cat("Agreement (top RF & significant LR):\n")
+cat("VARIABLE AGREEMENT:\n")
+cat("Top 10 RF predictors vs significant LR predictors:\n")
 if(length(agreement) > 0) {
   for(v in agreement) cat("  ✓", v, "\n")
+  cat("\n", length(agreement), "variable(s) agree ✓\n\n")
 } else {
-  cat("  (None at p < .05)\n")
+  cat("  (No overlap at p < .05)\n\n")
 }
-cat("\n")
 
-# -----------------------------------------------------------------------------
-# F. Visualizations
-# -----------------------------------------------------------------------------
+#------------------------------------------------------------------------------
+# E. Visualizations
+#------------------------------------------------------------------------------
 
-# Comparison plot
+cat("PART E: VISUALIZATIONS\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# 1. Forest plot
+if(n_sig > 0) {
+  forest_data <- or_results %>%
+    filter(p.value < 0.05) %>%
+    mutate(Variable = factor(term, levels = term[order(OR)]))
+  
+  p_forest <- ggplot(forest_data, aes(x = OR, y = Variable)) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 1) +
+    geom_errorbarh(aes(xmin = OR_lower, xmax = OR_upper), height = 0.3, linewidth = 1) +
+    geom_point(aes(color = Significance), size = 4) +
+    scale_color_manual(values = c("***" = "red", "**" = "orange", "*" = "gold")) +
+    scale_x_log10() +
+    labs(title = "Odds Ratios for Benzodiazepine Discontinuation",
+         subtitle = paste0("Pooled across ", mids_with_subscales$m, " imputations"),
+         x = "Odds Ratio (log scale)", y = NULL) +
+    theme_minimal(base_size = 11) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5))
+  
+  ggsave("LR_final_odds_ratios.png", p_forest, 
+         width = 10, height = max(6, nrow(forest_data) * 0.4), dpi = 300)
+  cat("✓ Saved: LR_final_odds_ratios.png\n")
+}
+
+# 2. ROC curve
+roc_data <- data.frame(
+  FPR = 1 - lr_performance[[1]]$roc$specificities,
+  TPR = lr_performance[[1]]$roc$sensitivities
+)
+
+p_roc <- ggplot(roc_data, aes(x = FPR, y = TPR)) +
+  geom_line(color = "steelblue", linewidth = 1.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  annotate("text", x = 0.7, y = 0.3,
+           label = paste0("Mean AUC = ", round(lr_auc, 3), "\n",
+                         "95% CI: ", performance$CI_95[1]),
+           size = 5, hjust = 0) +
+  labs(title = "ROC Curve - Logistic Regression",
+       subtitle = paste0("Pooled across ", mids_with_subscales$m, " imputations"),
+       x = "False Positive Rate (1 - Specificity)", 
+       y = "True Positive Rate (Sensitivity)") +
+  coord_fixed() +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5))
+
+ggsave("LR_final_ROC.png", p_roc, width = 8, height = 8, dpi = 300)
+
+# 3. Model comparison
 p_comparison <- ggplot(comparison_df, aes(x = Model, y = AUC, fill = Model)) +
   geom_col(alpha = 0.7, width = 0.6) +
   geom_text(aes(label = round(AUC, 3)), vjust = -0.5, size = 5, fontface = "bold") +
-  scale_fill_manual(values = c("Random Forest" = "darkgreen", "Logistic Regression" = "steelblue")) +
+  scale_fill_manual(values = c("Random Forest" = "darkgreen", 
+                                 "Logistic Regression" = "steelblue")) +
   ylim(0, 1) +
   labs(title = "Model Performance Comparison", 
        subtitle = paste0("Pooled across ", mids_with_subscales$m, " imputations"),
@@ -4134,72 +4206,21 @@ p_comparison <- ggplot(comparison_df, aes(x = Model, y = AUC, fill = Model)) +
         plot.subtitle = element_text(hjust = 0.5),
         legend.position = "none")
 
-ggsave("RF_vs_LR_comparison.png", p_comparison, width = 8, height = 6, dpi = 300)
+ggsave("LR_final_comparison.png", p_comparison, width = 8, height = 6, dpi = 300)
 
-# Forest plot (only if significant predictors exist)
-if(n_sig_10 > 0) {
-  forest_data <- or_results %>%
-    filter(p.value < 0.10) %>%
-    mutate(Variable = factor(term, levels = term[order(OR)]))
-  
-  p_forest <- ggplot(forest_data, aes(x = OR, y = Variable)) +
-    geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 1) +
-    geom_errorbarh(aes(xmin = OR_lower, xmax = OR_upper), height = 0.3, linewidth = 1) +
-    geom_point(aes(color = Significance), size = 4) +
-    scale_color_manual(values = c("***" = "red", "**" = "orange", "*" = "gold", "†" = "lightblue"),
-                       labels = c("***" = "p<.001", "**" = "p<.01", "*" = "p<.05", "†" = "p<.10")) +
-    scale_x_log10(breaks = c(0.25, 0.5, 1, 2, 4, 8)) +
-    labs(title = "Odds Ratios for BZRA Discontinuation",
-         subtitle = paste0("Pooled across ", mids_with_subscales$m, " imputations"),
-         x = "Odds Ratio (log scale)", y = NULL) +
-    theme_minimal(base_size = 11) +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-          plot.subtitle = element_text(hjust = 0.5),
-          legend.position = "bottom")
-  
-  ggsave("LR_odds_ratios_forest_plot.png", p_forest, 
-         width = 10, height = max(6, nrow(forest_data) * 0.4), dpi = 300)
-}
+cat("✓ Saved: LR_final_ROC.png\n")
+cat("✓ Saved: LR_final_comparison.png\n\n")
 
-# ROC curve
-if(length(valid_performance) > 0) {
-  imp_data <- complete(mids_with_subscales, 1)
-  model_data <- imp_data %>% select(all_of(c(outcome_var, available_vars))) %>% na.omit()
-  if(is.factor(model_data[[outcome_var]])) model_data[[outcome_var]] <- as.numeric(model_data[[outcome_var]]) - 1
-  
-  set.seed(123)
-  train_idx <- createDataPartition(model_data[[outcome_var]], p = 0.8, list = FALSE)
-  lr_model <- glm(as.formula(formula_str), data = model_data[train_idx, ], family = binomial())
-  pred_prob <- predict(lr_model, model_data[-train_idx, ], type = "response")
-  roc_obj <- roc(model_data[-train_idx, ][[outcome_var]], pred_prob, levels = c(0, 1), direction = "<", quiet = TRUE)
-  
-  roc_df <- data.frame(FPR = 1 - roc_obj$specificities, TPR = roc_obj$sensitivities)
-  
-  p_roc <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
-    geom_line(color = "steelblue", linewidth = 1.5) +
-    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
-    annotate("text", x = 0.7, y = 0.3, 
-             label = paste0("AUC = ", round(lr_auc, 3), "\n", lr_performance_summary$CI_95[1]),
-             size = 5, fontface = "bold") +
-    labs(title = "Logistic Regression ROC Curve", x = "False Positive Rate", y = "True Positive Rate") +
-    coord_fixed() +
-    theme_minimal(base_size = 12) +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-  
-  ggsave("LR_ROC_curve.png", p_roc, width = 8, height = 8, dpi = 300)
-}
+#------------------------------------------------------------------------------
+# F. Save Results
+#------------------------------------------------------------------------------
 
-cat("✓ Plots saved\n\n")
-
-# -----------------------------------------------------------------------------
-# G. Save results
-# -----------------------------------------------------------------------------
-
-lr_results_save <- list(
+lr_results <- list(
   fit_mi = fit_mi,
   pooled_results = pooled_results,
   odds_ratios = or_results,
-  performance_summary = lr_performance_summary,
+  performance = lr_performance,
+  performance_summary = performance,
   model_comparison = comparison_df,
   agreement_with_rf = agreement,
   outcome_var = outcome_var,
@@ -4207,228 +4228,139 @@ lr_results_save <- list(
   n_imputations = mids_with_subscales$m
 )
 
-saveRDS(lr_results_save, "LR_validation_results.rds")
-write.csv(or_results, "LR_odds_ratios.csv", row.names = FALSE)
-write.csv(lr_performance_summary, "LR_performance_summary.csv", row.names = FALSE)
+saveRDS(lr_results, "LR_final_results.rds")
+write.csv(or_results, "LR_final_odds_ratios.csv", row.names = FALSE)
+write.csv(performance, "LR_final_performance.csv", row.names = FALSE)
 
-cat("✓ Results saved\n\n")
+cat("✓ Saved: LR_final_results.rds\n")
+cat("✓ Saved: LR_final_odds_ratios.csv\n")
+cat("✓ Saved: LR_final_performance.csv\n\n")
 
-# -----------------------------------------------------------------------------
-# H. Extended Summary and Interpretation
-# -----------------------------------------------------------------------------
+#------------------------------------------------------------------------------
+# G. Summary & Interpretation
+#------------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("LOGISTIC REGRESSION VALIDATION COMPLETE\n")
+cat("SUMMARY\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("SUMMARY:\n")
-cat("  • Variables modeled:", length(available_vars), "\n")
-cat("  • Significant predictors (p < .05):", n_sig_05, "\n")
-cat("  • Marginally significant (p < .10):", n_sig_10, "\n")
-cat("  • Mean AUC:", round(lr_auc, 3), "±", round(lr_performance_summary$SD[1], 3), "\n")
-cat("  • RF vs LR AUC difference:", round(auc_diff, 3), "\n")
-cat("  • Agreement with RF (p < .05):", length(agreement), "variables\n\n")
+cat("FINAL MODEL PERFORMANCE:\n")
+cat("  • AUC:", round(lr_auc, 3), "±", round(performance$SD[1], 3), 
+    performance$CI_95[1], "\n")
+cat("  • Sensitivity:", round(performance$Mean[3], 3), "±", 
+    round(performance$SD[3], 3), 
+    "(detects", round(100*performance$Mean[3], 1), "% of discontinuations)\n")
+cat("  • Specificity:", round(performance$Mean[4], 3), "±", 
+    round(performance$SD[4], 3),
+    "(correctly identifies", round(100*performance$Mean[4], 1), "% still using)\n")
+cat("  • Accuracy:", round(performance$Mean[2], 3), "±", 
+    round(performance$SD[2], 3), "\n\n")
 
-cat("KEY FINDINGS:\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-if(n_sig_05 > 0) {
-  cat("\nSignificant predictors (p < .05):\n")
+cat("INTERPRETATION:\n")
+cat("  • AUC =", round(lr_auc, 3), "indicates", 
+    ifelse(lr_auc >= 0.80, "EXCELLENT", 
+           ifelse(lr_auc >= 0.70, "GOOD", 
+                  ifelse(lr_auc >= 0.60, "MODERATE", "POOR"))), 
+    "discriminative ability\n\n")
+
+cat("SIGNIFICANT PREDICTORS (p < .05):\n")
+if(n_sig > 0) {
   sig_vars <- or_results %>% filter(p.value < 0.05) %>% arrange(p.value)
   for(i in 1:nrow(sig_vars)) {
     direction <- ifelse(sig_vars$OR[i] > 1, "INCREASED", "DECREASED")
     percent_change <- abs(round((sig_vars$OR[i] - 1) * 100, 1))
-    cat("\n  ", i, ". ", as.character(sig_vars$term[i]), "\n", sep = "")
+    cat("  ", i, ". ", sig_vars$term[i], "\n", sep = "")
     cat("     OR = ", round(sig_vars$OR[i], 3),
         " [", round(sig_vars$OR_lower[i], 3), ", ",
-        round(sig_vars$OR_upper[i], 3), "]\n", sep = "")
-    cat("     p = ", format.pval(sig_vars$p.value[i], digits = 3), "\n", sep = "")
+        round(sig_vars$OR_upper[i], 3), "], p = ", 
+        format.pval(sig_vars$p.value[i], digits = 3), "\n", sep = "")
     cat("     → ", percent_change, "% ", direction, " odds of discontinuation\n", sep = "")
   }
 } else {
-  cat("\n  ⚠ No predictors reached significance at p < .05\n")
+  cat("  (None at p < .05)\n")
+  cat("  ⚠ This suggests weak effects, small sample, or high collinearity\n")
 }
+cat("\n")
 
-if(n_sig_10 > n_sig_05) {
-  cat("\n\nMarginally significant predictors (p < .10):\n")
-  marg_vars <- or_results %>% filter(p.value >= 0.05 & p.value < 0.10) %>% arrange(p.value)
-  for(i in 1:nrow(marg_vars)) {
-    cat("  • ", marg_vars$term[i], 
-        " (OR=", round(marg_vars$OR[i], 2), 
-        ", p=", format.pval(marg_vars$p.value[i], digits = 3), ")\n", sep = "")
-  }
-}
-
-cat("\n\nSTRONGEST EFFECTS (by OR magnitude):\n")
-top_or <- or_results %>%
-  filter(!is.na(OR)) %>%
-  mutate(or_magnitude = abs(log(OR))) %>%
-  arrange(desc(or_magnitude)) %>%
-  head(5)
-
-if(nrow(top_or) > 0) {
-  for(i in 1:nrow(top_or)) {
-    direction <- ifelse(top_or$OR[i] > 1, "↑ increases", "↓ decreases")
-    cat("  ", i, ". ", as.character(top_or$term[i]), 
-        " (OR = ", round(top_or$OR[i], 2), " ", direction, " discontinuation)\n", sep = "")
-  }
-}
-
-cat("\n\nMODEL INTERPRETATION:\n")
+cat("MODEL VALIDATION:\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("  • AUC = ", round(lr_auc, 3), " indicates ", 
-    ifelse(lr_auc >= 0.80, "EXCELLENT", 
-           ifelse(lr_auc >= 0.70, "GOOD", 
-                  ifelse(lr_auc >= 0.60, "FAIR", "POOR"))), 
-    " discrimination\n", sep = "")
+cat("  • RF AUC:", round(rf_auc, 3), "| LR AUC:", round(lr_auc, 3), 
+    "| Diff:", round(auc_diff, 3), "\n")
+cat("  • Variables significant in both methods:", length(agreement), "\n\n")
 
-if(auc_diff < 0.05) {
-  cat("  • RF and LR perform similarly (diff = ", round(auc_diff, 3), 
-      ") → Strong validation ✓\n", sep = "")
-} else if(auc_diff < 0.10) {
-  cat("  • RF slightly outperforms LR (diff = ", round(auc_diff, 3), 
-      ") → May have non-linear effects\n", sep = "")
-} else {
-  cat("  • RF substantially outperforms LR (diff = ", round(auc_diff, 3), 
-      ") → Complex interactions likely\n", sep = "")
-}
-
-if(length(agreement) > 0) {
-  cat("  • ", length(agreement), " variable(s) significant in BOTH methods → Most robust predictors\n", sep = "")
-}
-
-cat("\n\nVARIABLE AGREEMENT ANALYSIS:\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("Top 10 RF variables:\n")
-for(i in seq_along(top_rf_vars)) {
-  in_lr <- top_rf_vars[i] %in% sig_lr_vars_05
-  marker <- ifelse(in_lr, "✓ [AGREE]", "  ")
-  cat("  ", i, ". ", top_rf_vars[i], " ", marker, "\n", sep = "")
-}
-
-cat("\nVariables significant in BOTH methods (most reliable):\n")
-if(length(agreement) > 0) {
-  for(v in agreement) {
-    or_val <- or_results$OR[or_results$term == v]
-    p_val <- or_results$p.value[or_results$term == v]
-    cat("  ✓ ", v, " (OR=", round(or_val, 2), ", p=", 
-        format.pval(p_val, digits = 3), ")\n", sep = "")
-  }
-} else {
-  cat("  (None - interpret results cautiously)\n")
-}
-
-cat("\n\nFOR YOUR MANUSCRIPT:\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat('  "Logistic regression was conducted using the same VSURF-selected\n')
-cat('   variables to validate Random Forest findings. Models were fitted\n')
-cat('   across ', mids_with_subscales$m, ' multiply-imputed datasets and results were\n', sep = "")
-cat('   pooled using Rubin\'s rules. The logistic regression model\n')
-cat('   achieved an AUC of ', round(lr_auc, 3), ' (95% CI: ',
-    lr_performance_summary$CI_95[1], '),\n', sep = "")
-
-if(auc_diff < 0.05) {
-  cat('   closely matching the Random Forest model (AUC = ', round(rf_auc, 3), ',\n', sep = "")
-  cat('   difference = ', round(auc_diff, 3), '), confirming the robustness of our\n', sep = "")
-  cat('   findings.')
-} else if(rf_auc > lr_auc) {
-  cat('   compared to the Random Forest model (AUC = ', round(rf_auc, 3), ').\n', sep = "")
-  cat('   The superior Random Forest performance suggests non-linear\n')
-  cat('   relationships or interactions among predictors.')
-} else {
-  cat('   exceeding the Random Forest model (AUC = ', round(rf_auc, 3), ').\n', sep = "")
-  cat('   This suggests linear relationships adequately capture the\n')
-  cat('   predictive structure.')
-}
-
-if(n_sig_05 > 0) {
-  cat('\n\n   Significant predictors of BZRA discontinuation included:\n')
-  sig_top <- or_results %>% filter(p.value < 0.05) %>% arrange(p.value) %>% head(3)
-  for(i in 1:nrow(sig_top)) {
-    cat('   • ', as.character(sig_top$term[i]), ' (OR = ', round(sig_top$OR[i], 2), ', 95% CI [', 
-        round(sig_top$OR_lower[i], 2), ', ', round(sig_top$OR_upper[i], 2), 
-        '], p ', format.pval(sig_top$p.value[i], digits = 2), ')\n', sep = "")
-  }
-}
-cat('"\n\n')
-
-cat("ODDS RATIO INTERPRETATION GUIDE:\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("  • OR > 1: Higher values → INCREASED odds of discontinuation\n")
-cat("  • OR < 1: Higher values → DECREASED odds of discontinuation\n")
-cat("  • OR = 1: No association\n\n")
-cat("  Examples:\n")
-cat("    - OR = 1.5  → 50% increase in odds (1.5x)\n")
-cat("    - OR = 2.0  → 100% increase (2x odds)\n")
-cat("    - OR = 0.5  → 50% decrease in odds (half)\n")
-cat("    - OR = 0.72 → 28% decrease in odds\n\n")
-cat("  Confidence Intervals:\n")
-cat("    - If CI includes 1.0 → effect is NOT significant\n")
-cat("    - Narrower CI → more precise estimate\n\n")
-
-cat("VALIDATION STATUS:\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-if(auc_diff < 0.05 && length(agreement) >= 1) {
+if(auc_diff < 0.05 && length(agreement) > 0) {
   cat("  ✓✓✓ STRONG VALIDATION\n")
   cat("      • RF and LR perform nearly identically\n")
   cat("      • Key variables significant in both methods\n")
-  cat("      • High confidence in results\n")
-} else if(auc_diff < 0.10 && length(agreement) >= 1) {
+  cat("      • High confidence in results\n\n")
+} else if(auc_diff < 0.10 && length(agreement) > 0) {
   cat("  ✓✓ GOOD VALIDATION\n")
   cat("      • RF and LR show similar performance\n")
-  cat("      • At least one variable agrees across methods\n")
-  cat("      • Results are reasonably consistent\n")
-} else if(length(agreement) >= 1) {
+  cat("      • At least one variable agrees across methods\n\n")
+} else if(length(agreement) > 0) {
   cat("  ✓ PARTIAL VALIDATION\n")
   cat("      • Some consistency between methods\n")
-  cat("      • Focus on variables that agree\n")
+  cat("      • Focus on variables that agree\n\n")
 } else {
   cat("  ⚠ LIMITED VALIDATION\n")
   cat("      • No variables significant in both methods\n")
-  cat("      • Interpret individual predictors cautiously\n")
-  cat("      • May need larger sample or different predictors\n")
+  cat("      • Interpret individual predictors cautiously\n\n")
 }
 
-if(n_sig_05 == 0) {
-  cat("\n⚠ NOTE: No significant predictors at p < .05\n")
-  cat("  Possible reasons:\n")
-  cat("  • Small sample size → limited power\n")
-  cat("  • Weak effects → hard to detect\n")
-  cat("  • High collinearity → shared variance\n")
-  cat("  • Multiple imputation → conservative pooling\n")
+if(auc_diff < 0.05) {
+  cat("INTERPRETATION: Models agree → Linear relationships adequate\n\n")
+} else if(rf_auc > lr_auc) {
+  cat("INTERPRETATION: RF outperforms LR → Non-linear effects or interactions present\n\n")
+} else {
+  cat("INTERPRETATION: LR outperforms RF → Linear model may be sufficient\n\n")
 }
 
-if(lr_auc < 0.60) {
-  cat("\n⚠ WARNING: Poor discrimination (AUC < 0.60)\n")
-  cat("  • Outcome may not be predictable with current variables\n")
-  cat("  • Consider additional predictors or alternative approaches\n")
-}
-
-cat("\n\nNEXT STEPS:\n")
+cat("ODDS RATIO QUICK GUIDE:\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("  1. Review LR_odds_ratios_forest_plot.png\n")
-cat("     → Visual summary of effect sizes\n\n")
-cat("  2. Check LR_ROC_curve.png\n")
-cat("     → Compare discrimination visually\n\n")
-cat("  3. Examine RF_vs_LR_comparison.png\n")
-cat("     → Assess model agreement\n\n")
-cat("  4. Focus on variables with cross-method agreement\n")
-cat("     → These are your most reliable findings\n\n")
-cat("  5. Consider clinical interpretation\n")
-cat("     → What do the significant predictors tell you?\n\n")
+cat("  • OR > 1: Higher values → INCREASE discontinuation odds\n")
+cat("  • OR < 1: Higher values → DECREASE discontinuation odds\n")
+cat("  • OR = 1.5  → 50% increase in odds\n")
+cat("  • OR = 2.0  → 100% increase (2x odds)\n")
+cat("  • OR = 0.5  → 50% decrease in odds\n")
+cat("  • If CI includes 1.0 → effect is NOT significant\n\n")
 
-cat("FILES CREATED:\n")
+cat("FOR MANUSCRIPT:\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("  • LR_validation_results.rds       (Full results object)\n")
-cat("  • LR_odds_ratios.csv              (Table of all ORs)\n")
-cat("  • LR_performance_summary.csv      (Performance metrics)\n")
-cat("  • RF_vs_LR_comparison.png         (AUC comparison)\n")
-if(n_sig_10 > 0) {
-  cat("  • LR_odds_ratios_forest_plot.png  (Effect size visualization)\n")
+cat('  "Logistic regression validated Random Forest findings using\n')
+cat('   VSURF-selected variables across ', mids_with_subscales$m, 
+    ' imputed datasets. The\n', sep = "")
+cat('   model achieved AUC = ', round(lr_auc, 3), 
+    ' (95% CI: ', performance$CI_95[1], ')\n', sep = "")
+if(auc_diff < 0.05) {
+  cat('   closely matching Random Forest (Δ = ', round(auc_diff, 3), 
+      '), confirming\n', sep = "")
+  cat('   robust predictions.')
+} else {
+  cat('   compared to Random Forest (AUC = ', round(rf_auc, 3), 
+      '), suggesting\n', sep = "")
+  cat('   ', ifelse(rf_auc > lr_auc, "non-linear relationships.", 
+               "linear adequacy."), sep = "")
 }
-cat("  • LR_ROC_curve.png                (Discrimination curve)\n")
+if(n_sig > 0) {
+  cat('\n   Significant predictors included ', 
+      paste(head(sig_vars$term, 3), collapse = ", "), 
+      '."\n\n', sep = "")
+} else {
+  cat('"\n\n')
+}
 
-cat("\n✓ Logistic Regression validation complete!\n")
-cat("✓ Ready for manuscript preparation\n\n")
+cat("NEXT STEPS:\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("  1. Review LR_final_odds_ratios.png for effect size visualization\n")
+cat("  2. Compare LR_final_ROC.png with RF ROC curve\n")
+cat("  3. Focus on variables significant in BOTH methods (most reliable)\n")
+cat("  4. Consider clinical interpretation of significant predictors\n")
+if(auc_diff >= 0.10) {
+  cat("  5. Explore potential interactions (RF detected non-linearity)\n")
+}
+cat("\n")
+
+cat("✓ Logistic Regression modeling complete!\n\n")
 ```
 
 ## Cluster Analysis
