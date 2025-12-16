@@ -1,0 +1,6 @@
+"Model","N_Predictors","AUC"
+"Full Logistic",31,0.81
+"Elastic Net",15,0.777
+"Personality Only",16,0.752
+"Clinical Only",7,0.663
+"Demographics Only",5,0.576
