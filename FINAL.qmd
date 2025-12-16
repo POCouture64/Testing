@@ -957,8 +957,7 @@ cat("PART E: Defining predictor sets\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
 final_demographics <- core_demographics
-final_clinical <- c("phq2_score", "osss_3_score", "med_quant", "mobil_aid", 
-                    "fall", "gen_health", condition_counts)
+final_clinical <- c("phq2_score", "osss_3_score", "med_quant","gen_health", condition_counts)
 
 # Keep only insomnia definition items
 final_conditions <- insomnia_definition
@@ -5118,7 +5117,8 @@ cat("═════════════════════════
 
 ```{r}
 #==============================================================================
-# CHUNK 9: FDR-CORRECTED BZRA DISCONTINUATION GROUP COMPARISONS (COMPLETE)
+# ENHANCED BZRA DISCONTINUATION GROUP COMPARISONS
+# With comprehensive descriptive statistics, effect sizes, and CIs
 #==============================================================================
 
 library(tidyverse)
@@ -5129,781 +5129,608 @@ library(RColorBrewer)
 
 cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("BZRA DISCONTINUATION GROUP COMPARISONS (FDR-CORRECTED)\n")
+cat("BZRA DISCONTINUATION GROUP COMPARISONS (ENHANCED VERSION)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("GOAL: Identify which differences between discontinuers and continuers are statistically robust\n")
-cat("APPROACH: Separate FDR correction by variable domain (personality, clinical, demo)\n")
-cat("THRESHOLD: q = 0.05 (standard)\n\n")
+cat("ENHANCEMENTS:\n")
+cat("  • Comprehensive descriptive statistics for all variables\n")
+cat("  • Multiple effect size metrics with 95% CIs\n")
+cat("  • Effect size interpretations\n")
+cat("  • Separate tables by domain\n\n")
 
 # Load data
 mids_with_subscales <- readRDS("imputed_data_with_subscales_recoded.rds")
+m <- mids_with_subscales$m
+cat("Number of imputations:", m, "\n\n")
 
-# Use first imputation for comparison (or pool across all imputations)
-analysis_data <- complete(mids_with_subscales, 1)
-
-# Check outcome variable
-if(!"scrn_stopped_bzra" %in% names(analysis_data)) {
+# Check and prepare data
+analysis_data_check <- complete(mids_with_subscales, 1)
+if(!"scrn_stopped_bzra" %in% names(analysis_data_check)) {
   stop("ERROR: scrn_stopped_bzra variable not found in data")
 }
 
-# Create descriptive group labels
-analysis_data <- analysis_data %>%
-  mutate(
-    discontinuation_group = factor(scrn_stopped_bzra,
-                                   levels = c(0, 1),
-                                   labels = c("Continuers", "Discontinuers"))
-  )
+analysis_data_check$scrn_stopped_bzra <- factor(
+  analysis_data_check$scrn_stopped_bzra,
+  levels = c(0, 1),
+  labels = c("Continuer", "Discontinuer")
+)
 
-# Summary
-n_total <- nrow(analysis_data)
-n_discontinuers <- sum(analysis_data$scrn_stopped_bzra == 1, na.rm = TRUE)
-n_continuers <- sum(analysis_data$scrn_stopped_bzra == 0, na.rm = TRUE)
-pct_discontinued <- round(100 * n_discontinuers / n_total, 1)
+# Sample composition
+n_total <- nrow(analysis_data_check)
+n_discontinuers <- sum(analysis_data_check$scrn_stopped_bzra == "Discontinuer", na.rm = TRUE)
+n_continuers <- sum(analysis_data_check$scrn_stopped_bzra == "Continuer", na.rm = TRUE)
 
 cat("Sample composition:\n")
 cat("  Total N:", n_total, "\n")
-cat("  Discontinuers (stopped BZRA):", n_discontinuers, 
-    "(", pct_discontinued, "%)\n")
-cat("  Continuers (still using BZRA):", n_continuers, 
-    "(", round(100 * n_continuers / n_total, 1), "%)\n\n")
+cat("  Discontinuers:", n_discontinuers, "(", round(100*n_discontinuers/n_total, 1), "%)\n")
+cat("  Continuers:", n_continuers, "(", round(100*n_continuers/n_total, 1), "%)\n\n")
 
 # -----------------------------------------------------------------------------
-# A. Define variable domains
+# Define variable domains and categorical variables
 # -----------------------------------------------------------------------------
 
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART A: Defining variable domains for FDR correction\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
+demographic_domain <- c(
+  "age", "sex", "region", "education_level", "employment_status",
+  "income", "driving_freq"
+)
 
-# Get all variables (exclude outcome and group variables)
-all_vars <- setdiff(names(analysis_data), 
-                    c("scrn_stopped_bzra", "discontinuation_group"))
+categorical_vars <- c(
+  "sex", "region", "education_level", "employment_status", "income", "driving_freq",
+  "gen_health", "def_insomnia___1", "def_insomnia___2", "def_insomnia___3",
+  "side_effects_1", "side_effects_2", "side_effects_3", "side_effects_4",
+  "safety_1", "safety_2", "safety_3", "safety_4",
+  "adls_1", "adls_2", "dependence_1", "dependence_2", "dependence_3",
+  "med_burden_1", "medburden_3", "med_burden_4", "alc_sleep",
+  "can_sleep", "melatonin_use", "op_sleep"
+)
 
-# Categorize into domains
-personality_domain <- all_vars[grepl("DBAS|SURPS|CISS|Extraversion|Agreeableness|Conscientiousness|Neuroticism|Openness", all_vars)]
+clinical_domain <- c(
+  "phq2_score", "osss_3_score", "gen_health", "n_health_conditions",
+  "n_physical_conditions", "n_ment_conditions", "n_sleep_conditions",
+  "def_insomnia___1", "def_insomnia___2", "def_insomnia___3",
+  "med_quant", "side_effects_1", "side_effects_2", "side_effects_3",
+  "side_effects_4", "safety_1", "safety_2", "safety_3", "safety_4",
+  "adls_1", "adls_2", "dependence_1", "dependence_2", "dependence_3",
+  "med_burden_1", "medburden_3", "med_burden_4", "alc_sleep",
+  "can_sleep", "melatonin_use", "op_sleep"
+)
 
-clinical_domain <- all_vars[grepl("phq|osss|med_quant|n_health|composite|side_effect|safety|adl|dependence|burden|duration|dose", all_vars, ignore.case = TRUE)]
+personality_domain <- c(
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations",
+  "DBAS_Medications", "DBAS_Total", "SURPS_Impulsivity", "SURPS_Sensation_Seeking",
+  "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity", "CISS_Task",
+  "CISS_Emotion", "CISS_Avoidance"
+)
 
-demographic_domain <- all_vars[grepl("age|sex|gender|region|education|employment|income|driving|marital|living", all_vars, ignore.case = TRUE)]
-
-# Anything not categorized goes to "other"
-other_domain <- setdiff(all_vars, c(personality_domain, clinical_domain, demographic_domain))
+# Check which variables exist
+demographic_domain <- intersect(demographic_domain, names(analysis_data_check))
+clinical_domain <- intersect(clinical_domain, names(analysis_data_check))
+personality_domain <- intersect(personality_domain, names(analysis_data_check))
 
 cat("VARIABLE DOMAINS:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("  Personality:", length(personality_domain), "variables\n")
-if(length(personality_domain) > 0 && length(personality_domain) <= 15) {
-  cat("    ", paste(head(personality_domain, 15), collapse = ", "), "\n")
-}
-cat("\n")
-
-cat("  Clinical/Health:", length(clinical_domain), "variables\n")
-if(length(clinical_domain) > 0 && length(clinical_domain) <= 15) {
-  cat("    ", paste(head(clinical_domain, 15), collapse = ", "), "\n")
-}
-cat("\n")
-
 cat("  Demographics:", length(demographic_domain), "variables\n")
-if(length(demographic_domain) > 0 && length(demographic_domain) <= 15) {
-  cat("    ", paste(head(demographic_domain, 15), collapse = ", "), "\n")
-}
-cat("\n")
-
-if(length(other_domain) > 0) {
-  cat("  Other:", length(other_domain), "variables\n")
-  if(length(other_domain) <= 15) {
-    cat("    ", paste(other_domain, collapse = ", "), "\n")
-  }
-  cat("\n")
-}
+cat("  Clinical/Health:", length(clinical_domain), "variables\n")
+cat("  Personality/Behavioral:", length(personality_domain), "variables\n\n")
 
 # -----------------------------------------------------------------------------
-# B. Compare groups on each domain with statistical tests
+# ENHANCED DESCRIPTIVE STATISTICS FUNCTIONS
 # -----------------------------------------------------------------------------
 
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART B: Statistical tests by domain (before FDR)\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Testing which variables differ between discontinuers and continuers...\n\n")
-
-# Function to test one variable
-test_discontinuation_difference <- function(var, data, group_var = "discontinuation_group") {
+get_enhanced_continuous_desc <- function(var, mids_obj, group_var = "scrn_stopped_bzra") {
   
-  # Skip if all NA
+  desc_list <- lapply(1:mids_obj$m, function(i) {
+    data <- complete(mids_obj, i) %>%
+      mutate(group = factor(!!sym(group_var),
+                           levels = c(0, 1),
+                           labels = c("Continuer", "Discontinuer")))
+    
+    data %>%
+      filter(!is.na(!!sym(var))) %>%
+      group_by(group) %>%
+      summarise(
+        n = n(),
+        mean = mean(!!sym(var), na.rm = TRUE),
+        sd = sd(!!sym(var), na.rm = TRUE),
+        median = median(!!sym(var), na.rm = TRUE),
+        q25 = quantile(!!sym(var), 0.25, na.rm = TRUE),
+        q75 = quantile(!!sym(var), 0.75, na.rm = TRUE),
+        .groups = "drop"
+      )
+  })
+  
+  # Pool across imputations
+  pooled <- bind_rows(desc_list) %>%
+    group_by(group) %>%
+    summarise(
+      n = round(mean(n)),
+      mean = mean(mean),
+      sd = mean(sd),
+      median = mean(median),
+      q25 = mean(q25),
+      q75 = mean(q75),
+      .groups = "drop"
+    )
+  
+  return(pooled)
+}
+
+get_enhanced_categorical_desc <- function(var, mids_obj, group_var = "scrn_stopped_bzra") {
+  
+  desc_list <- lapply(1:mids_obj$m, function(i) {
+    data <- complete(mids_obj, i) %>%
+      mutate(group = factor(!!sym(group_var),
+                           levels = c(0, 1),
+                           labels = c("Continuer", "Discontinuer")))
+    
+    # Convert to factor if needed
+    if(!is.factor(data[[var]])) {
+      data[[var]] <- factor(data[[var]])
+    }
+    
+    data %>%
+      filter(!is.na(!!sym(var))) %>%
+      group_by(group, !!sym(var)) %>%
+      summarise(n = n(), .groups = "drop") %>%
+      group_by(group) %>%
+      mutate(
+        total = sum(n),
+        pct = 100 * n / total
+      )
+  })
+  
+  # Pool across imputations
+  pooled <- bind_rows(desc_list) %>%
+    group_by(group, !!sym(var)) %>%
+    summarise(
+      n = mean(n),
+      pct = mean(pct),
+      .groups = "drop"
+    )
+  
+  return(pooled)
+}
+
+# -----------------------------------------------------------------------------
+# ENHANCED EFFECT SIZE CALCULATIONS WITH CIs
+# -----------------------------------------------------------------------------
+
+calculate_enhanced_effect_sizes <- function(var, mids_obj, group_var = "scrn_stopped_bzra",
+                                           is_categorical = FALSE) {
+  
+  effect_list <- lapply(1:mids_obj$m, function(i) {
+    data <- complete(mids_obj, i) %>%
+      mutate(group = factor(!!sym(group_var),
+                           levels = c(0, 1),
+                           labels = c("Continuer", "Discontinuer")))
+    
+    data_clean <- data %>% filter(!is.na(!!sym(var)), !is.na(group))
+    
+    if(nrow(data_clean) < 10) return(NULL)
+    
+    if(!is_categorical && is.numeric(data_clean[[var]])) {
+      # CONTINUOUS VARIABLE EFFECT SIZES
+      
+      # Cohen's d
+      cohens_d <- tryCatch({
+        effectsize::cohens_d(as.formula(paste(var, "~", "group")),
+                            data = data_clean,
+                            pooled_sd = TRUE,
+                            ci = 0.95)
+      }, error = function(e) NULL)
+      
+      # Rank-biserial correlation (for Mann-Whitney)
+      rank_bis <- tryCatch({
+        effectsize::rank_biserial(as.formula(paste(var, "~", "group")),
+                                 data = data_clean,
+                                 ci = 0.95)
+      }, error = function(e) NULL)
+      
+      list(
+        cohens_d = if(!is.null(cohens_d)) cohens_d$Cohens_d else NA,
+        cohens_d_ci_low = if(!is.null(cohens_d)) cohens_d$CI_low else NA,
+        cohens_d_ci_high = if(!is.null(cohens_d)) cohens_d$CI_high else NA,
+        rank_biserial = if(!is.null(rank_bis)) rank_bis$r_rank_biserial else NA,
+        rank_bis_ci_low = if(!is.null(rank_bis)) rank_bis$CI_low else NA,
+        rank_bis_ci_high = if(!is.null(rank_bis)) rank_bis$CI_high else NA
+      )
+      
+    } else {
+      # CATEGORICAL VARIABLE EFFECT SIZES
+      
+      if(!is.factor(data_clean[[var]])) {
+        data_clean[[var]] <- factor(data_clean[[var]])
+      }
+      
+      tab <- table(data_clean$group, data_clean[[var]])
+      
+      cramers <- tryCatch({
+        effectsize::cramers_v(tab, ci = 0.95)
+      }, error = function(e) NULL)
+      
+      list(
+        cramers_v = if(!is.null(cramers)) cramers$Cramers_v else NA,
+        cramers_ci_low = if(!is.null(cramers)) cramers$CI_low else NA,
+        cramers_ci_high = if(!is.null(cramers)) cramers$CI_high else NA
+      )
+    }
+  })
+  
+  # Remove NULLs
+  effect_list <- effect_list[!sapply(effect_list, is.null)]
+  
+  if(length(effect_list) == 0) {
+    return(list(
+      cohens_d = NA, cohens_d_ci_low = NA, cohens_d_ci_high = NA,
+      rank_biserial = NA, rank_bis_ci_low = NA, rank_bis_ci_high = NA,
+      cramers_v = NA, cramers_ci_low = NA, cramers_ci_high = NA
+    ))
+  }
+  
+  # Pool effect sizes (average)
+  if(!is_categorical) {
+    list(
+      cohens_d = mean(sapply(effect_list, function(x) x$cohens_d), na.rm = TRUE),
+      cohens_d_ci_low = mean(sapply(effect_list, function(x) x$cohens_d_ci_low), na.rm = TRUE),
+      cohens_d_ci_high = mean(sapply(effect_list, function(x) x$cohens_d_ci_high), na.rm = TRUE),
+      rank_biserial = mean(sapply(effect_list, function(x) x$rank_biserial), na.rm = TRUE),
+      rank_bis_ci_low = mean(sapply(effect_list, function(x) x$rank_bis_ci_low), na.rm = TRUE),
+      rank_bis_ci_high = mean(sapply(effect_list, function(x) x$rank_bis_ci_high), na.rm = TRUE),
+      cramers_v = NA, cramers_ci_low = NA, cramers_ci_high = NA
+    )
+  } else {
+    list(
+      cohens_d = NA, cohens_d_ci_low = NA, cohens_d_ci_high = NA,
+      rank_biserial = NA, rank_bis_ci_low = NA, rank_bis_ci_high = NA,
+      cramers_v = mean(sapply(effect_list, function(x) x$cramers_v), na.rm = TRUE),
+      cramers_ci_low = mean(sapply(effect_list, function(x) x$cramers_ci_low), na.rm = TRUE),
+      cramers_ci_high = mean(sapply(effect_list, function(x) x$cramers_ci_high), na.rm = TRUE)
+    )
+  }
+}
+
+# Effect size interpretation (vectorized)
+interpret_effect_size <- function(es_value, type = "cohens_d") {
+  sapply(es_value, function(x) {
+    if(is.na(x)) return("Cannot calculate")
+    
+    es_abs <- abs(x)
+    
+    if(type == "cohens_d") {
+      if(es_abs < 0.2) return("Negligible")
+      if(es_abs < 0.5) return("Small")
+      if(es_abs < 0.8) return("Medium")
+      return("Large")
+    } else if(type == "cramers_v") {
+      if(es_abs < 0.1) return("Negligible")
+      if(es_abs < 0.3) return("Small")
+      if(es_abs < 0.5) return("Medium")
+      return("Large")
+    } else if(type == "rank_biserial") {
+      if(es_abs < 0.1) return("Negligible")
+      if(es_abs < 0.3) return("Small")
+      if(es_abs < 0.5) return("Medium")
+      return("Large")
+    }
+  })
+}
+
+# -----------------------------------------------------------------------------
+# POOLED STATISTICAL TESTS (from original script)
+# -----------------------------------------------------------------------------
+
+test_one_imputation <- function(var, data, group_var = "scrn_stopped_bzra", 
+                                categorical_list = categorical_vars) {
+  
+  if(!is.factor(data[[group_var]])) {
+    data[[group_var]] <- factor(data[[group_var]], 
+                                 levels = c(0, 1),
+                                 labels = c("Continuer", "Discontinuer"))
+  }
+  
   if(all(is.na(data[[var]]))) {
-    return(list(var = var, test = "NA", statistic = NA, p = NA, effect_size = NA))
+    return(list(var = var, test = "NA", statistic = NA, p = NA))
   }
   
-  # Remove NAs for this variable
   data_clean <- data %>%
     filter(!is.na(!!sym(var)), !is.na(!!sym(group_var)))
   
   if(nrow(data_clean) < 10) {
-    return(list(var = var, test = "Insufficient data", statistic = NA, p = NA, effect_size = NA))
+    return(list(var = var, test = "Insufficient", statistic = NA, p = NA))
   }
   
-  # Determine test type
-  if(is.numeric(data_clean[[var]])) {
-    # Continuous: Mann-Whitney U test (non-parametric t-test)
-    test_result <- wilcox.test(as.formula(paste(var, "~", group_var)), 
-                               data = data_clean)
-    
-    # Effect size: rank biserial correlation
-    rank_biserial <- tryCatch({
-      effectsize::rank_biserial(as.formula(paste(var, "~", group_var)), 
-                               data = data_clean)$r_rank_biserial
-    }, error = function(e) NA)
+  is_categorical <- var %in% categorical_list || 
+                    is.character(data_clean[[var]]) || 
+                    is.factor(data_clean[[var]])
+  
+  if(!is_categorical && is.numeric(data_clean[[var]])) {
+    # Mann-Whitney U test
+    test_result <- suppressWarnings(
+      wilcox.test(as.formula(paste(var, "~", group_var)), 
+                  data = data_clean, exact = FALSE)
+    )
     
     return(list(
       var = var,
       test = "Mann-Whitney U",
       statistic = test_result$statistic,
-      p = test_result$p.value,
-      effect_size = rank_biserial,
-      n = nrow(data_clean)
+      p = test_result$p.value
     ))
     
   } else {
-    # Categorical: Chi-square or Fisher's exact test
+    # Categorical test
+    if(!is.factor(data_clean[[var]])) {
+      data_clean[[var]] <- factor(data_clean[[var]])
+    }
+    
     tab <- table(data_clean[[group_var]], data_clean[[var]])
     
-    # Check if Fisher's exact test is needed
-    expected <- chisq.test(tab)$expected
-    use_fisher <- any(expected < 5) || any(dim(tab) == 1)
+    if(any(dim(tab) == 0)) {
+      return(list(var = var, test = "Invalid", statistic = NA, p = NA))
+    }
+    
+    expected <- suppressWarnings(chisq.test(tab)$expected)
+    use_fisher <- any(expected < 5)
     
     if(use_fisher) {
-      test_result <- tryCatch(
-        fisher.test(tab, simulate.p.value = TRUE),
-        error = function(e) list(p.value = NA, statistic = NA)
-      )
+      test_result <- tryCatch({
+        suppressWarnings(
+          fisher.test(tab, simulate.p.value = TRUE, B = 10000)
+        )
+      }, error = function(e) {
+        list(p.value = NA)
+      })
       test_name <- "Fisher's Exact"
       statistic <- NA
+      
     } else {
-      test_result <- chisq.test(tab)
+      test_result <- suppressWarnings(chisq.test(tab))
       test_name <- "Chi-square"
       statistic <- test_result$statistic
     }
-    
-    # Effect size: Cramér's V
-    cramers_v <- tryCatch({
-      effectsize::cramers_v(tab)$Cramers_v
-    }, error = function(e) NA)
     
     return(list(
       var = var,
       test = test_name,
       statistic = statistic,
-      p = test_result$p.value,
-      effect_size = cramers_v,
-      n = nrow(data_clean)
+      p = test_result$p.value
     ))
   }
 }
 
-# Test all variables by domain
-cat("Testing PERSONALITY domain...\n")
-personality_tests <- lapply(personality_domain, test_discontinuation_difference, 
-                            data = analysis_data)
-personality_results <- bind_rows(personality_tests) %>%
-  arrange(p)
-
-cat("Testing CLINICAL domain...\n")
-clinical_tests <- lapply(clinical_domain, test_discontinuation_difference, 
-                         data = analysis_data)
-clinical_results <- bind_rows(clinical_tests) %>%
-  arrange(p)
-
-cat("Testing DEMOGRAPHIC domain...\n")
-demographic_tests <- lapply(demographic_domain, test_discontinuation_difference,
-                            data = analysis_data)
-demographic_results <- bind_rows(demographic_tests) %>%
-  arrange(p)
-
-if(length(other_domain) > 0) {
-  cat("Testing OTHER domain...\n")
-  other_tests <- lapply(other_domain, test_discontinuation_difference,
-                        data = analysis_data)
-  other_results <- bind_rows(other_tests) %>%
-    arrange(p)
-} else {
-  other_results <- data.frame()
-}
-
-cat("\n")
-
-# -----------------------------------------------------------------------------
-# C. Apply FDR correction within each domain
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART C: FDR correction (Benjamini-Hochberg) by domain\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("FDR THRESHOLD: q = 0.05\n")
-cat("METHOD: Benjamini-Hochberg procedure\n\n")
-
-# Function to apply FDR and summarize
-apply_fdr_correction <- function(results_df, domain_name, q = 0.05) {
+pool_test_results <- function(var, mids_obj, group_var = "scrn_stopped_bzra") {
   
-  if(nrow(results_df) == 0 || all(is.na(results_df$p))) {
-    cat("  ", domain_name, ": No valid tests\n\n")
-    return(results_df %>% mutate(q_value = NA, significant = FALSE))
-  }
-  
-  # Remove NA p-values
-  results_clean <- results_df %>% filter(!is.na(p))
-  
-  if(nrow(results_clean) == 0) {
-    cat("  ", domain_name, ": No valid tests\n\n")
-    return(results_df %>% mutate(q_value = NA, significant = FALSE))
-  }
-  
-  # Apply FDR correction
-  results_clean$q_value <- p.adjust(results_clean$p, method = "BH")
-  results_clean$significant <- results_clean$q_value < q
-  
-  # Count significant
-  n_sig <- sum(results_clean$significant, na.rm = TRUE)
-  n_total <- nrow(results_clean)
-  
-  cat("  ", domain_name, ":\n")
-  cat("    Tests conducted:", n_total, "\n")
-  cat("    Significant (q < 0.05):", n_sig, 
-      "(", round(100 * n_sig / n_total, 1), "%)\n")
-  
-  if(n_sig > 0) {
-    cat("    Significant variables:\n")
-    sig_vars <- results_clean %>% 
-      filter(significant) %>% 
-      arrange(q_value) %>%
-      pull(var)
-    for(v in sig_vars) {
-      q_val <- results_clean %>% filter(var == v) %>% pull(q_value)
-      cat("      • ", v, " (q = ", format.pval(q_val, digits = 3), ")\n", sep = "")
+  imp_results <- lapply(1:mids_obj$m, function(i) {
+    data <- complete(mids_obj, i)
+    
+    if(!is.factor(data[[group_var]])) {
+      data[[group_var]] <- factor(data[[group_var]], 
+                                   levels = c(0, 1),
+                                   labels = c("Continuer", "Discontinuer"))
     }
+    
+    test_one_imputation(var, data, group_var)
+  })
+  
+  p_values <- sapply(imp_results, function(x) x$p)
+  test_types <- sapply(imp_results, function(x) x$test)
+  
+  p_values_valid <- p_values[!is.na(p_values)]
+  
+  if(length(p_values_valid) == 0) {
+    return(list(
+      var = var,
+      test = imp_results[[1]]$test,
+      p_pooled = NA
+    ))
   }
-  cat("\n")
   
-  # Add back NA rows
-  results_final <- results_df %>%
-    left_join(results_clean %>% select(var, q_value, significant), by = "var") %>%
-    mutate(
-      q_value = ifelse(is.na(p), NA, q_value),
-      significant = ifelse(is.na(p), FALSE, replace_na(significant, FALSE))
-    )
+  p_pooled <- median(p_values_valid)
+  test_type <- names(sort(table(test_types), decreasing = TRUE))[1]
   
-  return(results_final)
-}
-
-cat("APPLYING FDR CORRECTION:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-
-personality_fdr <- apply_fdr_correction(personality_results, "Personality")
-clinical_fdr <- apply_fdr_correction(clinical_results, "Clinical/Health")
-demographic_fdr <- apply_fdr_correction(demographic_results, "Demographics")
-if(nrow(other_results) > 0) {
-  other_fdr <- apply_fdr_correction(other_results, "Other")
+  return(list(
+    var = var,
+    test = test_type,
+    p_pooled = p_pooled
+  ))
 }
 
 # -----------------------------------------------------------------------------
-# D. Create comprehensive comparison tables
+# RUN ANALYSIS FOR ALL DOMAINS
 # -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART D: Creating detailed comparison tables\n")
+cat("RUNNING COMPREHENSIVE ANALYSIS\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Function to create detailed table with means/proportions by group
-create_group_comparison_table <- function(sig_vars, data, group_var = "discontinuation_group") {
+create_comprehensive_table <- function(variables, domain_name, mids_obj) {
   
-  if(length(sig_vars) == 0) {
-    return(NULL)
-  }
+  cat("Processing", domain_name, "domain (", length(variables), "variables)...\n")
   
-  detailed_list <- list()
+  results_list <- list()
   
-  for(var in sig_vars) {
-    if(is.numeric(data[[var]])) {
-      # Continuous: means, SDs, and medians by group
-      summary_stats <- data %>%
-        group_by(!!sym(group_var)) %>%
-        summarise(
-          mean = mean(!!sym(var), na.rm = TRUE),
-          sd = sd(!!sym(var), na.rm = TRUE),
-          median = median(!!sym(var), na.rm = TRUE),
-          n = sum(!is.na(!!sym(var))),
-          .groups = "drop"
-        ) %>%
+  for(var in variables) {
+    
+    # Determine if categorical
+    is_cat <- var %in% categorical_vars
+    
+    # Get descriptive statistics
+    if(!is_cat && is.numeric(complete(mids_obj, 1)[[var]])) {
+      desc <- get_enhanced_continuous_desc(var, mids_obj)
+      
+      # Format for table
+      desc_formatted <- desc %>%
         mutate(
-          mean_sd = paste0(round(mean, 2), " (", round(sd, 2), ")"),
-          median_display = round(median, 2)
-        )
-      
-      # Wide format
-      wide_stats <- summary_stats %>%
-        select(!!sym(group_var), mean_sd, median_display, n) %>%
-        pivot_wider(
-          names_from = !!sym(group_var),
-          values_from = c(mean_sd, median_display, n),
-          names_glue = "{group_var}_{.value}"
-        )
-      
-      detailed_list[[var]] <- wide_stats %>%
-        mutate(Variable = var, Type = "Continuous", .before = 1)
+          descriptive = paste0(
+            round(mean, 2), " (", round(sd, 2), ")"
+          )
+        ) %>%
+        select(group, descriptive) %>%
+        pivot_wider(names_from = group, values_from = descriptive)
       
     } else {
-      # Categorical: counts and proportions by group
-      prop_table <- data %>%
-        group_by(!!sym(group_var), !!sym(var)) %>%
-        summarise(n = n(), .groups = "drop") %>%
-        group_by(!!sym(group_var)) %>%
-        mutate(
-          total = sum(n),
-          pct = round(100 * n / total, 1),
-          summary = paste0(n, " (", pct, "%)")
-        ) %>%
-        select(!!sym(group_var), !!sym(var), summary) %>%
-        pivot_wider(names_from = !!sym(group_var), values_from = summary)
+      desc <- get_enhanced_categorical_desc(var, mids_obj)
       
-      detailed_list[[var]] <- prop_table %>%
-        mutate(Variable = var, Type = "Categorical", .before = 1)
+      # Format all categories
+      desc_formatted <- desc %>%
+        mutate(
+          category_label = paste0(!!sym(var), ": ", round(n, 0), " (", round(pct, 1), "%)"),
+          row_id = row_number()
+        ) %>%
+        select(group, category_label) %>%
+        group_by(group) %>%
+        summarise(descriptive = paste(category_label, collapse = "; "), .groups = "drop") %>%
+        pivot_wider(names_from = group, values_from = descriptive)
     }
+    
+    # Get statistical test
+    test_result <- pool_test_results(var, mids_obj)
+    
+    # Get effect sizes
+    effect_sizes <- calculate_enhanced_effect_sizes(var, mids_obj, is_categorical = is_cat)
+    
+    # Combine results
+    result_row <- tibble(
+      Variable = var,
+      Type = ifelse(is_cat, "Categorical", "Continuous"),
+      Continuer = desc_formatted$Continuer,
+      Discontinuer = desc_formatted$Discontinuer,
+      Test = test_result$test,
+      p_value = test_result$p_pooled,
+      Cohens_d = effect_sizes$cohens_d,
+      Cohens_d_95CI = ifelse(!is.na(effect_sizes$cohens_d),
+                             paste0("[", round(effect_sizes$cohens_d_ci_low, 2), ", ",
+                                   round(effect_sizes$cohens_d_ci_high, 2), "]"),
+                             NA),
+      Rank_Biserial = effect_sizes$rank_biserial,
+      Rank_Biserial_95CI = ifelse(!is.na(effect_sizes$rank_biserial),
+                                  paste0("[", round(effect_sizes$rank_bis_ci_low, 2), ", ",
+                                        round(effect_sizes$rank_bis_ci_high, 2), "]"),
+                                  NA),
+      Cramers_V = effect_sizes$cramers_v,
+      Cramers_V_95CI = ifelse(!is.na(effect_sizes$cramers_v),
+                             paste0("[", round(effect_sizes$cramers_ci_low, 2), ", ",
+                                   round(effect_sizes$cramers_ci_high, 2), "]"),
+                             NA)
+    )
+    
+    results_list[[var]] <- result_row
   }
   
-  return(bind_rows(detailed_list))
-}
-
-# Personality domain significant variables
-cat("Creating table for PERSONALITY domain...\n")
-personality_sig_vars <- personality_fdr %>% 
-  filter(significant) %>% 
-  pull(var)
-
-if(length(personality_sig_vars) > 0) {
-  personality_detailed <- create_group_comparison_table(personality_sig_vars, analysis_data)
+  results_table <- bind_rows(results_list)
   
-  # Add test statistics
-  personality_detailed <- personality_detailed %>%
-    left_join(
-      personality_fdr %>% 
-        filter(significant) %>%
-        select(var, test, p, q_value, effect_size),
-      by = c("Variable" = "var")
-    )
-  
-  write.csv(personality_detailed, "discontinuation_comparison_personality_FDR.csv", row.names = FALSE)
-  cat("✓ Saved: discontinuation_comparison_personality_FDR.csv\n")
-  
-  print(personality_detailed %>% select(Variable, Continuers, Discontinuers, p, q_value))
-} else {
-  cat("  No significant personality differences after FDR\n")
-}
-
-# Clinical domain
-cat("Creating table for CLINICAL domain...\n")
-clinical_sig_vars <- clinical_fdr %>%
-  filter(significant) %>%
-  pull(var)
-
-if(length(clinical_sig_vars) > 0) {
-  clinical_detailed <- create_group_comparison_table(clinical_sig_vars, analysis_data)
-  
-  clinical_detailed <- clinical_detailed %>%
-    left_join(
-      clinical_fdr %>% 
-        filter(significant) %>%
-        select(var, test, p, q_value, effect_size),
-      by = c("Variable" = "var")
-    )
-  
-  write.csv(clinical_detailed, "discontinuation_comparison_clinical_FDR.csv", row.names = FALSE)
-  cat("✓ Saved: discontinuation_comparison_clinical_FDR.csv\n")
-  
-  print(clinical_detailed %>% select(Variable, Continuers, Discontinuers, p, q_value))
-} else {
-  cat("  No significant clinical differences after FDR\n")
-}
-
-# Demographics domain
-cat("Creating table for DEMOGRAPHICS domain...\n")
-demographic_sig_vars <- demographic_fdr %>%
-  filter(significant) %>%
-  pull(var)
-
-if(length(demographic_sig_vars) > 0) {
-  demographic_detailed <- create_group_comparison_table(demographic_sig_vars, analysis_data)
-  
-  demographic_detailed <- demographic_detailed %>%
-    left_join(
-      demographic_fdr %>% 
-        filter(significant) %>%
-        select(var, test, p, q_value, effect_size),
-      by = c("Variable" = "var")
-    )
-  
-  write.csv(demographic_detailed, "discontinuation_comparison_demographics_FDR.csv", row.names = FALSE)
-  cat("✓ Saved: discontinuation_comparison_demographics_FDR.csv\n")
-  
-  print(demographic_detailed %>% select(Variable, Continuers, Discontinuers, p, q_value))
-} else {
-  cat("  No significant demographic differences after FDR\n")
-}
-
-cat("\n")
-
-# -----------------------------------------------------------------------------
-# E. Visualize FDR-corrected results
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART E: Visualizing FDR-corrected differences\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-# Combine all FDR results
-all_fdr_results <- bind_rows(
-  personality_fdr %>% mutate(domain = "Personality"),
-  clinical_fdr %>% mutate(domain = "Clinical"),
-  demographic_fdr %>% mutate(domain = "Demographics")
-)
-
-if(nrow(other_results) > 0) {
-  all_fdr_results <- bind_rows(
-    all_fdr_results,
-    other_fdr %>% mutate(domain = "Other")
-  )
-}
-
-all_fdr_results <- all_fdr_results %>%
-  filter(!is.na(p)) %>%
-  arrange(p)
-
-# Volcano plot: -log10(p) vs effect size
-p_volcano <- ggplot(all_fdr_results, 
-                    aes(x = effect_size, y = -log10(p), 
-                        color = significant, shape = domain)) +
-  geom_point(size = 3, alpha = 0.7) +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed", 
-             color = "gray50", linewidth = 1) +
-  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "gray60"),
-                     labels = c("Not significant", "FDR significant (q < .05)")) +
-  labs(title = "BZRA Discontinuation: Continuers vs. Discontinuers",
-       subtitle = "FDR-corrected differences by domain",
-       x = "Effect Size", 
-       y = "-log10(p-value)",
-       color = "Significance",
-       shape = "Domain") +
-  theme_minimal(base_size = 11) +
-  theme(
-    legend.position = "bottom",
-    plot.title = element_text(hjust = 0.5, face = "bold"),
-    plot.subtitle = element_text(hjust = 0.5)
-  )
-
-ggsave("discontinuation_FDR_volcano_plot.png", plot = p_volcano,
-       width = 10, height = 8, dpi = 300)
-cat("✓ Saved: discontinuation_FDR_volcano_plot.png\n")
-
-# Forest plot of effect sizes for significant variables
-all_sig_vars <- all_fdr_results %>% 
-  filter(significant) %>% 
-  arrange(desc(abs(effect_size))) %>%
-  pull(var)
-
-if(length(all_sig_vars) > 0) {
-  
-  cat("Creating forest plot of", length(all_sig_vars), "significant variables...\n")
-  
-  forest_data <- all_fdr_results %>%
-    filter(significant) %>%
-    arrange(effect_size) %>%
+  # Apply FDR correction
+  results_table <- results_table %>%
     mutate(
-      var_label = factor(var, levels = var),
-      direction = ifelse(effect_size > 0, "Higher in Discontinuers", "Higher in Continuers")
+      q_value = p.adjust(p_value, method = "BH"),
+      Significant_FDR = q_value < 0.05
     )
   
-  p_forest <- ggplot(forest_data, aes(x = effect_size, y = var_label, color = domain)) +
-    geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
-    geom_point(size = 4) +
-    geom_segment(aes(x = 0, xend = effect_size, y = var_label, yend = var_label),
-                 linewidth = 1.5, alpha = 0.6) +
-    scale_color_brewer(palette = "Set1") +
-    labs(
-      title = "Effect Sizes: Discontinuers vs. Continuers",
-      subtitle = "FDR-significant variables (q < .05)",
-      x = "Effect Size\n← Higher in Continuers | Higher in Discontinuers →",
-      y = NULL,
-      color = "Domain"
-    ) +
-    theme_minimal(base_size = 11) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold"),
-      plot.subtitle = element_text(hjust = 0.5),
-      legend.position = "bottom"
+  # Add effect size interpretations
+  results_table <- results_table %>%
+    mutate(
+      Effect_Interpretation = case_when(
+        !is.na(Cohens_d) ~ interpret_effect_size(Cohens_d, "cohens_d"),
+        !is.na(Rank_Biserial) ~ interpret_effect_size(Rank_Biserial, "rank_biserial"),
+        !is.na(Cramers_V) ~ interpret_effect_size(Cramers_V, "cramers_v"),
+        TRUE ~ "N/A"
+      )
     )
   
-  ggsave("discontinuation_FDR_forest_plot.png", plot = p_forest,
-         width = 10, height = max(6, length(all_sig_vars) * 0.35), dpi = 300)
-  cat("✓ Saved: discontinuation_FDR_forest_plot.png\n\n")
+  # Arrange by significance
+  results_table <- results_table %>%
+    arrange(q_value, p_value)
+  
+  return(results_table)
 }
 
+# Create tables for each domain
+demo_table <- create_comprehensive_table(demographic_domain, "Demographics", mids_with_subscales)
+clinical_table <- create_comprehensive_table(clinical_domain, "Clinical", mids_with_subscales)
+personality_table <- create_comprehensive_table(personality_domain, "Personality", mids_with_subscales)
+
+# Save tables
+write.csv(demo_table, "demographics_comprehensive_table.csv", row.names = FALSE)
+write.csv(clinical_table, "clinical_comprehensive_table.csv", row.names = FALSE)
+write.csv(personality_table, "personality_comprehensive_table.csv", row.names = FALSE)
+
+cat("\n✓ Saved: demographics_comprehensive_table.csv\n")
+cat("✓ Saved: clinical_comprehensive_table.csv\n")
+cat("✓ Saved: personality_comprehensive_table.csv\n\n")
+
 # -----------------------------------------------------------------------------
-# F. Summary statistics and interpretation
+# SUMMARY
 # -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART F: FDR CORRECTION SUMMARY\n")
+cat("ANALYSIS COMPLETE\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Overall summary by domain
-summary_by_domain <- bind_rows(
-  personality_fdr %>% 
-    summarise(
-      Domain = "Personality",
-      N_variables = n(),
-      N_significant_raw = sum(p < 0.05, na.rm = TRUE),
-      N_significant_FDR = sum(significant, na.rm = TRUE),
-      Pct_surviving_FDR = ifelse(N_significant_raw > 0,
-                                 round(100 * N_significant_FDR / N_significant_raw, 1),
-                                 NA)
-    ),
-  clinical_fdr %>%
-    summarise(
-      Domain = "Clinical",
-      N_variables = n(),
-      N_significant_raw = sum(p < 0.05, na.rm = TRUE),
-      N_significant_FDR = sum(significant, na.rm = TRUE),
-      Pct_surviving_FDR = ifelse(N_significant_raw > 0,
-                                 round(100 * N_significant_FDR / N_significant_raw, 1),
-                                 NA)
-    ),
-  demographic_fdr %>%
-    summarise(
-      Domain = "Demographics",
-      N_variables = n(),
-      N_significant_raw = sum(p < 0.05, na.rm = TRUE),
-      N_significant_FDR = sum(significant, na.rm = TRUE),
-      Pct_surviving_FDR = ifelse(N_significant_raw > 0,
-                                 round(100 * N_significant_FDR / N_significant_raw, 1),
-                                 NA)
-    )
-)
+cat("SIGNIFICANT FINDINGS (FDR q < 0.05):\n\n")
 
-cat("FDR CORRECTION IMPACT BY DOMAIN:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-print(summary_by_domain, row.names = FALSE)
-cat("\n")
-
-# Overall interpretation
-total_tests <- nrow(all_fdr_results)
-total_sig_raw <- sum(all_fdr_results$p < 0.05, na.rm = TRUE)
-total_sig_fdr <- sum(all_fdr_results$significant, na.rm = TRUE)
-false_positives_removed <- total_sig_raw - total_sig_fdr
-
-cat("OVERALL INTERPRETATION:\n")
-cat("  Total tests conducted:", total_tests, "\n")
-cat("  Before FDR (p < .05):", total_sig_raw, 
-    "(", round(100 * total_sig_raw / total_tests, 1), "%)\n")
-cat("  After FDR (q < .05):", total_sig_fdr, 
-    "(", round(100 * total_sig_fdr / total_tests, 1), "%)\n")
-cat("  Likely false positives removed:", false_positives_removed, "\n\n")
-
-if(false_positives_removed > 0) {
-  cat("✓ FDR correction removed", false_positives_removed, "likely false positives\n")
-  cat("  → Significant results are more trustworthy and replicable\n\n")
-} else if(total_sig_fdr > 0) {
-  cat("✓ All", total_sig_raw, "significant results survived FDR correction\n")
-  cat("  → Very strong evidence of real group differences\n\n")
+cat("Demographics:\n")
+demo_sig <- demo_table %>% filter(Significant_FDR)
+if(nrow(demo_sig) > 0) {
+  for(i in 1:nrow(demo_sig)) {
+    cat("  •", demo_sig$Variable[i], 
+        "(q =", format.pval(demo_sig$q_value[i], digits = 3),
+        ", Effect:", demo_sig$Effect_Interpretation[i], ")\n")
+  }
 } else {
-  cat("⚠ No significant differences after FDR correction\n")
-  cat("  → May indicate small effect sizes or insufficient power\n\n")
+  cat("  None\n")
 }
 
-# Effect size interpretation
-cat("EFFECT SIZE INTERPRETATION GUIDE:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("For continuous variables (rank-biserial correlation):\n")
-cat("  • Small: |r| = 0.10 - 0.30\n")
-cat("  • Medium: |r| = 0.30 - 0.50\n")
-cat("  • Large: |r| > 0.50\n\n")
-
-cat("For categorical variables (Cramér's V):\n")
-cat("  • Small: V = 0.10 - 0.30\n")
-cat("  • Medium: V = 0.30 - 0.50\n")
-cat("  • Large: V > 0.50\n\n")
-
-# Highlight large effects
-large_effects <- all_fdr_results %>%
-  filter(significant, abs(effect_size) > 0.30) %>%
-  arrange(desc(abs(effect_size))) %>%
-  select(domain, var, effect_size, p, q_value)
-
-if(nrow(large_effects) > 0) {
-  cat("Variables with MEDIUM-TO-LARGE effect sizes:\n")
-  cat("─────────────────────────────────────────────────────────────\n")
-  print(large_effects %>%
-          mutate(
-            effect_size = round(effect_size, 3),
-            p = format.pval(p, digits = 3),
-            q_value = format.pval(q_value, digits = 3)
-          ), 
-        row.names = FALSE)
-  cat("\n")
-}
-
-# -----------------------------------------------------------------------------
-# G. Clinical interpretation and recommendations (CONTINUED AND COMPLETED)
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART G: CLINICAL INTERPRETATION\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-if(total_sig_fdr > 0) {
-  cat("KEY FINDINGS:\n")
-  cat("─────────────────────────────────────────────────────────────\n")
-  
-  # Personality differences
-  if(length(personality_sig_vars) > 0) {
-    cat("\nPERSONALITY FACTORS:\n")
-    cat("  Discontinuers differ from continuers on", length(personality_sig_vars), 
-        "personality variables\n")
-    cat("  → May indicate distinct psychological profiles influencing cessation\n")
+cat("\nClinical/Health:\n")
+clin_sig <- clinical_table %>% filter(Significant_FDR)
+if(nrow(clin_sig) > 0) {
+  for(i in 1:nrow(clin_sig)) {
+    cat("  •", clin_sig$Variable[i], 
+        "(q =", format.pval(clin_sig$q_value[i], digits = 3),
+        ", Effect:", clin_sig$Effect_Interpretation[i], ")\n")
   }
-  
-  # Clinical differences
-  if(length(clinical_sig_vars) > 0) {
-    cat("\nCLINICAL/HEALTH FACTORS:\n")
-    cat("  Discontinuers differ from continuers on", length(clinical_sig_vars),
-        "clinical variables\n")
-    cat("  → May reflect health status, symptom severity, or treatment response\n")
-  }
-  
-  # Demographic differences
-  if(length(demographic_sig_vars) > 0) {
-    cat("\nDEMOGRAPHIC FACTORS:\n")
-    cat("  Discontinuers differ from continuers on", length(demographic_sig_vars),
-        "demographic variables\n")
-    cat("  → Consider socioeconomic or contextual influences on discontinuation\n")
-  }
-  
-  cat("\n")
-}
-
-cat("RECOMMENDATIONS FOR MANUSCRIPT:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat('  "Group comparisons between BZRA discontinuers (n=', n_discontinuers, ')\n', sep = "")
-cat('   and continuers (n=', n_continuers, ') were conducted using\n', sep = "")
-cat('   Mann-Whitney U tests for continuous variables and chi-square/\n')
-cat('   Fisher\'s exact tests for categorical variables, with False\n')
-cat('   Discovery Rate correction (Benjamini-Hochberg) applied separately\n')
-cat('   within each variable domain (personality, clinical, demographic)\n')
-cat('   to control for multiple comparisons (q < 0.05)."\n\n')
-
-cat("  Report structure:\n")
-cat('    1. State number of domains tested and FDR approach\n')
-cat('    2. For each domain, report: N variables, N significant after FDR\n')
-cat('    3. Present significant variables with effect sizes and q-values\n')
-cat('    4. Interpret clinical/practical significance of large effects\n\n')
-
-# -----------------------------------------------------------------------------
-# H. Save comprehensive summary file
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART H: Saving comprehensive summary\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-# Create master summary file
-master_summary <- all_fdr_results %>%
-  mutate(
-    significant_raw = p < 0.05,
-    significant_fdr = significant,
-    effect_magnitude = case_when(
-      abs(effect_size) > 0.50 ~ "Large",
-      abs(effect_size) > 0.30 ~ "Medium",
-      abs(effect_size) >= 0.10 ~ "Small",
-      TRUE ~ "Negligible"
-    )
-  ) %>%
-  select(domain, var, test, n, statistic, p, q_value, 
-         significant_raw, significant_fdr, effect_size, effect_magnitude) %>%
-  arrange(domain, q_value)
-
-write.csv(master_summary, "discontinuation_FDR_master_summary.csv", row.names = FALSE)
-cat("✓ Saved: discontinuation_FDR_master_summary.csv\n")
-
-# Save summary statistics for manuscript table
-manuscript_table <- summary_by_domain %>%
-  mutate(
-    `Raw p < .05` = paste0(N_significant_raw, "/", N_variables),
-    `FDR q < .05` = paste0(N_significant_FDR, "/", N_variables),
-    `% Retained` = paste0(Pct_surviving_FDR, "%")
-  ) %>%
-  select(Domain, `Raw p < .05`, `FDR q < .05`, `% Retained`)
-
-write.csv(manuscript_table, "discontinuation_FDR_manuscript_table.csv", row.names = FALSE)
-cat("✓ Saved: discontinuation_FDR_manuscript_table.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# I. Final summary and next steps
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("ANALYSIS COMPLETE: FDR-CORRECTED GROUP COMPARISONS\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("OUTPUT FILES GENERATED:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("  CSV files:\n")
-if(length(personality_sig_vars) > 0) {
-  cat("    • discontinuation_comparison_personality_FDR.csv\n")
-}
-if(length(clinical_sig_vars) > 0) {
-  cat("    • discontinuation_comparison_clinical_FDR.csv\n")
-}
-if(length(demographic_sig_vars) > 0) {
-  cat("    • discontinuation_comparison_demographics_FDR.csv\n")
-}
-cat("    • discontinuation_FDR_master_summary.csv\n")
-cat("    • discontinuation_FDR_manuscript_table.csv\n\n")
-
-cat("  Visualizations:\n")
-cat("    • discontinuation_FDR_volcano_plot.png\n")
-if(length(all_sig_vars) > 0) {
-  cat("    • discontinuation_FDR_forest_plot.png\n")
-}
-cat("\n")
-
-cat("NEXT STEPS:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("  1. Review significant variables for clinical meaningfulness\n")
-cat("  2. Consider which variables warrant inclusion in predictive models\n")
-cat("  3. Examine interactions between significant predictors\n")
-cat("  4. Validate findings in holdout sample if available\n")
-cat("  5. Report effect sizes alongside p-values in manuscript\n\n")
-
-if(total_sig_fdr == 0) {
-  cat("⚠ WARNING: No variables survived FDR correction\n")
-  cat("  Consider:\n")
-  cat("    • Examining variables with smallest raw p-values for trends\n")
-  cat("    • Reviewing statistical power for detecting expected effect sizes\n")
-  cat("    • Exploring alternative grouping strategies\n")
-  cat("    • Focusing on pre-specified hypotheses rather than exploratory analysis\n\n")
-} else if(total_sig_fdr < 5) {
-  cat("✓ LIMITED FINDINGS: ", total_sig_fdr, " variable(s) survived FDR correction\n", sep = "")
-  cat("  → Focus on understanding these robust differences\n")
-  cat("  → Exercise caution with post-hoc explanations\n\n")
 } else {
-  cat("✓ ROBUST FINDINGS: ", total_sig_fdr, " variables survived FDR correction\n", sep = "")
-  cat("  → Strong evidence of meaningful group differences\n")
-  cat("  → Consider building multivariate prediction model\n\n")
+  cat("  None\n")
 }
 
+cat("\nPersonality/Behavioral:\n")
+pers_sig <- personality_table %>% filter(Significant_FDR)
+if(nrow(pers_sig) > 0) {
+  for(i in 1:nrow(pers_sig)) {
+    cat("  •", pers_sig$Variable[i], 
+        "(q =", format.pval(pers_sig$q_value[i], digits = 3),
+        ", Effect:", pers_sig$Effect_Interpretation[i], ")\n")
+  }
+} else {
+  cat("  None\n")
+}
+
+cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("END OF FDR-CORRECTED ANALYSIS\n")
+cat("EFFECT SIZE COMPARISON: Cohen's d vs Rank-Biserial\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("Cohen's d:\n")
+cat("  • PROS: Widely recognized, standardized mean difference\n")
+cat("  • PROS: Directly interpretable (e.g., 0.5 = half SD difference)\n")
+cat("  • PROS: Familiar to most reviewers and readers\n")
+cat("  • CONS: Assumes normality and equal variances\n")
+cat("  • CONS: Sensitive to outliers\n")
+cat("  • CONS: Less appropriate when using non-parametric tests\n\n")
+
+cat("Rank-Biserial Correlation:\n")
+cat("  • PROS: Appropriate for Mann-Whitney U test (what you used)\n")
+cat("  • PROS: Robust to outliers and non-normality\n")
+cat("  • PROS: Bounded between -1 and 1 (easier interpretation)\n")
+cat("  • CONS: Less familiar to many readers\n")
+cat("  • CONS: Harder to compare across different test types\n\n")
+
+cat("RECOMMENDATION:\n")
+cat("  Report BOTH in supplementary materials, but feature rank-biserial\n")
+cat("  in main text since you used Mann-Whitney U tests. Explain that\n")
+cat("  rank-biserial is the appropriate effect size for your non-parametric\n")
+cat("  approach, but provide Cohen's d for readers more familiar with it.\n\n")
+
+cat("Done!\n")
 ```
 
 
