@@ -5736,14 +5736,16 @@ cat("Done!\n")
 
 
 ## Cluster Analysis
+
 ```{r}
 #==============================================================================
-# CHUNK 9: CLUSTERING ANALYSIS (PATIENT PROFILES) - FIXED VERSION
+# LPA WITH MULTIPLE IMPUTATION - USING ALL 35 IMPUTED DATASETS
+# Approach: Fit LPA on each imputation, then combine results
 #==============================================================================
 
 library(tidyverse)
 library(mice)
-library(cluster)
+library(mclust)
 library(factoextra)
 library(tableone)
 library(ggplot2)
@@ -5751,486 +5753,4133 @@ library(gridExtra)
 
 cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("STEP 9: CLUSTERING ANALYSIS - IDENTIFYING PATIENT PROFILES\n")
+cat("PART 1: LATENT PROFILE ANALYSIS - WITH MULTIPLE IMPUTATION\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 # Load mids imputed data
 mids_obj <- readRDS("imputed_data_with_subscales.rds")
-cat("Loaded mids object with", mids_obj$m, "imputations\n")
-cat("Number of variables:", length(mids_obj$data), "\n")
-cat("Number of observations:", nrow(mids_obj$data), "\n\n")
+cat("Loaded mids object with", mids_obj$m, "imputations\n\n")
 
-# Extract first imputation
-cluster_data_raw <- complete(mids_obj, 1)
+cat("STAGE 1 OBJECTIVE: Identify distinct personality-based patient profiles\n")
+cat("Using ALL", mids_obj$m, "imputations for robust estimates\n")
+cat("This is DESCRIPTIVE, not predictive\n\n")
 
 # -----------------------------------------------------------------------------
-# Define clustering variables
+# Define personality variables for profiling
 # -----------------------------------------------------------------------------
 
-cat("Defining clustering variables...\n\n")
-
-# Define personality variables - EXACTLY as created in scale construction
 personality_vars <- c(
   # BFI-10 subscales
   "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
   
   # SURPS subscales
-  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+  "SURPS_Anxiety_Sensitivity",
   
-  # DBAS subscales (excluding DBAS_Total)
-  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", "DBAS_Medications",
+  # DBAS subscales
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", 
+  "DBAS_Medications",
   
   # CISS subscales
   "CISS_Task", "CISS_Emotion", "CISS_Avoidance"
 )
 
-# Filter to only include variables that actually exist in the dataset
-personality_vars <- personality_vars[personality_vars %in% names(cluster_data_raw)]
+# Get first imputation to check variables
+first_imp <- complete(mids_obj, 1)
+personality_vars <- personality_vars[personality_vars %in% names(first_imp)]
 
-cat("Personality variables available:\n")
+cat("Personality variables for profiling:\n")
 for(v in personality_vars) {
   cat("  ✓", v, "\n")
 }
-cat("Total personality variables:", length(personality_vars), "\n\n")
+cat("\nTotal:", length(personality_vars), "\n\n")
 
-if(length(personality_vars) == 0) {
-  stop("ERROR: No personality variables found! Check that scale construction ran successfully.")
+# -----------------------------------------------------------------------------
+# STEP 1: Fit LPA on each imputed dataset
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 1: Fitting LPA on each of", mids_obj$m, "imputed datasets\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Store results from each imputation
+lpa_results_list <- list()
+bic_results <- list()
+selected_k_list <- numeric(mids_obj$m)
+
+set.seed(123)
+
+for(m in 1:mids_obj$m) {
+  cat("Processing imputation", m, "of", mids_obj$m, "...\n")
+  
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data (no missing values needed for LPA)
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale variables
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit LPA models (1-8 profiles)
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = 1:8, verbose = FALSE)
+  
+  # Store results
+  lpa_results_list[[m]] <- lpa_fit_m
+  bic_results[[m]] <- lpa_fit_m$BIC
+  selected_k_list[m] <- lpa_fit_m$G
+  
+  cat("  → Best k =", lpa_fit_m$G, ", BIC =", round(lpa_fit_m$bic, 2), "\n")
 }
 
-# Define demographics variables: use RECODED variables instead of raw ones
-demographic_vars <- c(
-  # Continuous
-  "age", 
-  "income", 
-  "driving_freq", 
-  "osss_3_score",  # social support
-  "phq2_score",    # depression
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 2: Determine consensus number of profiles
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 2: Determining consensus number of profiles\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Most common k selected
+k_table <- table(selected_k_list)
+cat("Number of profiles selected across imputations:\n")
+print(k_table)
+cat("\n")
+
+# Use modal (most common) k
+consensus_k <- as.numeric(names(k_table)[which.max(k_table)])
+cat("Consensus number of profiles:", consensus_k, "\n")
+cat("Selected in", max(k_table), "out of", mids_obj$m, "imputations\n\n")
+
+# If there's a tie or concern, you could also use median/mean
+cat("Distribution of selected k:\n")
+cat("  Mode:", consensus_k, "\n")
+cat("  Median:", median(selected_k_list), "\n")
+cat("  Mean:", round(mean(selected_k_list), 2), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 3: Refit LPA with consensus k on all imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 3: Refitting LPA with k =", consensus_k, "on all imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+lpa_consensus_list <- list()
+profile_assignments_list <- list()
+entropy_list <- numeric(mids_obj$m)
+
+for(m in 1:mids_obj$m) {
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
   
-  # Categorical (RECODED versions)
-  "sex", 
-  "gender",
-  "region",              # Instead of prov_terr
-  "employment_status",   # Instead of employment
-  "education_level"      # Instead of education
+  # Prepare LPA data
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit with consensus k
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = consensus_k, verbose = FALSE)
+  
+  # Calculate entropy
+  entropy_m <- 1 - (sum(-lpa_fit_m$z * log(lpa_fit_m$z), na.rm = TRUE) / 
+                    (nrow(lpa_scaled_m) * log(consensus_k)))
+  
+  # Store
+  lpa_consensus_list[[m]] <- lpa_fit_m
+  profile_assignments_list[[m]] <- lpa_fit_m$classification
+  entropy_list[m] <- entropy_m
+}
+
+cat("Entropy across imputations:\n")
+cat("  Mean:", round(mean(entropy_list), 3), "\n")
+cat("  SD:", round(sd(entropy_list), 3), "\n")
+cat("  Range:", round(min(entropy_list), 3), "-", round(max(entropy_list), 3), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 4: Obtain consensus profile assignments
+# Method: Use first imputation as reference, assign based on modal profile
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 4: Creating consensus profile assignments\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use first imputation as reference
+reference_lpa <- lpa_consensus_list[[1]]
+reference_profiles <- profile_assignments_list[[1]]
+
+# For simplicity, use the modal profile assignment across imputations
+# This is more stable than using just one imputation
+n_obs <- length(reference_profiles)
+
+# Create matrix of profile assignments (rows = obs, cols = imputations)
+profile_matrix <- do.call(cbind, profile_assignments_list)
+
+# Get modal profile for each observation
+modal_profiles <- apply(profile_matrix, 1, function(x) {
+  as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+})
+
+# Create final dataset with consensus profiles
+consensus_data <- complete(mids_obj, 1) %>%
+  select(all_of(personality_vars)) %>%
+  mutate(
+    profile = factor(modal_profiles,
+                    levels = 1:consensus_k,
+                    labels = paste0("Profile_", 1:consensus_k))
+  )
+
+cat("Consensus profile distribution:\n")
+print(table(consensus_data$profile))
+cat("\nProportions (%):\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+# Calculate assignment stability (what % of imputations agree with modal?)
+assignment_stability <- apply(profile_matrix, 1, function(x) {
+  modal_val <- as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+  mean(x == modal_val)
+})
+
+cat("Profile assignment stability:\n")
+cat("  Mean agreement:", round(100 * mean(assignment_stability), 1), "%\n")
+cat("  Median agreement:", round(100 * median(assignment_stability), 1), "%\n")
+cat("  Min agreement:", round(100 * min(assignment_stability), 1), "%\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 5: Pool profile characteristics across imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 5: Pooling profile characteristics across imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# For each imputation, calculate profile means
+profile_means_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    select(all_of(personality_vars)) %>%
+    mutate(profile = factor(profile_assignments_list[[m]],
+                           levels = 1:consensus_k,
+                           labels = paste0("Profile_", 1:consensus_k)))
+  
+  profile_means_m <- imp_data %>%
+    group_by(profile) %>%
+    summarise(across(all_of(personality_vars), mean, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(imputation = m)
+  
+  profile_means_list[[m]] <- profile_means_m
+}
+
+# Combine and average across imputations
+pooled_profile_means <- bind_rows(profile_means_list) %>%
+  group_by(profile) %>%
+  summarise(across(all_of(personality_vars), 
+                   list(mean = mean, sd = sd)),
+            .groups = "drop")
+
+cat("Pooled profile characteristics (averaged across", mids_obj$m, "imputations):\n\n")
+
+# Create a cleaner table
+profile_summary <- pooled_profile_means %>%
+  select(profile, ends_with("_mean")) %>%
+  rename_with(~str_remove(., "_mean"), ends_with("_mean"))
+
+print(profile_summary, n = Inf)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 6: Statistical comparison of profiles (pooled)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PERSONALITY CHARACTERISTICS BY PROFILE (POOLED)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use consensus profiles with first imputation for TableOne
+profile_table <- CreateTableOne(
+  vars = personality_vars,
+  strata = "profile",
+  data = consensus_data,
+  test = TRUE
 )
 
-# Filter to only include variables that actually exist
-demographic_vars <- demographic_vars[demographic_vars %in% names(cluster_data_raw)]
+print(profile_table, smd = TRUE)
+cat("\n")
+cat("Note: Statistics based on consensus profile assignments\n")
+cat("      Means are pooled across", mids_obj$m, "imputations\n\n")
 
-cat("Demographic variables available:\n")
-for(v in demographic_vars) {
+# -----------------------------------------------------------------------------
+# STEP 7: Visualizations using reference imputation
+# -----------------------------------------------------------------------------
+
+cat("Creating profile visualizations...\n\n")
+
+# Use reference LPA for BIC plot
+bic_plot <- fviz_mclust(reference_lpa, "BIC", palette = "jco") +
+  labs(title = "LPA Model Selection: BIC Values (Reference Imputation)",
+       subtitle = paste0("Consensus k = ", consensus_k, " across ", mids_obj$m, " imputations")) +
+  theme_minimal()
+
+ggsave("lpa_bic_selection_MI.png", plot = bic_plot, width = 10, height = 6, dpi = 300)
+
+# Classification plot using consensus profiles
+consensus_scaled <- scale(consensus_data %>% select(-profile))
+pca_result <- prcomp(consensus_scaled, scale. = FALSE)
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  profile = consensus_data$profile
+)
+
+class_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = profile)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(title = paste("Patient Profiles (k =", consensus_k, ") - Consensus Assignment"),
+       subtitle = paste0("Based on ", mids_obj$m, " imputed datasets"),
+       x = "First Principal Component",
+       y = "Second Principal Component",
+       color = "Profile")
+
+ggsave("lpa_profiles_descriptive_MI.png", plot = class_plot, 
+       width = 10, height = 8, dpi = 300)
+
+# Heatmap with pooled means
+heatmap_data <- profile_summary %>%
+  pivot_longer(-profile, names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  mutate(z_score = scale(value)[, 1]) %>%
+  ungroup()
+
+p_heatmap <- ggplot(heatmap_data, aes(x = variable, y = profile, fill = z_score)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B",
+                       midpoint = 0, name = "Z-Score",
+                       limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        plot.title = element_text(size = 14, face = "bold")) +
+  labs(title = paste("Personality Profiles (k =", consensus_k, ") - Pooled Estimates"),
+       subtitle = paste0("Averaged across ", mids_obj$m, " imputations - Red = Higher, Blue = Lower"),
+       x = NULL, y = "Profile")
+
+ggsave("lpa_profile_heatmap_MI.png", plot = p_heatmap, 
+       width = 12, height = 6, dpi = 300)
+
+cat("✓ Profile visualizations saved\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 8: Exploratory discontinuation comparison (pooled across imputations)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("EXPLORATORY: Profile differences in discontinuation\n")
+cat("(Descriptive comparison - NOT predictive modeling)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Calculate discontinuation rates pooled across all imputations
+discont_rates_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    mutate(row_id = row_number()) %>%
+    select(row_id, scrn_stopped_bzra) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  # Merge with consensus profiles
+  imp_with_profile <- consensus_profiles_df %>%
+    left_join(imp_data, by = "row_id") %>%
+    filter(!is.na(scrn_stopped_bzra)) %>%
+    mutate(discontinued = as.numeric(as.character(scrn_stopped_bzra)))
+  
+  # Calculate rates by profile
+  rates_m <- imp_with_profile %>%
+    group_by(profile) %>%
+    summarise(
+      N = n(),
+      N_discontinued = sum(discontinued, na.rm = TRUE),
+      Rate = mean(discontinued, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(imputation = m)
+  
+  discont_rates_list[[m]] <- rates_m
+}
+
+# Pool discontinuation rates
+pooled_discont <- bind_rows(discont_rates_list) %>%
+  group_by(profile) %>%
+  summarise(
+    N = mean(N),  # Should be same across imputations
+    Mean_Rate = mean(Rate),
+    SD_Rate = sd(Rate),
+    SE_Rate = SD_Rate / sqrt(mids_obj$m),
+    CI_lower = Mean_Rate - 1.96 * SE_Rate,
+    CI_upper = Mean_Rate + 1.96 * SE_Rate,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Rate_Pct = round(100 * Mean_Rate, 1),
+    CI_lower_Pct = round(100 * CI_lower, 1),
+    CI_upper_Pct = round(100 * CI_upper, 1)
+  )
+
+cat("Discontinuation rates by profile (POOLED ACROSS", mids_obj$m, "IMPUTATIONS):\n")
+print(pooled_discont %>% 
+        select(profile, N, Rate_Pct, CI_lower_Pct, CI_upper_Pct))
+cat("\n")
+
+# Chi-square test using first imputation (for reference)
+first_imp_test <- complete(mids_obj, 1) %>%
+  mutate(row_id = row_number()) %>%
+  inner_join(consensus_profiles_df, by = "row_id") %>%
+  filter(!is.na(scrn_stopped_bzra))
+
+if(nrow(first_imp_test) > 0) {
+  chisq_test <- chisq.test(table(first_imp_test$profile, 
+                                 first_imp_test$scrn_stopped_bzra))
+  cat("Chi-square test (exploratory, first imputation):\n")
+  cat("  χ² =", round(chisq_test$statistic, 2), "\n")
+  cat("  p =", format.pval(chisq_test$p.value, digits = 3), "\n\n")
+}
+
+cat("⚠ IMPORTANT: This is EXPLORATORY, not predictive\n")
+cat("   Use regression (below) for actual prediction\n\n")
+
+# Save plot with pooled rates
+p_explore <- ggplot(pooled_discont, 
+                    aes(x = profile, y = Rate_Pct, fill = profile)) +
+  geom_col(alpha = 0.8) +
+  geom_errorbar(aes(ymin = CI_lower_Pct, ymax = CI_upper_Pct), width = 0.3) +
+  geom_text(aes(label = paste0(Rate_Pct, "%")), vjust = -0.5, size = 4) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  labs(title = "EXPLORATORY: Discontinuation by Profile (Pooled)",
+       subtitle = paste0("Rates averaged across ", mids_obj$m, " imputations"),
+       y = "Discontinuation Rate (%)", x = "Profile") +
+  theme(legend.position = "none")
+
+ggsave("lpa_exploratory_discontinuation_MI.png", plot = p_explore, 
+       width = 10, height = 6, dpi = 300)
+cat("✓ Saved exploratory plot\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 9: Save results
+# -----------------------------------------------------------------------------
+
+cat("Saving LPA results...\n\n")
+
+lpa_mi_results <- list(
+  # Consensus information
+  consensus_k = consensus_k,
+  n_imputations = mids_obj$m,
+  
+  # Profile assignments
+  consensus_profiles = consensus_data$profile,
+  assignment_stability = assignment_stability,
+  
+  # Model information
+  mean_entropy = mean(entropy_list),
+  entropy_sd = sd(entropy_list),
+  
+  # Pooled characteristics
+  pooled_means = profile_summary,
+  
+  # All LPA fits
+  lpa_fits = lpa_consensus_list,
+  
+  # Distribution
+  profile_distribution = table(consensus_data$profile)
+)
+
+saveRDS(lpa_mi_results, "lpa_results_multiple_imputation.rds")
+cat("✓ Saved: lpa_results_multiple_imputation.rds\n\n")
+
+# Also save consensus profiles to merge with other data later
+consensus_profiles_df <- data.frame(
+  row_id = 1:nrow(consensus_data),
+  profile = consensus_data$profile,
+  stability = assignment_stability
+)
+
+saveRDS(consensus_profiles_df, "consensus_profiles.rds")
+cat("✓ Saved: consensus_profiles.rds\n\n")
+
+# -----------------------------------------------------------------------------
+# SUMMARY
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("LPA WITH MULTIPLE IMPUTATION - COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("RESULTS SUMMARY:\n")
+cat("  Imputations analyzed:", mids_obj$m, "\n")
+cat("  Consensus profiles:", consensus_k, "\n")
+cat("  Mean entropy:", round(mean(entropy_list), 3), "±", round(sd(entropy_list), 3), "\n")
+cat("  Mean assignment stability:", round(100 * mean(assignment_stability), 1), "%\n\n")
+
+cat("PROFILE SIZES:\n")
+print(table(consensus_data$profile))
+cat("\nProportions:\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+cat("ADVANTAGES OF THIS APPROACH:\n")
+cat("  ✓ Uses all", mids_obj$m, "imputations (not just one)\n")
+cat("  ✓ Accounts for imputation uncertainty\n")
+cat("  ✓ More stable profile assignments\n")
+cat("  ✓ Pooled estimates reduce bias\n")
+cat("  ✓ Provides assignment stability metric\n\n")
+
+cat("OUTPUT FILES:\n")
+cat("  ✓ lpa_bic_selection_MI.png\n")
+cat("  ✓ lpa_profiles_descriptive_MI.png\n")
+cat("  ✓ lpa_profile_heatmap_MI.png\n")
+if(exists("p_explore")) {
+  cat("  ✓ lpa_exploratory_discontinuation_MI.png\n")
+}
+cat("  ✓ lpa_results_multiple_imputation.rds\n")
+cat("  ✓ consensus_profiles.rds\n\n")
+
+cat("NEXT: Predictive regression modeling (below)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# =============================================================================
+# PART 2: PREDICTIVE MODELING WITH MULTIPLE IMPUTATION
+# =============================================================================
+
+library(pROC)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART 2: PREDICTIVE REGRESSION - DEMOGRAPHICS + PERSONALITY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("OBJECTIVE: Predict BZRA discontinuation using:\n")
+cat("  • Demographic variables\n")
+cat("  • Personality variables\n")
+cat("  • Properly pooled across all", mids_obj$m, "imputations\n\n")
+
+# -----------------------------------------------------------------------------
+# Define predictors
+# -----------------------------------------------------------------------------
+
+# Demographics
+demographic_predictors <- c(
+  "age",
+  "sex",
+  "education_level",
+  "employment_status",
+  "income",
+  "driving_freq",
+  "phq2_score",
+  "osss_3_score"
+)
+
+# Personality (same as LPA)
+personality_predictors <- personality_vars
+
+# Check which exist in data
+first_imp_check <- complete(mids_obj, 1)
+demographic_predictors <- demographic_predictors[demographic_predictors %in% names(first_imp_check)]
+personality_predictors <- personality_predictors[personality_predictors %in% names(first_imp_check)]
+
+cat("Predictor sets:\n")
+cat("  Demographics:", length(demographic_predictors), "\n")
+for(v in demographic_predictors) {
+  cat("    •", v, "\n")
+}
+cat("\n  Personality:", length(personality_predictors), "\n")
+for(v in personality_predictors) {
+  cat("    •", v, "\n")
+}
+
+# All predictors
+all_predictors <- c(demographic_predictors, personality_predictors)
+cat("\n  Total predictors:", length(all_predictors), "\n\n")
+
+# -----------------------------------------------------------------------------
+# Calculate overall discontinuation rate (pooled)
+# -----------------------------------------------------------------------------
+
+cat("Calculating overall discontinuation rate...\n")
+
+overall_rates <- numeric(mids_obj$m)
+sample_sizes <- numeric(mids_obj$m)
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m)
+  outcome_data <- imp_data %>%
+    filter(!is.na(scrn_stopped_bzra)) %>%
+    mutate(discontinued = as.numeric(as.character(scrn_stopped_bzra)))
+  
+  overall_rates[m] <- mean(outcome_data$discontinued)
+  sample_sizes[m] <- nrow(outcome_data)
+}
+
+mean_rate <- mean(overall_rates)
+se_rate <- sd(overall_rates) / sqrt(mids_obj$m)
+
+cat("Pooled discontinuation rate:\n")
+cat("  Mean:", round(100 * mean_rate, 1), "%\n")
+cat("  SE:", round(100 * se_rate, 2), "%\n")
+cat("  95% CI:", round(100 * (mean_rate - 1.96 * se_rate), 1), "% -",
+    round(100 * (mean_rate + 1.96 * se_rate), 1), "%\n")
+cat("  Sample size:", round(mean(sample_sizes)), "\n\n")
+
+# -----------------------------------------------------------------------------
+# MODEL 1: Demographics Only
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("MODEL 1: DEMOGRAPHICS ONLY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Create formula
+formula_demo <- as.formula(paste("scrn_stopped_bzra ~", 
+                                 paste(demographic_predictors, collapse = " + ")))
+
+cat("Formula:", deparse(formula_demo), "\n\n")
+
+# Fit on each imputation
+cat("Fitting demographic model on", mids_obj$m, "imputations...\n")
+fit_demo <- with(mids_obj, glm(formula_demo, family = binomial))
+
+# Pool results
+pooled_demo <- pool(fit_demo)
+summary_demo <- summary(pooled_demo, conf.int = TRUE, exponentiate = TRUE)
+
+cat("\nPooled results (Rubin's rules):\n")
+print(summary_demo, digits = 3)
+cat("\n")
+
+# Get significant predictors
+sig_demo <- summary_demo %>%
+  filter(p.value < 0.05, term != "(Intercept)")
+
+cat("Significant predictors (p < 0.05):\n")
+if(nrow(sig_demo) > 0) {
+  for(i in 1:nrow(sig_demo)) {
+    cat("  ✓", sig_demo$term[i], "\n")
+    cat("      OR =", round(sig_demo$estimate[i], 3), 
+        ", 95% CI: [", round(sig_demo#==============================================================================
+# LPA WITH MULTIPLE IMPUTATION - USING ALL 35 IMPUTED DATASETS
+# Approach: Fit LPA on each imputation, then combine results
+#==============================================================================
+
+library(tidyverse)
+library(mice)
+library(mclust)
+library(factoextra)
+library(tableone)
+library(ggplot2)
+library(gridExtra)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART 1: LATENT PROFILE ANALYSIS - WITH MULTIPLE IMPUTATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load mids imputed data
+mids_obj <- readRDS("imputed_data_with_subscales.rds")
+cat("Loaded mids object with", mids_obj$m, "imputations\n\n")
+
+cat("STAGE 1 OBJECTIVE: Identify distinct personality-based patient profiles\n")
+cat("Using ALL", mids_obj$m, "imputations for robust estimates\n")
+cat("This is DESCRIPTIVE, not predictive\n\n")
+
+# -----------------------------------------------------------------------------
+# Define personality variables for profiling
+# -----------------------------------------------------------------------------
+
+personality_vars <- c(
+  # BFI-10 subscales
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  
+  # SURPS subscales
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+  "SURPS_Anxiety_Sensitivity",
+  
+  # DBAS subscales
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", 
+  "DBAS_Medications",
+  
+  # CISS subscales
+  "CISS_Task", "CISS_Emotion", "CISS_Avoidance"
+)
+
+# Get first imputation to check variables
+first_imp <- complete(mids_obj, 1)
+personality_vars <- personality_vars[personality_vars %in% names(first_imp)]
+
+cat("Personality variables for profiling:\n")
+for(v in personality_vars) {
   cat("  ✓", v, "\n")
 }
-cat("Total demographic variables:", length(demographic_vars), "\n\n")
+cat("\nTotal:", length(personality_vars), "\n\n")
 
-# Combine all clustering variables
-clustering_vars <- c(personality_vars, demographic_vars)
+# -----------------------------------------------------------------------------
+# STEP 1: Fit LPA on each imputed dataset
+# -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("CLUSTERING VARIABLE SUMMARY\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("Personality subscales:", length(personality_vars), "\n")
-cat("Demographic variables:", length(demographic_vars), "\n")
-cat("TOTAL clustering variables:", length(clustering_vars), "\n")
+cat("STEP 1: Fitting LPA on each of", mids_obj$m, "imputed datasets\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# -----------------------------------------------------------------------------
-# Prepare clustering dataset
-# -----------------------------------------------------------------------------
-
-cat("Preparing clustering dataset...\n\n")
-
-# Check if outcome variable exists
-if(!("scrn_stopped_bzra" %in% names(cluster_data_raw))) {
-  stop("ERROR: Outcome variable 'scrn_stopped_bzra' not found in data!")
-}
-
-# Create temporary dataset with BOTH clustering variables AND outcome
-# This ensures they stay aligned when removing missing data
-cluster_data_temp <- cluster_data_raw %>%
-  select(all_of(c(clustering_vars, "scrn_stopped_bzra"))) %>%
-  na.omit()  # Remove any rows with missing data
-
-cat("After removing missing data:\n")
-cat("  Observations retained:", nrow(cluster_data_temp), "\n")
-cat("  Variables:", ncol(cluster_data_temp) - 1, "(plus outcome)\n\n")
-
-# Extract the outcome vector BEFORE removing it from clustering data
-outcome_vector <- cluster_data_temp$scrn_stopped_bzra
-
-# Create final clustering dataset WITHOUT outcome
-cluster_data <- cluster_data_temp %>%
-  select(-scrn_stopped_bzra)
-
-# Verify alignment
-cat("✓ Data preparation checks:\n")
-cat("  Cluster data rows:", nrow(cluster_data), "\n")
-cat("  Outcome vector length:", length(outcome_vector), "\n")
-cat("  Lengths match:", nrow(cluster_data) == length(outcome_vector), "\n")
-cat("  Outcome variable type:", class(outcome_vector), "\n")
-cat("  Outcome summary:\n")
-print(table(outcome_vector, useNA = "ifany"))
-cat("\n")
-
-# Create scaled cluster matrix for k-means
-cluster_matrix <- cluster_data %>%
-  mutate(across(where(is.factor), as.numeric)) %>%
-  scale() %>%
-  as.data.frame()
-
-cat("✓ Prepared clustering matrix:\n")
-cat("  Observations:", nrow(cluster_matrix), "\n")
-cat("  Variables:", ncol(cluster_matrix), "\n\n")
-
-# Check for any remaining issues
-if(any(is.na(cluster_matrix))) {
-  cat("⚠ WARNING: NA values detected in scaled matrix!\n")
-  na_counts <- colSums(is.na(cluster_matrix))
-  print(na_counts[na_counts > 0])
-  stop("Cannot proceed with NA values in clustering matrix")
-}
-
-cat("✓ No missing values in clustering matrix\n\n")
-
-# -----------------------------------------------------------------------------
-# B. Determine optimal number of clusters using Silhouette method
-# -----------------------------------------------------------------------------
-
-cat("Determining optimal number of clusters...\n\n")
+# Store results from each imputation
+lpa_results_list <- list()
+bic_results <- list()
+selected_k_list <- numeric(mids_obj$m)
 
 set.seed(123)
-sil_plot <- fviz_nbclust(cluster_matrix, kmeans, method = "silhouette", k.max = 8) +
-  labs(title = "Silhouette Method: Optimal Number of Clusters",
-       subtitle = "Higher silhouette = better separation") +
-  theme_minimal()
-ggsave("clustering_silhouette_method.png", plot = sil_plot, width = 8, height = 6, dpi = 300)
 
-sil_k <- which.max(sil_plot$data$y)
-cat("Silhouette method suggested number of clusters:", sil_k, "\n\n")
-
-if (sil_k == 1) {
-  cat("⚠ Silhouette method recommends k=1 (no clustering). Terminating.\n")
-  stop("No clustering performed as k=1.")
+for(m in 1:mids_obj$m) {
+  cat("Processing imputation", m, "of", mids_obj$m, "...\n")
+  
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data (no missing values needed for LPA)
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale variables
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit LPA models (1-8 profiles)
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = 1:8, verbose = FALSE)
+  
+  # Store results
+  lpa_results_list[[m]] <- lpa_fit_m
+  bic_results[[m]] <- lpa_fit_m$BIC
+  selected_k_list[m] <- lpa_fit_m$G
+  
+  cat("  → Best k =", lpa_fit_m$G, ", BIC =", round(lpa_fit_m$bic, 2), "\n")
 }
 
-chosen_k <- sil_k
-
-# -----------------------------------------------------------------------------
-# C. Fit clustering solution
-# -----------------------------------------------------------------------------
-
-cat("Fitting k-means clustering with k =", chosen_k, "...\n\n")
-
-set.seed(123)
-final_km <- kmeans(cluster_matrix, centers = chosen_k, nstart = 50, iter.max = 100)
-
-# Add cluster assignments to data
-cluster_data$cluster <- factor(final_km$cluster,
-                               levels = 1:chosen_k,
-                               labels = paste0("Cluster_", 1:chosen_k))
-
-# Add outcome variable back (now properly aligned)
-cluster_data$scrn_stopped_bzra <- outcome_vector
-
-cat("✓ Added cluster assignments and outcome to data\n")
-cat("  Cluster distribution:\n")
-print(table(cluster_data$cluster))
-cat("\n  Outcome distribution:\n")
-print(table(cluster_data$scrn_stopped_bzra))
 cat("\n")
 
 # -----------------------------------------------------------------------------
-# D. Characterize clusters
+# STEP 2: Determine consensus number of profiles
 # -----------------------------------------------------------------------------
-
-cat("Characterizing clusters...\n\n")
-
-cluster_sizes <- table(cluster_data$cluster)
-cat("Cluster sizes:\n")
-print(cluster_sizes)
-cat("\nCluster proportions (%):\n")
-print(round(100 * prop.table(cluster_sizes), 1))
-cat("\n")
-
-# Create comparison table with all clustering variables
-all_comparison_vars <- clustering_vars
-
-cluster_table <- CreateTableOne(vars = all_comparison_vars,
-                               strata = "cluster",
-                               data = cluster_data,
-                               test = TRUE)
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("CLUSTER COMPARISON TABLE\n")
+cat("STEP 2: Determining consensus number of profiles\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Most common k selected
+k_table <- table(selected_k_list)
+cat("Number of profiles selected across imputations:\n")
+print(k_table)
+cat("\n")
+
+# Use modal (most common) k
+consensus_k <- as.numeric(names(k_table)[which.max(k_table)])
+cat("Consensus number of profiles:", consensus_k, "\n")
+cat("Selected in", max(k_table), "out of", mids_obj$m, "imputations\n\n")
+
+# If there's a tie or concern, you could also use median/mean
+cat("Distribution of selected k:\n")
+cat("  Mode:", consensus_k, "\n")
+cat("  Median:", median(selected_k_list), "\n")
+cat("  Mean:", round(mean(selected_k_list), 2), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 3: Refit LPA with consensus k on all imputations
+# -----------------------------------------------------------------------------
+
 cat("═══════════════════════════════════════════════════════════════\n")
-print(cluster_table, smd = TRUE)
-cat("\n\n")
+cat("STEP 3: Refitting LPA with k =", consensus_k, "on all imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Identify significant differences
-cluster_results <- print(cluster_table, printToggle = FALSE, test = TRUE, smd = TRUE)
-p_vals <- as.numeric(cluster_results[, "p"])
-sig_vars_clusters <- rownames(cluster_results)[which(p_vals < 0.05 & !is.na(p_vals))]
+lpa_consensus_list <- list()
+profile_assignments_list <- list()
+entropy_list <- numeric(mids_obj$m)
 
-cat("Variables that DIFFER significantly between clusters (p < 0.05):\n")
-if(length(sig_vars_clusters) > 0) {
-  for(v in sig_vars_clusters) {
-    cat("  ✓", v, "\n")
-  }
-} else {
-  cat("  (None - clusters may not be well-separated)\n")
-}
-cat("\n\n")
-
-# -----------------------------------------------------------------------------
-# E. Visualize clusters
-# -----------------------------------------------------------------------------
-
-cat("Creating cluster visualizations...\n\n")
-
-# Heatmap of cluster profiles (first 8 variables for readability)
-cluster_profiles <- cluster_data %>%
-  group_by(cluster) %>%
-  summarise(across(all_of(clustering_vars[1:min(8, length(clustering_vars))]),
-                   mean, na.rm = TRUE)) %>%
-  pivot_longer(-cluster, names_to = "variable", values_to = "value")
-
-p_heatmap <- ggplot(cluster_profiles, aes(x = variable, y = cluster, fill = value)) +
-  geom_tile(color = "white") +
-  scale_fill_gradient2(low = "blue", mid = "white", high = "red",
-                       midpoint = 0, name = "Z-score") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8)) +
-  labs(title = paste("Cluster Profiles (", chosen_k, "clusters)", sep = ""),
-       x = NULL, y = NULL)
-
-ggsave("cluster_profiles_heatmap.png", plot = p_heatmap, width = 12, height = 6, dpi = 300)
-cat("✓ Saved: cluster_profiles_heatmap.png\n")
-
-# PHQ-2 comparison by cluster
-if ("phq2_score" %in% names(cluster_data)) {
-  p_phq2 <- ggplot(cluster_data, aes(x = cluster, y = phq2_score, fill = cluster)) +
-    geom_boxplot(alpha = 0.7) +
-    theme_minimal() +
-    labs(title = "Depression (PHQ-2) by Cluster", y = "PHQ-2 Score", x = NULL) +
-    theme(legend.position = "none")
-  ggsave("cluster_phq2_comparison.png", plot = p_phq2, width = 8, height = 6, dpi = 300)
-  cat("✓ Saved: cluster_phq2_comparison.png\n")
-}
-cat("\n")
-
-# -----------------------------------------------------------------------------
-# F. Compare clusters on discontinuation
-# -----------------------------------------------------------------------------
-
-cat("Analyzing BZRA discontinuation differences by cluster...\n\n")
-
-discont_by_cluster <- cluster_data %>%
-  mutate(discontinued = as.numeric(as.character(scrn_stopped_bzra))) %>%
-  group_by(cluster) %>%
-  summarise(N = n(),
-            N_discontinued = sum(discontinued, na.rm = TRUE),
-            Discontinuation_Rate = mean(discontinued, na.rm = TRUE),
-            SE = sqrt(Discontinuation_Rate * (1 - Discontinuation_Rate) / N),
-            CI_lower = Discontinuation_Rate - 1.96 * SE,
-            CI_upper = Discontinuation_Rate + 1.96 * SE) %>%
-  mutate(Discontinuation_Rate = round(100 * Discontinuation_Rate, 1),
-         CI_lower = round(100 * CI_lower, 1),
-         CI_upper = round(100 * CI_upper, 1))
-
-cat("Discontinuation rates by cluster:\n")
-print(discont_by_cluster, row.names = FALSE)
-cat("\n")
-
-# Chi-square test
-chisq_test <- chisq.test(table(cluster_data$cluster, cluster_data$scrn_stopped_bzra))
-cat("Chi-square test for cluster discontinuation differences:\n")
-cat("  χ² =", round(chisq_test$statistic, 2), "\n")
-cat("  p =", format.pval(chisq_test$p.value, digits = 3), "\n\n")
-
-if (chisq_test$p.value < 0.05) {
-  cat("✓ SIGNIFICANT: Discontinuation rates differ by cluster.\n\n")
-} else {
-  cat("⚠ NOT SIGNIFICANT: No significant difference in discontinuation by cluster.\n\n")
+for(m in 1:mids_obj$m) {
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit with consensus k
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = consensus_k, verbose = FALSE)
+  
+  # Calculate entropy
+  entropy_m <- 1 - (sum(-lpa_fit_m$z * log(lpa_fit_m$z), na.rm = TRUE) / 
+                    (nrow(lpa_scaled_m) * log(consensus_k)))
+  
+  # Store
+  lpa_consensus_list[[m]] <- lpa_fit_m
+  profile_assignments_list[[m]] <- lpa_fit_m$classification
+  entropy_list[m] <- entropy_m
 }
 
-# Plot discontinuation rates
-p_discont <- ggplot(discont_by_cluster, aes(x = cluster, y = Discontinuation_Rate, fill = cluster)) +
-  geom_col(alpha = 0.8) +
-  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.3) +
-  geom_text(aes(label = paste0(Discontinuation_Rate, "%")), vjust = -0.5, fontface = "bold") +
-  theme_minimal() +
-  labs(title = "BZRA Discontinuation Rate by Cluster", subtitle = "95% CI Error Bars",
-       y = "Discontinuation Rate (%)", x = NULL) +
-  theme(legend.position = "none") +
-  ylim(0, max(discont_by_cluster$CI_upper) * 1.15)
-
-ggsave("cluster_discontinuation_rates.png", plot = p_discont, width = 10, height = 6, dpi = 300)
-cat("✓ Saved: cluster_discontinuation_rates.png\n\n")
+cat("Entropy across imputations:\n")
+cat("  Mean:", round(mean(entropy_list), 3), "\n")
+cat("  SD:", round(sd(entropy_list), 3), "\n")
+cat("  Range:", round(min(entropy_list), 3), "-", round(max(entropy_list), 3), "\n\n")
 
 # -----------------------------------------------------------------------------
-# G. Stability check across imputations
+# STEP 4: Obtain consensus profile assignments
+# Method: Use first imputation as reference, assign based on modal profile
 # -----------------------------------------------------------------------------
 
-cat("Checking cluster stability across imputations 2-5...\n\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 4: Creating consensus profile assignments\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cluster_one_imputation <- function(imp_num, mids_obj, vars, k) {
-  imp_data <- complete(mids_obj, imp_num) %>%
-    select(all_of(vars)) %>%
-    na.omit()
-  cluster_mat <- imp_data %>%
-    mutate(across(where(is.factor), as.numeric)) %>%
-    scale()
-  set.seed(123 + imp_num)
-  km <- kmeans(cluster_mat, centers = k, nstart = 50)
-  list(cluster = km$cluster, betweenss_ratio = km$betweenss / km$totss)
-}
+# Use first imputation as reference
+reference_lpa <- lpa_consensus_list[[1]]
+reference_profiles <- profile_assignments_list[[1]]
 
-stability_clusters <- lapply(2:5, cluster_one_imputation,
-                             mids_obj = mids_obj,
-                             vars = clustering_vars,
-                             k = chosen_k)
+# For simplicity, use the modal profile assignment across imputations
+# This is more stable than using just one imputation
+n_obs <- length(reference_profiles)
 
-stability_metrics <- data.frame(
-  Imputation = c(1, 2:5),
-  Between_SS_Ratio = c(
-    final_km$betweenss/final_km$totss,
-    sapply(stability_clusters, function(x) x$betweenss_ratio)
+# Create matrix of profile assignments (rows = obs, cols = imputations)
+profile_matrix <- do.call(cbind, profile_assignments_list)
+
+# Get modal profile for each observation
+modal_profiles <- apply(profile_matrix, 1, function(x) {
+  as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+})
+
+# Create final dataset with consensus profiles
+consensus_data <- complete(mids_obj, 1) %>%
+  select(all_of(personality_vars)) %>%
+  mutate(
+    profile = factor(modal_profiles,
+                    levels = 1:consensus_k,
+                    labels = paste0("Profile_", 1:consensus_k))
   )
-) %>%
-  mutate(Between_SS_Ratio = round(Between_SS_Ratio, 3))
 
-cat("Stability metrics across imputations:\n")
-print(stability_metrics)
-cat("\n")
+cat("Consensus profile distribution:\n")
+print(table(consensus_data$profile))
+cat("\nProportions (%):\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
 
-stability_sd <- sd(stability_metrics$Between_SS_Ratio)
-cat("Standard deviation of between-SS ratio:", round(stability_sd, 4), "\n")
+# Calculate assignment stability (what % of imputations agree with modal?)
+assignment_stability <- apply(profile_matrix, 1, function(x) {
+  modal_val <- as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+  mean(x == modal_val)
+})
 
-if (stability_sd < 0.05) {
-  cat("✓ Stable clustering across imputations\n\n")
-} else {
-  cat("⚠ Unstable clustering; consider robust methods or fewer clusters\n\n")
-}
+cat("Profile assignment stability:\n")
+cat("  Mean agreement:", round(100 * mean(assignment_stability), 1), "%\n")
+cat("  Median agreement:", round(100 * median(assignment_stability), 1), "%\n")
+cat("  Min agreement:", round(100 * min(assignment_stability), 1), "%\n\n")
 
 # -----------------------------------------------------------------------------
-# H. Name the clusters (clinical interpretation)
+# STEP 5: Pool profile characteristics across imputations
 # -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("CLUSTER NAMING - REVIEW THE PROFILES ABOVE\n")
+cat("STEP 5: Pooling profile characteristics across imputations\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cluster_names <- c(
-  "Cluster_1" = "Name_Cluster_1_Here",
-  "Cluster_2" = "Name_Cluster_2_Here",
-  "Cluster_3" = "Name_Cluster_3_Here",
-  "Cluster_4" = "Name_Cluster_4_Here",
-  "Cluster_5" = "Name_Cluster_5_Here",
-  "Cluster_6" = "Name_Cluster_6_Here",
-  "Cluster_7" = "Name_Cluster_7_Here",
-  "Cluster_8" = "Name_Cluster_8_Here"
-)[1:chosen_k]
+# For each imputation, calculate profile means
+profile_means_list <- list()
 
-cat("Your cluster names (UPDATE THESE):\n")
-for (i in 1:chosen_k) {
-  cat(" Cluster", i, ":", cluster_names[i], "\n")
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    select(all_of(personality_vars)) %>%
+    mutate(profile = factor(profile_assignments_list[[m]],
+                           levels = 1:consensus_k,
+                           labels = paste0("Profile_", 1:consensus_k)))
+  
+  profile_means_m <- imp_data %>%
+    group_by(profile) %>%
+    summarise(across(all_of(personality_vars), mean, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(imputation = m)
+  
+  profile_means_list[[m]] <- profile_means_m
 }
+
+# Combine and average across imputations
+pooled_profile_means <- bind_rows(profile_means_list) %>%
+  group_by(profile) %>%
+  summarise(across(all_of(personality_vars), 
+                   list(mean = mean, sd = sd)),
+            .groups = "drop")
+
+cat("Pooled profile characteristics (averaged across", mids_obj$m, "imputations):\n\n")
+
+# Create a cleaner table
+profile_summary <- pooled_profile_means %>%
+  select(profile, ends_with("_mean")) %>%
+  rename_with(~str_remove(., "_mean"), ends_with("_mean"))
+
+print(profile_summary, n = Inf)
 cat("\n")
 
-cluster_data <- cluster_data %>%
-  mutate(cluster_named = recode(cluster, !!!cluster_names))
-
-discont_by_cluster_named <- discont_by_cluster %>%
-  mutate(cluster_named = cluster_names[as.character(cluster)])
-
 # -----------------------------------------------------------------------------
-# I. Save results
+# STEP 6: Statistical comparison of profiles (pooled)
 # -----------------------------------------------------------------------------
 
-cat("Saving clustering results...\n\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PERSONALITY CHARACTERISTICS BY PROFILE (POOLED)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
 
-clustering_results <- list(
-  chosen_k = chosen_k,
-  final_model = final_km,
-  cluster_assignments = cluster_data$cluster,
-  cluster_names = cluster_names,
-  cluster_sizes = cluster_sizes,
-  discontinuation_by_cluster = discont_by_cluster_named,
-  cluster_comparison_table = cluster_table,
-  significant_differences = sig_vars_clusters,
-  stability_metrics = stability_metrics,
-  data_with_clusters = cluster_data
+# Use consensus profiles with first imputation for TableOne
+profile_table <- CreateTableOne(
+  vars = personality_vars,
+  strata = "profile",
+  data = consensus_data,
+  test = TRUE
 )
 
-saveRDS(clustering_results, "clustering_results.rds")
-cat("✓ Saved: clustering_results.rds\n")
+print(profile_table, smd = TRUE)
+cat("\n")
+cat("Note: Statistics based on consensus profile assignments\n")
+cat("      Means are pooled across", mids_obj$m, "imputations\n\n")
 
-cluster_summary <- discont_by_cluster_named %>%
-  select(cluster_named, N, Discontinuation_Rate, CI_lower, CI_upper)
+# -----------------------------------------------------------------------------
+# STEP 7: Visualizations using reference imputation
+# -----------------------------------------------------------------------------
 
-write.csv(cluster_summary, "cluster_summary.csv", row.names = FALSE)
-cat("✓ Saved: cluster_summary.csv\n\n")
+cat("Creating profile visualizations...\n\n")
+
+# Use reference LPA for BIC plot
+bic_plot <- fviz_mclust(reference_lpa, "BIC", palette = "jco") +
+  labs(title = "LPA Model Selection: BIC Values (Reference Imputation)",
+       subtitle = paste0("Consensus k = ", consensus_k, " across ", mids_obj$m, " imputations")) +
+  theme_minimal()
+
+ggsave("lpa_bic_selection_MI.png", plot = bic_plot, width = 10, height = 6, dpi = 300)
+
+# Classification plot using consensus profiles
+consensus_scaled <- scale(consensus_data %>% select(-profile))
+pca_result <- prcomp(consensus_scaled, scale. = FALSE)
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  profile = consensus_data$profile
+)
+
+class_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = profile)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(title = paste("Patient Profiles (k =", consensus_k, ") - Consensus Assignment"),
+       subtitle = paste0("Based on ", mids_obj$m, " imputed datasets"),
+       x = "First Principal Component",
+       y = "Second Principal Component",
+       color = "Profile")
+
+ggsave("lpa_profiles_descriptive_MI.png", plot = class_plot, 
+       width = 10, height = 8, dpi = 300)
+
+# Heatmap with pooled means
+heatmap_data <- profile_summary %>%
+  pivot_longer(-profile, names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  mutate(z_score = scale(value)[, 1]) %>%
+  ungroup()
+
+p_heatmap <- ggplot(heatmap_data, aes(x = variable, y = profile, fill = z_score)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B",
+                       midpoint = 0, name = "Z-Score",
+                       limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        plot.title = element_text(size = 14, face = "bold")) +
+  labs(title = paste("Personality Profiles (k =", consensus_k, ") - Pooled Estimates"),
+       subtitle = paste0("Averaged across ", mids_obj$m, " imputations - Red = Higher, Blue = Lower"),
+       x = NULL, y = "Profile")
+
+ggsave("lpa_profile_heatmap_MI.png", plot = p_heatmap, 
+       width = 12, height = 6, dpi = 300)
+
+cat("✓ Profile visualizations saved\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 8: Exploratory discontinuation comparison (pooled across imputations)
+# -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("CLUSTERING ANALYSIS COMPLETE\n")
+cat("EXPLORATORY: Profile differences in discontinuation\n")
+cat("(Descriptive comparison - NOT predictive modeling)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("SUMMARY:\n")
-cat("  • Number of clusters:", chosen_k, "\n")
-cat("  • Total observations:", nrow(cluster_data), "\n")
-cat("  • Personality variables included:", length(personality_vars), "\n")
-cat("  • Demographic variables included:", length(demographic_vars), "\n")
-cat("  • Discontinuation rates differ:", 
-    ifelse(chisq_test$p.value < 0.05, "YES", "NO"), 
-    "(p =", format.pval(chisq_test$p.value, digits = 3), ")\n\n")
+# Calculate discontinuation rates pooled across all imputations
+discont_rates_list <- list()
 
-cat("YOUR PATIENT PROFILES:\n")
-for(i in 1:chosen_k) {
-  cluster_info <- discont_by_cluster_named[i, ]
-  cat("  ", cluster_names[i], "\n")
-  cat("     N =", cluster_info$N, 
-      ", Discontinuation =", cluster_info$Discontinuation_Rate, "%\n")
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    mutate(row_id = row_number()) %>%
+    select(row_id, scrn_stopped_bzra) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  # Merge with consensus profiles
+  imp_with_profile <- consensus_profiles_df %>%
+    left_join(imp_data, by = "row_id") %>%
+    filter(!is.na(scrn_stopped_bzra)) %>%
+    mutate(discontinued = as.numeric(as.character(scrn_stopped_bzra)))
+  
+  # Calculate rates by profile
+  rates_m <- imp_with_profile %>%
+    group_by(profile) %>%
+    summarise(
+      N = n(),
+      N_discontinued = sum(discontinued, na.rm = TRUE),
+      Rate = mean(discontinued, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(imputation = m)
+  
+  discont_rates_list[[m]] <- rates_m
+}
+
+# Pool discontinuation rates
+pooled_discont <- bind_rows(discont_rates_list) %>%
+  group_by(profile) %>%
+  summarise(
+    N = mean(N),  # Should be same across imputations
+    Mean_Rate = mean(Rate),
+    SD_Rate = sd(Rate),
+    SE_Rate = SD_Rate / sqrt(mids_obj$m),
+    CI_lower = Mean_Rate - 1.96 * SE_Rate,
+    CI_upper = Mean_Rate + 1.96 * SE_Rate,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Rate_Pct = round(100 * Mean_Rate, 1),
+    CI_lower_Pct = round(100 * CI_lower, 1),
+    CI_upper_Pct = round(100 * CI_upper, 1)
+  )
+
+cat("Discontinuation rates by profile (POOLED ACROSS", mids_obj$m, "IMPUTATIONS):\n")
+print(pooled_discont %>% 
+        select(profile, N, Rate_Pct, CI_lower_Pct, CI_upper_Pct))
+cat("\n")
+
+# Chi-square test using first imputation (for reference)
+first_imp_test <- complete(mids_obj, 1) %>%
+  mutate(row_id = row_number()) %>%
+  inner_join(consensus_profiles_df, by = "row_id") %>%
+  filter(!is.na(scrn_stopped_bzra))
+
+if(nrow(first_imp_test) > 0) {
+  chisq_test <- chisq.test(table(first_imp_test$profile, 
+                                 first_imp_test$scrn_stopped_bzra))
+  cat("Chi-square test (exploratory, first imputation):\n")
+  cat("  χ² =", round(chisq_test$statistic, 2), "\n")
+  cat("  p =", format.pval(chisq_test$p.value, digits = 3), "\n\n")
+}
+
+cat("⚠ IMPORTANT: This is EXPLORATORY, not predictive\n")
+cat("   Use regression (below) for actual prediction\n\n")
+
+# Save plot with pooled rates
+p_explore <- ggplot(pooled_discont, 
+                    aes(x = profile, y = Rate_Pct, fill = profile)) +
+  geom_col(alpha = 0.8) +
+  geom_errorbar(aes(ymin = CI_lower_Pct, ymax = CI_upper_Pct), width = 0.3) +
+  geom_text(aes(label = paste0(Rate_Pct, "%")), vjust = -0.5, size = 4) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  labs(title = "EXPLORATORY: Discontinuation by Profile (Pooled)",
+       subtitle = paste0("Rates averaged across ", mids_obj$m, " imputations"),
+       y = "Discontinuation Rate (%)", x = "Profile") +
+  theme(legend.position = "none")
+
+ggsave("lpa_exploratory_discontinuation_MI.png", plot = p_explore, 
+       width = 10, height = 6, dpi = 300)
+cat("✓ Saved exploratory plot\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 9: Save results
+# -----------------------------------------------------------------------------
+
+cat("Saving LPA results...\n\n")
+
+lpa_mi_results <- list(
+  # Consensus information
+  consensus_k = consensus_k,
+  n_imputations = mids_obj$m,
+  
+  # Profile assignments
+  consensus_profiles = consensus_data$profile,
+  assignment_stability = assignment_stability,
+  
+  # Model information
+  mean_entropy = mean(entropy_list),
+  entropy_sd = sd(entropy_list),
+  
+  # Pooled characteristics
+  pooled_means = profile_summary,
+  
+  # All LPA fits
+  lpa_fits = lpa_consensus_list,
+  
+  # Distribution
+  profile_distribution = table(consensus_data$profile)
+)
+
+saveRDS(lpa_mi_results, "lpa_results_multiple_imputation.rds")
+cat("✓ Saved: lpa_results_multiple_imputation.rds\n\n")
+
+# Also save consensus profiles to merge with other data later
+consensus_profiles_df <- data.frame(
+  row_id = 1:nrow(consensus_data),
+  profile = consensus_data$profile,
+  stability = assignment_stability
+)
+
+saveRDS(consensus_profiles_df, "consensus_profiles.rds")
+cat("✓ Saved: consensus_profiles.rds\n\n")
+
+# -----------------------------------------------------------------------------
+# SUMMARY
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("LPA WITH MULTIPLE IMPUTATION - COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("RESULTS SUMMARY:\n")
+cat("  Imputations analyzed:", mids_obj$m, "\n")
+cat("  Consensus profiles:", consensus_k, "\n")
+cat("  Mean entropy:", round(mean(entropy_list), 3), "±", round(sd(entropy_list), 3), "\n")
+cat("  Mean assignment stability:", round(100 * mean(assignment_stability), 1), "%\n\n")
+
+cat("PROFILE SIZES:\n")
+print(table(consensus_data$profile))
+cat("\nProportions:\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+cat("ADVANTAGES OF THIS APPROACH:\n")
+cat("  ✓ Uses all", mids_obj$m, "imputations (not just one)\n")
+cat("  ✓ Accounts for imputation uncertainty\n")
+cat("  ✓ More stable profile assignments\n")
+cat("  ✓ Pooled estimates reduce bias\n")
+cat("  ✓ Provides assignment stability metric\n\n")
+
+cat("OUTPUT FILES:\n")
+cat("  ✓ lpa_bic_selection_MI.png\n")
+cat("  ✓ lpa_profiles_descriptive_MI.png\n")
+cat("  ✓ lpa_profile_heatmap_MI.png\n")
+if(exists("p_explore")) {
+  cat("  ✓ lpa_exploratory_discontinuation_MI.png\n")
+}
+cat("  ✓ lpa_results_multiple_imputation.rds\n")
+cat("  ✓ consensus_profiles.rds\n\n")
+
+2.5 %`[i], 3), ",",
+        round(sig_demo#==============================================================================
+# LPA WITH MULTIPLE IMPUTATION - USING ALL 35 IMPUTED DATASETS
+# Approach: Fit LPA on each imputation, then combine results
+#==============================================================================
+
+library(tidyverse)
+library(mice)
+library(mclust)
+library(factoextra)
+library(tableone)
+library(ggplot2)
+library(gridExtra)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART 1: LATENT PROFILE ANALYSIS - WITH MULTIPLE IMPUTATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load mids imputed data
+mids_obj <- readRDS("imputed_data_with_subscales.rds")
+cat("Loaded mids object with", mids_obj$m, "imputations\n\n")
+
+cat("STAGE 1 OBJECTIVE: Identify distinct personality-based patient profiles\n")
+cat("Using ALL", mids_obj$m, "imputations for robust estimates\n")
+cat("This is DESCRIPTIVE, not predictive\n\n")
+
+# -----------------------------------------------------------------------------
+# Define personality variables for profiling
+# -----------------------------------------------------------------------------
+
+personality_vars <- c(
+  # BFI-10 subscales
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  
+  # SURPS subscales
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+  "SURPS_Anxiety_Sensitivity",
+  
+  # DBAS subscales
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", 
+  "DBAS_Medications",
+  
+  # CISS subscales
+  "CISS_Task", "CISS_Emotion", "CISS_Avoidance"
+)
+
+# Get first imputation to check variables
+first_imp <- complete(mids_obj, 1)
+personality_vars <- personality_vars[personality_vars %in% names(first_imp)]
+
+cat("Personality variables for profiling:\n")
+for(v in personality_vars) {
+  cat("  ✓", v, "\n")
+}
+cat("\nTotal:", length(personality_vars), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 1: Fit LPA on each imputed dataset
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 1: Fitting LPA on each of", mids_obj$m, "imputed datasets\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Store results from each imputation
+lpa_results_list <- list()
+bic_results <- list()
+selected_k_list <- numeric(mids_obj$m)
+
+set.seed(123)
+
+for(m in 1:mids_obj$m) {
+  cat("Processing imputation", m, "of", mids_obj$m, "...\n")
+  
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data (no missing values needed for LPA)
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale variables
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit LPA models (1-8 profiles)
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = 1:8, verbose = FALSE)
+  
+  # Store results
+  lpa_results_list[[m]] <- lpa_fit_m
+  bic_results[[m]] <- lpa_fit_m$BIC
+  selected_k_list[m] <- lpa_fit_m$G
+  
+  cat("  → Best k =", lpa_fit_m$G, ", BIC =", round(lpa_fit_m$bic, 2), "\n")
+}
+
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 2: Determine consensus number of profiles
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 2: Determining consensus number of profiles\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Most common k selected
+k_table <- table(selected_k_list)
+cat("Number of profiles selected across imputations:\n")
+print(k_table)
+cat("\n")
+
+# Use modal (most common) k
+consensus_k <- as.numeric(names(k_table)[which.max(k_table)])
+cat("Consensus number of profiles:", consensus_k, "\n")
+cat("Selected in", max(k_table), "out of", mids_obj$m, "imputations\n\n")
+
+# If there's a tie or concern, you could also use median/mean
+cat("Distribution of selected k:\n")
+cat("  Mode:", consensus_k, "\n")
+cat("  Median:", median(selected_k_list), "\n")
+cat("  Mean:", round(mean(selected_k_list), 2), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 3: Refit LPA with consensus k on all imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 3: Refitting LPA with k =", consensus_k, "on all imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+lpa_consensus_list <- list()
+profile_assignments_list <- list()
+entropy_list <- numeric(mids_obj$m)
+
+for(m in 1:mids_obj$m) {
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit with consensus k
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = consensus_k, verbose = FALSE)
+  
+  # Calculate entropy
+  entropy_m <- 1 - (sum(-lpa_fit_m$z * log(lpa_fit_m$z), na.rm = TRUE) / 
+                    (nrow(lpa_scaled_m) * log(consensus_k)))
+  
+  # Store
+  lpa_consensus_list[[m]] <- lpa_fit_m
+  profile_assignments_list[[m]] <- lpa_fit_m$classification
+  entropy_list[m] <- entropy_m
+}
+
+cat("Entropy across imputations:\n")
+cat("  Mean:", round(mean(entropy_list), 3), "\n")
+cat("  SD:", round(sd(entropy_list), 3), "\n")
+cat("  Range:", round(min(entropy_list), 3), "-", round(max(entropy_list), 3), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 4: Obtain consensus profile assignments
+# Method: Use first imputation as reference, assign based on modal profile
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 4: Creating consensus profile assignments\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use first imputation as reference
+reference_lpa <- lpa_consensus_list[[1]]
+reference_profiles <- profile_assignments_list[[1]]
+
+# For simplicity, use the modal profile assignment across imputations
+# This is more stable than using just one imputation
+n_obs <- length(reference_profiles)
+
+# Create matrix of profile assignments (rows = obs, cols = imputations)
+profile_matrix <- do.call(cbind, profile_assignments_list)
+
+# Get modal profile for each observation
+modal_profiles <- apply(profile_matrix, 1, function(x) {
+  as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+})
+
+# Create final dataset with consensus profiles
+consensus_data <- complete(mids_obj, 1) %>%
+  select(all_of(personality_vars)) %>%
+  mutate(
+    profile = factor(modal_profiles,
+                    levels = 1:consensus_k,
+                    labels = paste0("Profile_", 1:consensus_k))
+  )
+
+cat("Consensus profile distribution:\n")
+print(table(consensus_data$profile))
+cat("\nProportions (%):\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+# Calculate assignment stability (what % of imputations agree with modal?)
+assignment_stability <- apply(profile_matrix, 1, function(x) {
+  modal_val <- as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+  mean(x == modal_val)
+})
+
+cat("Profile assignment stability:\n")
+cat("  Mean agreement:", round(100 * mean(assignment_stability), 1), "%\n")
+cat("  Median agreement:", round(100 * median(assignment_stability), 1), "%\n")
+cat("  Min agreement:", round(100 * min(assignment_stability), 1), "%\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 5: Pool profile characteristics across imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 5: Pooling profile characteristics across imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# For each imputation, calculate profile means
+profile_means_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    select(all_of(personality_vars)) %>%
+    mutate(profile = factor(profile_assignments_list[[m]],
+                           levels = 1:consensus_k,
+                           labels = paste0("Profile_", 1:consensus_k)))
+  
+  profile_means_m <- imp_data %>%
+    group_by(profile) %>%
+    summarise(across(all_of(personality_vars), mean, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(imputation = m)
+  
+  profile_means_list[[m]] <- profile_means_m
+}
+
+# Combine and average across imputations
+pooled_profile_means <- bind_rows(profile_means_list) %>%
+  group_by(profile) %>%
+  summarise(across(all_of(personality_vars), 
+                   list(mean = mean, sd = sd)),
+            .groups = "drop")
+
+cat("Pooled profile characteristics (averaged across", mids_obj$m, "imputations):\n\n")
+
+# Create a cleaner table
+profile_summary <- pooled_profile_means %>%
+  select(profile, ends_with("_mean")) %>%
+  rename_with(~str_remove(., "_mean"), ends_with("_mean"))
+
+print(profile_summary, n = Inf)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 6: Statistical comparison of profiles (pooled)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PERSONALITY CHARACTERISTICS BY PROFILE (POOLED)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use consensus profiles with first imputation for TableOne
+profile_table <- CreateTableOne(
+  vars = personality_vars,
+  strata = "profile",
+  data = consensus_data,
+  test = TRUE
+)
+
+print(profile_table, smd = TRUE)
+cat("\n")
+cat("Note: Statistics based on consensus profile assignments\n")
+cat("      Means are pooled across", mids_obj$m, "imputations\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 7: Visualizations using reference imputation
+# -----------------------------------------------------------------------------
+
+cat("Creating profile visualizations...\n\n")
+
+# Use reference LPA for BIC plot
+bic_plot <- fviz_mclust(reference_lpa, "BIC", palette = "jco") +
+  labs(title = "LPA Model Selection: BIC Values (Reference Imputation)",
+       subtitle = paste0("Consensus k = ", consensus_k, " across ", mids_obj$m, " imputations")) +
+  theme_minimal()
+
+ggsave("lpa_bic_selection_MI.png", plot = bic_plot, width = 10, height = 6, dpi = 300)
+
+# Classification plot using consensus profiles
+consensus_scaled <- scale(consensus_data %>% select(-profile))
+pca_result <- prcomp(consensus_scaled, scale. = FALSE)
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  profile = consensus_data$profile
+)
+
+class_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = profile)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(title = paste("Patient Profiles (k =", consensus_k, ") - Consensus Assignment"),
+       subtitle = paste0("Based on ", mids_obj$m, " imputed datasets"),
+       x = "First Principal Component",
+       y = "Second Principal Component",
+       color = "Profile")
+
+ggsave("lpa_profiles_descriptive_MI.png", plot = class_plot, 
+       width = 10, height = 8, dpi = 300)
+
+# Heatmap with pooled means
+heatmap_data <- profile_summary %>%
+  pivot_longer(-profile, names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  mutate(z_score = scale(value)[, 1]) %>%
+  ungroup()
+
+p_heatmap <- ggplot(heatmap_data, aes(x = variable, y = profile, fill = z_score)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B",
+                       midpoint = 0, name = "Z-Score",
+                       limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        plot.title = element_text(size = 14, face = "bold")) +
+  labs(title = paste("Personality Profiles (k =", consensus_k, ") - Pooled Estimates"),
+       subtitle = paste0("Averaged across ", mids_obj$m, " imputations - Red = Higher, Blue = Lower"),
+       x = NULL, y = "Profile")
+
+ggsave("lpa_profile_heatmap_MI.png", plot = p_heatmap, 
+       width = 12, height = 6, dpi = 300)
+
+cat("✓ Profile visualizations saved\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 8: Exploratory discontinuation comparison (pooled across imputations)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("EXPLORATORY: Profile differences in discontinuation\n")
+cat("(Descriptive comparison - NOT predictive modeling)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Calculate discontinuation rates pooled across all imputations
+discont_rates_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    mutate(row_id = row_number()) %>%
+    select(row_id, scrn_stopped_bzra) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  # Merge with consensus profiles
+  imp_with_profile <- consensus_profiles_df %>%
+    left_join(imp_data, by = "row_id") %>%
+    filter(!is.na(scrn_stopped_bzra)) %>%
+    mutate(discontinued = as.numeric(as.character(scrn_stopped_bzra)))
+  
+  # Calculate rates by profile
+  rates_m <- imp_with_profile %>%
+    group_by(profile) %>%
+    summarise(
+      N = n(),
+      N_discontinued = sum(discontinued, na.rm = TRUE),
+      Rate = mean(discontinued, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(imputation = m)
+  
+  discont_rates_list[[m]] <- rates_m
+}
+
+# Pool discontinuation rates
+pooled_discont <- bind_rows(discont_rates_list) %>%
+  group_by(profile) %>%
+  summarise(
+    N = mean(N),  # Should be same across imputations
+    Mean_Rate = mean(Rate),
+    SD_Rate = sd(Rate),
+    SE_Rate = SD_Rate / sqrt(mids_obj$m),
+    CI_lower = Mean_Rate - 1.96 * SE_Rate,
+    CI_upper = Mean_Rate + 1.96 * SE_Rate,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Rate_Pct = round(100 * Mean_Rate, 1),
+    CI_lower_Pct = round(100 * CI_lower, 1),
+    CI_upper_Pct = round(100 * CI_upper, 1)
+  )
+
+cat("Discontinuation rates by profile (POOLED ACROSS", mids_obj$m, "IMPUTATIONS):\n")
+print(pooled_discont %>% 
+        select(profile, N, Rate_Pct, CI_lower_Pct, CI_upper_Pct))
+cat("\n")
+
+# Chi-square test using first imputation (for reference)
+first_imp_test <- complete(mids_obj, 1) %>%
+  mutate(row_id = row_number()) %>%
+  inner_join(consensus_profiles_df, by = "row_id") %>%
+  filter(!is.na(scrn_stopped_bzra))
+
+if(nrow(first_imp_test) > 0) {
+  chisq_test <- chisq.test(table(first_imp_test$profile, 
+                                 first_imp_test$scrn_stopped_bzra))
+  cat("Chi-square test (exploratory, first imputation):\n")
+  cat("  χ² =", round(chisq_test$statistic, 2), "\n")
+  cat("  p =", format.pval(chisq_test$p.value, digits = 3), "\n\n")
+}
+
+cat("⚠ IMPORTANT: This is EXPLORATORY, not predictive\n")
+cat("   Use regression (below) for actual prediction\n\n")
+
+# Save plot with pooled rates
+p_explore <- ggplot(pooled_discont, 
+                    aes(x = profile, y = Rate_Pct, fill = profile)) +
+  geom_col(alpha = 0.8) +
+  geom_errorbar(aes(ymin = CI_lower_Pct, ymax = CI_upper_Pct), width = 0.3) +
+  geom_text(aes(label = paste0(Rate_Pct, "%")), vjust = -0.5, size = 4) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  labs(title = "EXPLORATORY: Discontinuation by Profile (Pooled)",
+       subtitle = paste0("Rates averaged across ", mids_obj$m, " imputations"),
+       y = "Discontinuation Rate (%)", x = "Profile") +
+  theme(legend.position = "none")
+
+ggsave("lpa_exploratory_discontinuation_MI.png", plot = p_explore, 
+       width = 10, height = 6, dpi = 300)
+cat("✓ Saved exploratory plot\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 9: Save results
+# -----------------------------------------------------------------------------
+
+cat("Saving LPA results...\n\n")
+
+lpa_mi_results <- list(
+  # Consensus information
+  consensus_k = consensus_k,
+  n_imputations = mids_obj$m,
+  
+  # Profile assignments
+  consensus_profiles = consensus_data$profile,
+  assignment_stability = assignment_stability,
+  
+  # Model information
+  mean_entropy = mean(entropy_list),
+  entropy_sd = sd(entropy_list),
+  
+  # Pooled characteristics
+  pooled_means = profile_summary,
+  
+  # All LPA fits
+  lpa_fits = lpa_consensus_list,
+  
+  # Distribution
+  profile_distribution = table(consensus_data$profile)
+)
+
+saveRDS(lpa_mi_results, "lpa_results_multiple_imputation.rds")
+cat("✓ Saved: lpa_results_multiple_imputation.rds\n\n")
+
+# Also save consensus profiles to merge with other data later
+consensus_profiles_df <- data.frame(
+  row_id = 1:nrow(consensus_data),
+  profile = consensus_data$profile,
+  stability = assignment_stability
+)
+
+saveRDS(consensus_profiles_df, "consensus_profiles.rds")
+cat("✓ Saved: consensus_profiles.rds\n\n")
+
+# -----------------------------------------------------------------------------
+# SUMMARY
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("LPA WITH MULTIPLE IMPUTATION - COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("RESULTS SUMMARY:\n")
+cat("  Imputations analyzed:", mids_obj$m, "\n")
+cat("  Consensus profiles:", consensus_k, "\n")
+cat("  Mean entropy:", round(mean(entropy_list), 3), "±", round(sd(entropy_list), 3), "\n")
+cat("  Mean assignment stability:", round(100 * mean(assignment_stability), 1), "%\n\n")
+
+cat("PROFILE SIZES:\n")
+print(table(consensus_data$profile))
+cat("\nProportions:\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+cat("ADVANTAGES OF THIS APPROACH:\n")
+cat("  ✓ Uses all", mids_obj$m, "imputations (not just one)\n")
+cat("  ✓ Accounts for imputation uncertainty\n")
+cat("  ✓ More stable profile assignments\n")
+cat("  ✓ Pooled estimates reduce bias\n")
+cat("  ✓ Provides assignment stability metric\n\n")
+
+cat("OUTPUT FILES:\n")
+cat("  ✓ lpa_bic_selection_MI.png\n")
+cat("  ✓ lpa_profiles_descriptive_MI.png\n")
+cat("  ✓ lpa_profile_heatmap_MI.png\n")
+if(exists("p_explore")) {
+  cat("  ✓ lpa_exploratory_discontinuation_MI.png\n")
+}
+cat("  ✓ lpa_results_multiple_imputation.rds\n")
+cat("  ✓ consensus_profiles.rds\n\n")
+
+97.5 %`[i], 3), "]\n")
+    cat("      p =", format.pval(sig_demo$p.value[i], digits = 3), "\n")
+  }
+} else {
+  cat("  (None)\n")
 }
 cat("\n")
 
-cat("KEY OUTPUTS TO REVIEW:\n")
-cat("  1. clustering_silhouette_method.png - Optimal cluster selection\n")
-cat("  2. cluster_profiles_heatmap.png - What characterizes each cluster\n")
-cat("  3. cluster_discontinuation_rates.png - Which clusters discontinue more\n")
-cat("  4. cluster_summary.csv - Summary table for manuscript\n\n")
+# Calculate pooled AUC
+auc_demo_list <- numeric(mids_obj$m)
 
-cat("NEXT STEPS:\n")
-cat("  1. Review visualizations and name your clusters (Part H)\n")
-cat("  2. Proceed to Chunk 10 (Sensitivity Analyses)\n")
-cat("  3. Then Chunk 11 (FDR-Corrected Comparisons)\n\n")
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  model_m <- glm(formula_demo, data = imp_data, family = binomial)
+  pred_m <- predict(model_m, type = "response")
+  
+  outcome_numeric <- as.numeric(as.character(imp_data$scrn_stopped_bzra))
+  roc_m <- roc(outcome_numeric, pred_m, quiet = TRUE)
+  auc_demo_list[m] <- auc(roc_m)
+}
 
-cat("✓ Ready for sensitivity analyses!\n\n")
+mean_auc_demo <- mean(auc_demo_list)
+se_auc_demo <- sd(auc_demo_list) / sqrt(mids_obj$m)
+
+cat("Pooled AUC (Demographics Only):\n")
+cat("  Mean AUC:", round(mean_auc_demo, 3), "\n")
+cat("  SE:", round(se_auc_demo, 4), "\n")
+cat("  95% CI:", round(mean_auc_demo - 1.96 * se_auc_demo, 3), "-",
+    round(mean_auc_demo + 1.96 * se_auc_demo, 3), "\n\n")
+
+# -----------------------------------------------------------------------------
+# MODEL 2: Personality Only
+# -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("END OF CHUNK 9\n")
+cat("MODEL 2: PERSONALITY ONLY\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
+# Create formula
+formula_pers <- as.formula(paste("scrn_stopped_bzra ~", 
+                                 paste(personality_predictors, collapse = " + ")))
+
+cat("Formula:", deparse(formula_pers), "\n\n")
+
+# Fit on each imputation
+cat("Fitting personality model on", mids_obj$m, "imputations...\n")
+fit_pers <- with(mids_obj, glm(formula_pers, family = binomial))
+
+# Pool results
+pooled_pers <- pool(fit_pers)
+summary_pers <- summary(pooled_pers, conf.int = TRUE, exponentiate = TRUE)
+
+cat("\nPooled results (Rubin's rules):\n")
+print(summary_pers, digits = 3)
+cat("\n")
+
+# Get significant predictors
+sig_pers <- summary_pers %>%
+  filter(p.value < 0.05, term != "(Intercept)")
+
+cat("Significant predictors (p < 0.05):\n")
+if(nrow(sig_pers) > 0) {
+  for(i in 1:nrow(sig_pers)) {
+    cat("  ✓", sig_pers$term[i], "\n")
+    cat("      OR =", round(sig_pers$estimate[i], 3), 
+        ", 95% CI: [", round(sig_pers#==============================================================================
+# LPA WITH MULTIPLE IMPUTATION - USING ALL 35 IMPUTED DATASETS
+# Approach: Fit LPA on each imputation, then combine results
 #==============================================================================
-# Explanation of key changes for clustering:
-#
-# - Removed outcome variable scrn_stopped_bzra from clustering matrix input.
-# - Included only demographic and personality variables in the clustering matrix.
-# - Outcome vector (scrn_stopped_bzra) is kept separately aligned with clustering data rows,
-#   for post-clustering comparisons and validation.
-# - Categorical variables are converted to numeric before scaling.
-# - na.omit() applied on clustering covariates to ensure complete cases; outcome vector aligned accordingly.
-# - This structure prevents information leakage from outcome during clustering.
-# - Keep variable selection consistent with clustering objective for interpretable patient profiles.
-#
-# Suggestions / considerations:
-# - Confirm that categories in demographic variables are appropriately encoded (e.g., dummy variables) if needed.
-# - Consider imputation approach impact on clustering stability.
-# - Review cluster number choice (k) balancing interpretability and detail.
-# - Use stability checks across imputations to confirm robustness.
-#
-# This approach provides clinically meaningful clusters without leaking the outcome variable into the unsupervised step.
+
+library(tidyverse)
+library(mice)
+library(mclust)
+library(factoextra)
+library(tableone)
+library(ggplot2)
+library(gridExtra)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART 1: LATENT PROFILE ANALYSIS - WITH MULTIPLE IMPUTATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load mids imputed data
+mids_obj <- readRDS("imputed_data_with_subscales.rds")
+cat("Loaded mids object with", mids_obj$m, "imputations\n\n")
+
+cat("STAGE 1 OBJECTIVE: Identify distinct personality-based patient profiles\n")
+cat("Using ALL", mids_obj$m, "imputations for robust estimates\n")
+cat("This is DESCRIPTIVE, not predictive\n\n")
+
+# -----------------------------------------------------------------------------
+# Define personality variables for profiling
+# -----------------------------------------------------------------------------
+
+personality_vars <- c(
+  # BFI-10 subscales
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  
+  # SURPS subscales
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+  "SURPS_Anxiety_Sensitivity",
+  
+  # DBAS subscales
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", 
+  "DBAS_Medications",
+  
+  # CISS subscales
+  "CISS_Task", "CISS_Emotion", "CISS_Avoidance"
+)
+
+# Get first imputation to check variables
+first_imp <- complete(mids_obj, 1)
+personality_vars <- personality_vars[personality_vars %in% names(first_imp)]
+
+cat("Personality variables for profiling:\n")
+for(v in personality_vars) {
+  cat("  ✓", v, "\n")
+}
+cat("\nTotal:", length(personality_vars), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 1: Fit LPA on each imputed dataset
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 1: Fitting LPA on each of", mids_obj$m, "imputed datasets\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Store results from each imputation
+lpa_results_list <- list()
+bic_results <- list()
+selected_k_list <- numeric(mids_obj$m)
+
+set.seed(123)
+
+for(m in 1:mids_obj$m) {
+  cat("Processing imputation", m, "of", mids_obj$m, "...\n")
+  
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data (no missing values needed for LPA)
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale variables
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit LPA models (1-8 profiles)
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = 1:8, verbose = FALSE)
+  
+  # Store results
+  lpa_results_list[[m]] <- lpa_fit_m
+  bic_results[[m]] <- lpa_fit_m$BIC
+  selected_k_list[m] <- lpa_fit_m$G
+  
+  cat("  → Best k =", lpa_fit_m$G, ", BIC =", round(lpa_fit_m$bic, 2), "\n")
+}
+
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 2: Determine consensus number of profiles
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 2: Determining consensus number of profiles\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Most common k selected
+k_table <- table(selected_k_list)
+cat("Number of profiles selected across imputations:\n")
+print(k_table)
+cat("\n")
+
+# Use modal (most common) k
+consensus_k <- as.numeric(names(k_table)[which.max(k_table)])
+cat("Consensus number of profiles:", consensus_k, "\n")
+cat("Selected in", max(k_table), "out of", mids_obj$m, "imputations\n\n")
+
+# If there's a tie or concern, you could also use median/mean
+cat("Distribution of selected k:\n")
+cat("  Mode:", consensus_k, "\n")
+cat("  Median:", median(selected_k_list), "\n")
+cat("  Mean:", round(mean(selected_k_list), 2), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 3: Refit LPA with consensus k on all imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 3: Refitting LPA with k =", consensus_k, "on all imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+lpa_consensus_list <- list()
+profile_assignments_list <- list()
+entropy_list <- numeric(mids_obj$m)
+
+for(m in 1:mids_obj$m) {
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit with consensus k
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = consensus_k, verbose = FALSE)
+  
+  # Calculate entropy
+  entropy_m <- 1 - (sum(-lpa_fit_m$z * log(lpa_fit_m$z), na.rm = TRUE) / 
+                    (nrow(lpa_scaled_m) * log(consensus_k)))
+  
+  # Store
+  lpa_consensus_list[[m]] <- lpa_fit_m
+  profile_assignments_list[[m]] <- lpa_fit_m$classification
+  entropy_list[m] <- entropy_m
+}
+
+cat("Entropy across imputations:\n")
+cat("  Mean:", round(mean(entropy_list), 3), "\n")
+cat("  SD:", round(sd(entropy_list), 3), "\n")
+cat("  Range:", round(min(entropy_list), 3), "-", round(max(entropy_list), 3), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 4: Obtain consensus profile assignments
+# Method: Use first imputation as reference, assign based on modal profile
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 4: Creating consensus profile assignments\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use first imputation as reference
+reference_lpa <- lpa_consensus_list[[1]]
+reference_profiles <- profile_assignments_list[[1]]
+
+# For simplicity, use the modal profile assignment across imputations
+# This is more stable than using just one imputation
+n_obs <- length(reference_profiles)
+
+# Create matrix of profile assignments (rows = obs, cols = imputations)
+profile_matrix <- do.call(cbind, profile_assignments_list)
+
+# Get modal profile for each observation
+modal_profiles <- apply(profile_matrix, 1, function(x) {
+  as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+})
+
+# Create final dataset with consensus profiles
+consensus_data <- complete(mids_obj, 1) %>%
+  select(all_of(personality_vars)) %>%
+  mutate(
+    profile = factor(modal_profiles,
+                    levels = 1:consensus_k,
+                    labels = paste0("Profile_", 1:consensus_k))
+  )
+
+cat("Consensus profile distribution:\n")
+print(table(consensus_data$profile))
+cat("\nProportions (%):\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+# Calculate assignment stability (what % of imputations agree with modal?)
+assignment_stability <- apply(profile_matrix, 1, function(x) {
+  modal_val <- as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+  mean(x == modal_val)
+})
+
+cat("Profile assignment stability:\n")
+cat("  Mean agreement:", round(100 * mean(assignment_stability), 1), "%\n")
+cat("  Median agreement:", round(100 * median(assignment_stability), 1), "%\n")
+cat("  Min agreement:", round(100 * min(assignment_stability), 1), "%\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 5: Pool profile characteristics across imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 5: Pooling profile characteristics across imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# For each imputation, calculate profile means
+profile_means_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    select(all_of(personality_vars)) %>%
+    mutate(profile = factor(profile_assignments_list[[m]],
+                           levels = 1:consensus_k,
+                           labels = paste0("Profile_", 1:consensus_k)))
+  
+  profile_means_m <- imp_data %>%
+    group_by(profile) %>%
+    summarise(across(all_of(personality_vars), mean, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(imputation = m)
+  
+  profile_means_list[[m]] <- profile_means_m
+}
+
+# Combine and average across imputations
+pooled_profile_means <- bind_rows(profile_means_list) %>%
+  group_by(profile) %>%
+  summarise(across(all_of(personality_vars), 
+                   list(mean = mean, sd = sd)),
+            .groups = "drop")
+
+cat("Pooled profile characteristics (averaged across", mids_obj$m, "imputations):\n\n")
+
+# Create a cleaner table
+profile_summary <- pooled_profile_means %>%
+  select(profile, ends_with("_mean")) %>%
+  rename_with(~str_remove(., "_mean"), ends_with("_mean"))
+
+print(profile_summary, n = Inf)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 6: Statistical comparison of profiles (pooled)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PERSONALITY CHARACTERISTICS BY PROFILE (POOLED)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use consensus profiles with first imputation for TableOne
+profile_table <- CreateTableOne(
+  vars = personality_vars,
+  strata = "profile",
+  data = consensus_data,
+  test = TRUE
+)
+
+print(profile_table, smd = TRUE)
+cat("\n")
+cat("Note: Statistics based on consensus profile assignments\n")
+cat("      Means are pooled across", mids_obj$m, "imputations\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 7: Visualizations using reference imputation
+# -----------------------------------------------------------------------------
+
+cat("Creating profile visualizations...\n\n")
+
+# Use reference LPA for BIC plot
+bic_plot <- fviz_mclust(reference_lpa, "BIC", palette = "jco") +
+  labs(title = "LPA Model Selection: BIC Values (Reference Imputation)",
+       subtitle = paste0("Consensus k = ", consensus_k, " across ", mids_obj$m, " imputations")) +
+  theme_minimal()
+
+ggsave("lpa_bic_selection_MI.png", plot = bic_plot, width = 10, height = 6, dpi = 300)
+
+# Classification plot using consensus profiles
+consensus_scaled <- scale(consensus_data %>% select(-profile))
+pca_result <- prcomp(consensus_scaled, scale. = FALSE)
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  profile = consensus_data$profile
+)
+
+class_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = profile)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(title = paste("Patient Profiles (k =", consensus_k, ") - Consensus Assignment"),
+       subtitle = paste0("Based on ", mids_obj$m, " imputed datasets"),
+       x = "First Principal Component",
+       y = "Second Principal Component",
+       color = "Profile")
+
+ggsave("lpa_profiles_descriptive_MI.png", plot = class_plot, 
+       width = 10, height = 8, dpi = 300)
+
+# Heatmap with pooled means
+heatmap_data <- profile_summary %>%
+  pivot_longer(-profile, names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  mutate(z_score = scale(value)[, 1]) %>%
+  ungroup()
+
+p_heatmap <- ggplot(heatmap_data, aes(x = variable, y = profile, fill = z_score)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B",
+                       midpoint = 0, name = "Z-Score",
+                       limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        plot.title = element_text(size = 14, face = "bold")) +
+  labs(title = paste("Personality Profiles (k =", consensus_k, ") - Pooled Estimates"),
+       subtitle = paste0("Averaged across ", mids_obj$m, " imputations - Red = Higher, Blue = Lower"),
+       x = NULL, y = "Profile")
+
+ggsave("lpa_profile_heatmap_MI.png", plot = p_heatmap, 
+       width = 12, height = 6, dpi = 300)
+
+cat("✓ Profile visualizations saved\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 8: Exploratory discontinuation comparison (pooled across imputations)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("EXPLORATORY: Profile differences in discontinuation\n")
+cat("(Descriptive comparison - NOT predictive modeling)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Calculate discontinuation rates pooled across all imputations
+discont_rates_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    mutate(row_id = row_number()) %>%
+    select(row_id, scrn_stopped_bzra) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  # Merge with consensus profiles
+  imp_with_profile <- consensus_profiles_df %>%
+    left_join(imp_data, by = "row_id") %>%
+    filter(!is.na(scrn_stopped_bzra)) %>%
+    mutate(discontinued = as.numeric(as.character(scrn_stopped_bzra)))
+  
+  # Calculate rates by profile
+  rates_m <- imp_with_profile %>%
+    group_by(profile) %>%
+    summarise(
+      N = n(),
+      N_discontinued = sum(discontinued, na.rm = TRUE),
+      Rate = mean(discontinued, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(imputation = m)
+  
+  discont_rates_list[[m]] <- rates_m
+}
+
+# Pool discontinuation rates
+pooled_discont <- bind_rows(discont_rates_list) %>%
+  group_by(profile) %>%
+  summarise(
+    N = mean(N),  # Should be same across imputations
+    Mean_Rate = mean(Rate),
+    SD_Rate = sd(Rate),
+    SE_Rate = SD_Rate / sqrt(mids_obj$m),
+    CI_lower = Mean_Rate - 1.96 * SE_Rate,
+    CI_upper = Mean_Rate + 1.96 * SE_Rate,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Rate_Pct = round(100 * Mean_Rate, 1),
+    CI_lower_Pct = round(100 * CI_lower, 1),
+    CI_upper_Pct = round(100 * CI_upper, 1)
+  )
+
+cat("Discontinuation rates by profile (POOLED ACROSS", mids_obj$m, "IMPUTATIONS):\n")
+print(pooled_discont %>% 
+        select(profile, N, Rate_Pct, CI_lower_Pct, CI_upper_Pct))
+cat("\n")
+
+# Chi-square test using first imputation (for reference)
+first_imp_test <- complete(mids_obj, 1) %>%
+  mutate(row_id = row_number()) %>%
+  inner_join(consensus_profiles_df, by = "row_id") %>%
+  filter(!is.na(scrn_stopped_bzra))
+
+if(nrow(first_imp_test) > 0) {
+  chisq_test <- chisq.test(table(first_imp_test$profile, 
+                                 first_imp_test$scrn_stopped_bzra))
+  cat("Chi-square test (exploratory, first imputation):\n")
+  cat("  χ² =", round(chisq_test$statistic, 2), "\n")
+  cat("  p =", format.pval(chisq_test$p.value, digits = 3), "\n\n")
+}
+
+cat("⚠ IMPORTANT: This is EXPLORATORY, not predictive\n")
+cat("   Use regression (below) for actual prediction\n\n")
+
+# Save plot with pooled rates
+p_explore <- ggplot(pooled_discont, 
+                    aes(x = profile, y = Rate_Pct, fill = profile)) +
+  geom_col(alpha = 0.8) +
+  geom_errorbar(aes(ymin = CI_lower_Pct, ymax = CI_upper_Pct), width = 0.3) +
+  geom_text(aes(label = paste0(Rate_Pct, "%")), vjust = -0.5, size = 4) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  labs(title = "EXPLORATORY: Discontinuation by Profile (Pooled)",
+       subtitle = paste0("Rates averaged across ", mids_obj$m, " imputations"),
+       y = "Discontinuation Rate (%)", x = "Profile") +
+  theme(legend.position = "none")
+
+ggsave("lpa_exploratory_discontinuation_MI.png", plot = p_explore, 
+       width = 10, height = 6, dpi = 300)
+cat("✓ Saved exploratory plot\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 9: Save results
+# -----------------------------------------------------------------------------
+
+cat("Saving LPA results...\n\n")
+
+lpa_mi_results <- list(
+  # Consensus information
+  consensus_k = consensus_k,
+  n_imputations = mids_obj$m,
+  
+  # Profile assignments
+  consensus_profiles = consensus_data$profile,
+  assignment_stability = assignment_stability,
+  
+  # Model information
+  mean_entropy = mean(entropy_list),
+  entropy_sd = sd(entropy_list),
+  
+  # Pooled characteristics
+  pooled_means = profile_summary,
+  
+  # All LPA fits
+  lpa_fits = lpa_consensus_list,
+  
+  # Distribution
+  profile_distribution = table(consensus_data$profile)
+)
+
+saveRDS(lpa_mi_results, "lpa_results_multiple_imputation.rds")
+cat("✓ Saved: lpa_results_multiple_imputation.rds\n\n")
+
+# Also save consensus profiles to merge with other data later
+consensus_profiles_df <- data.frame(
+  row_id = 1:nrow(consensus_data),
+  profile = consensus_data$profile,
+  stability = assignment_stability
+)
+
+saveRDS(consensus_profiles_df, "consensus_profiles.rds")
+cat("✓ Saved: consensus_profiles.rds\n\n")
+
+# -----------------------------------------------------------------------------
+# SUMMARY
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("LPA WITH MULTIPLE IMPUTATION - COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("RESULTS SUMMARY:\n")
+cat("  Imputations analyzed:", mids_obj$m, "\n")
+cat("  Consensus profiles:", consensus_k, "\n")
+cat("  Mean entropy:", round(mean(entropy_list), 3), "±", round(sd(entropy_list), 3), "\n")
+cat("  Mean assignment stability:", round(100 * mean(assignment_stability), 1), "%\n\n")
+
+cat("PROFILE SIZES:\n")
+print(table(consensus_data$profile))
+cat("\nProportions:\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+cat("ADVANTAGES OF THIS APPROACH:\n")
+cat("  ✓ Uses all", mids_obj$m, "imputations (not just one)\n")
+cat("  ✓ Accounts for imputation uncertainty\n")
+cat("  ✓ More stable profile assignments\n")
+cat("  ✓ Pooled estimates reduce bias\n")
+cat("  ✓ Provides assignment stability metric\n\n")
+
+cat("OUTPUT FILES:\n")
+cat("  ✓ lpa_bic_selection_MI.png\n")
+cat("  ✓ lpa_profiles_descriptive_MI.png\n")
+cat("  ✓ lpa_profile_heatmap_MI.png\n")
+if(exists("p_explore")) {
+  cat("  ✓ lpa_exploratory_discontinuation_MI.png\n")
+}
+cat("  ✓ lpa_results_multiple_imputation.rds\n")
+cat("  ✓ consensus_profiles.rds\n\n")
+
+2.5 %`[i], 3), ",",
+        round(sig_pers#==============================================================================
+# LPA WITH MULTIPLE IMPUTATION - USING ALL 35 IMPUTED DATASETS
+# Approach: Fit LPA on each imputation, then combine results
 #==============================================================================
+
+library(tidyverse)
+library(mice)
+library(mclust)
+library(factoextra)
+library(tableone)
+library(ggplot2)
+library(gridExtra)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART 1: LATENT PROFILE ANALYSIS - WITH MULTIPLE IMPUTATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load mids imputed data
+mids_obj <- readRDS("imputed_data_with_subscales.rds")
+cat("Loaded mids object with", mids_obj$m, "imputations\n\n")
+
+cat("STAGE 1 OBJECTIVE: Identify distinct personality-based patient profiles\n")
+cat("Using ALL", mids_obj$m, "imputations for robust estimates\n")
+cat("This is DESCRIPTIVE, not predictive\n\n")
+
+# -----------------------------------------------------------------------------
+# Define personality variables for profiling
+# -----------------------------------------------------------------------------
+
+personality_vars <- c(
+  # BFI-10 subscales
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  
+  # SURPS subscales
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+  "SURPS_Anxiety_Sensitivity",
+  
+  # DBAS subscales
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", 
+  "DBAS_Medications",
+  
+  # CISS subscales
+  "CISS_Task", "CISS_Emotion", "CISS_Avoidance"
+)
+
+# Get first imputation to check variables
+first_imp <- complete(mids_obj, 1)
+personality_vars <- personality_vars[personality_vars %in% names(first_imp)]
+
+cat("Personality variables for profiling:\n")
+for(v in personality_vars) {
+  cat("  ✓", v, "\n")
+}
+cat("\nTotal:", length(personality_vars), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 1: Fit LPA on each imputed dataset
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 1: Fitting LPA on each of", mids_obj$m, "imputed datasets\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Store results from each imputation
+lpa_results_list <- list()
+bic_results <- list()
+selected_k_list <- numeric(mids_obj$m)
+
+set.seed(123)
+
+for(m in 1:mids_obj$m) {
+  cat("Processing imputation", m, "of", mids_obj$m, "...\n")
+  
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data (no missing values needed for LPA)
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale variables
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit LPA models (1-8 profiles)
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = 1:8, verbose = FALSE)
+  
+  # Store results
+  lpa_results_list[[m]] <- lpa_fit_m
+  bic_results[[m]] <- lpa_fit_m$BIC
+  selected_k_list[m] <- lpa_fit_m$G
+  
+  cat("  → Best k =", lpa_fit_m$G, ", BIC =", round(lpa_fit_m$bic, 2), "\n")
+}
+
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 2: Determine consensus number of profiles
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 2: Determining consensus number of profiles\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Most common k selected
+k_table <- table(selected_k_list)
+cat("Number of profiles selected across imputations:\n")
+print(k_table)
+cat("\n")
+
+# Use modal (most common) k
+consensus_k <- as.numeric(names(k_table)[which.max(k_table)])
+cat("Consensus number of profiles:", consensus_k, "\n")
+cat("Selected in", max(k_table), "out of", mids_obj$m, "imputations\n\n")
+
+# If there's a tie or concern, you could also use median/mean
+cat("Distribution of selected k:\n")
+cat("  Mode:", consensus_k, "\n")
+cat("  Median:", median(selected_k_list), "\n")
+cat("  Mean:", round(mean(selected_k_list), 2), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 3: Refit LPA with consensus k on all imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 3: Refitting LPA with k =", consensus_k, "on all imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+lpa_consensus_list <- list()
+profile_assignments_list <- list()
+entropy_list <- numeric(mids_obj$m)
+
+for(m in 1:mids_obj$m) {
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit with consensus k
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = consensus_k, verbose = FALSE)
+  
+  # Calculate entropy
+  entropy_m <- 1 - (sum(-lpa_fit_m$z * log(lpa_fit_m$z), na.rm = TRUE) / 
+                    (nrow(lpa_scaled_m) * log(consensus_k)))
+  
+  # Store
+  lpa_consensus_list[[m]] <- lpa_fit_m
+  profile_assignments_list[[m]] <- lpa_fit_m$classification
+  entropy_list[m] <- entropy_m
+}
+
+cat("Entropy across imputations:\n")
+cat("  Mean:", round(mean(entropy_list), 3), "\n")
+cat("  SD:", round(sd(entropy_list), 3), "\n")
+cat("  Range:", round(min(entropy_list), 3), "-", round(max(entropy_list), 3), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 4: Obtain consensus profile assignments
+# Method: Use first imputation as reference, assign based on modal profile
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 4: Creating consensus profile assignments\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use first imputation as reference
+reference_lpa <- lpa_consensus_list[[1]]
+reference_profiles <- profile_assignments_list[[1]]
+
+# For simplicity, use the modal profile assignment across imputations
+# This is more stable than using just one imputation
+n_obs <- length(reference_profiles)
+
+# Create matrix of profile assignments (rows = obs, cols = imputations)
+profile_matrix <- do.call(cbind, profile_assignments_list)
+
+# Get modal profile for each observation
+modal_profiles <- apply(profile_matrix, 1, function(x) {
+  as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+})
+
+# Create final dataset with consensus profiles
+consensus_data <- complete(mids_obj, 1) %>%
+  select(all_of(personality_vars)) %>%
+  mutate(
+    profile = factor(modal_profiles,
+                    levels = 1:consensus_k,
+                    labels = paste0("Profile_", 1:consensus_k))
+  )
+
+cat("Consensus profile distribution:\n")
+print(table(consensus_data$profile))
+cat("\nProportions (%):\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+# Calculate assignment stability (what % of imputations agree with modal?)
+assignment_stability <- apply(profile_matrix, 1, function(x) {
+  modal_val <- as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+  mean(x == modal_val)
+})
+
+cat("Profile assignment stability:\n")
+cat("  Mean agreement:", round(100 * mean(assignment_stability), 1), "%\n")
+cat("  Median agreement:", round(100 * median(assignment_stability), 1), "%\n")
+cat("  Min agreement:", round(100 * min(assignment_stability), 1), "%\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 5: Pool profile characteristics across imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 5: Pooling profile characteristics across imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# For each imputation, calculate profile means
+profile_means_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    select(all_of(personality_vars)) %>%
+    mutate(profile = factor(profile_assignments_list[[m]],
+                           levels = 1:consensus_k,
+                           labels = paste0("Profile_", 1:consensus_k)))
+  
+  profile_means_m <- imp_data %>%
+    group_by(profile) %>%
+    summarise(across(all_of(personality_vars), mean, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(imputation = m)
+  
+  profile_means_list[[m]] <- profile_means_m
+}
+
+# Combine and average across imputations
+pooled_profile_means <- bind_rows(profile_means_list) %>%
+  group_by(profile) %>%
+  summarise(across(all_of(personality_vars), 
+                   list(mean = mean, sd = sd)),
+            .groups = "drop")
+
+cat("Pooled profile characteristics (averaged across", mids_obj$m, "imputations):\n\n")
+
+# Create a cleaner table
+profile_summary <- pooled_profile_means %>%
+  select(profile, ends_with("_mean")) %>%
+  rename_with(~str_remove(., "_mean"), ends_with("_mean"))
+
+print(profile_summary, n = Inf)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 6: Statistical comparison of profiles (pooled)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PERSONALITY CHARACTERISTICS BY PROFILE (POOLED)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use consensus profiles with first imputation for TableOne
+profile_table <- CreateTableOne(
+  vars = personality_vars,
+  strata = "profile",
+  data = consensus_data,
+  test = TRUE
+)
+
+print(profile_table, smd = TRUE)
+cat("\n")
+cat("Note: Statistics based on consensus profile assignments\n")
+cat("      Means are pooled across", mids_obj$m, "imputations\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 7: Visualizations using reference imputation
+# -----------------------------------------------------------------------------
+
+cat("Creating profile visualizations...\n\n")
+
+# Use reference LPA for BIC plot
+bic_plot <- fviz_mclust(reference_lpa, "BIC", palette = "jco") +
+  labs(title = "LPA Model Selection: BIC Values (Reference Imputation)",
+       subtitle = paste0("Consensus k = ", consensus_k, " across ", mids_obj$m, " imputations")) +
+  theme_minimal()
+
+ggsave("lpa_bic_selection_MI.png", plot = bic_plot, width = 10, height = 6, dpi = 300)
+
+# Classification plot using consensus profiles
+consensus_scaled <- scale(consensus_data %>% select(-profile))
+pca_result <- prcomp(consensus_scaled, scale. = FALSE)
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  profile = consensus_data$profile
+)
+
+class_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = profile)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(title = paste("Patient Profiles (k =", consensus_k, ") - Consensus Assignment"),
+       subtitle = paste0("Based on ", mids_obj$m, " imputed datasets"),
+       x = "First Principal Component",
+       y = "Second Principal Component",
+       color = "Profile")
+
+ggsave("lpa_profiles_descriptive_MI.png", plot = class_plot, 
+       width = 10, height = 8, dpi = 300)
+
+# Heatmap with pooled means
+heatmap_data <- profile_summary %>%
+  pivot_longer(-profile, names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  mutate(z_score = scale(value)[, 1]) %>%
+  ungroup()
+
+p_heatmap <- ggplot(heatmap_data, aes(x = variable, y = profile, fill = z_score)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B",
+                       midpoint = 0, name = "Z-Score",
+                       limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        plot.title = element_text(size = 14, face = "bold")) +
+  labs(title = paste("Personality Profiles (k =", consensus_k, ") - Pooled Estimates"),
+       subtitle = paste0("Averaged across ", mids_obj$m, " imputations - Red = Higher, Blue = Lower"),
+       x = NULL, y = "Profile")
+
+ggsave("lpa_profile_heatmap_MI.png", plot = p_heatmap, 
+       width = 12, height = 6, dpi = 300)
+
+cat("✓ Profile visualizations saved\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 8: Exploratory discontinuation comparison (pooled across imputations)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("EXPLORATORY: Profile differences in discontinuation\n")
+cat("(Descriptive comparison - NOT predictive modeling)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Calculate discontinuation rates pooled across all imputations
+discont_rates_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    mutate(row_id = row_number()) %>%
+    select(row_id, scrn_stopped_bzra) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  # Merge with consensus profiles
+  imp_with_profile <- consensus_profiles_df %>%
+    left_join(imp_data, by = "row_id") %>%
+    filter(!is.na(scrn_stopped_bzra)) %>%
+    mutate(discontinued = as.numeric(as.character(scrn_stopped_bzra)))
+  
+  # Calculate rates by profile
+  rates_m <- imp_with_profile %>%
+    group_by(profile) %>%
+    summarise(
+      N = n(),
+      N_discontinued = sum(discontinued, na.rm = TRUE),
+      Rate = mean(discontinued, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(imputation = m)
+  
+  discont_rates_list[[m]] <- rates_m
+}
+
+# Pool discontinuation rates
+pooled_discont <- bind_rows(discont_rates_list) %>%
+  group_by(profile) %>%
+  summarise(
+    N = mean(N),  # Should be same across imputations
+    Mean_Rate = mean(Rate),
+    SD_Rate = sd(Rate),
+    SE_Rate = SD_Rate / sqrt(mids_obj$m),
+    CI_lower = Mean_Rate - 1.96 * SE_Rate,
+    CI_upper = Mean_Rate + 1.96 * SE_Rate,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Rate_Pct = round(100 * Mean_Rate, 1),
+    CI_lower_Pct = round(100 * CI_lower, 1),
+    CI_upper_Pct = round(100 * CI_upper, 1)
+  )
+
+cat("Discontinuation rates by profile (POOLED ACROSS", mids_obj$m, "IMPUTATIONS):\n")
+print(pooled_discont %>% 
+        select(profile, N, Rate_Pct, CI_lower_Pct, CI_upper_Pct))
+cat("\n")
+
+# Chi-square test using first imputation (for reference)
+first_imp_test <- complete(mids_obj, 1) %>%
+  mutate(row_id = row_number()) %>%
+  inner_join(consensus_profiles_df, by = "row_id") %>%
+  filter(!is.na(scrn_stopped_bzra))
+
+if(nrow(first_imp_test) > 0) {
+  chisq_test <- chisq.test(table(first_imp_test$profile, 
+                                 first_imp_test$scrn_stopped_bzra))
+  cat("Chi-square test (exploratory, first imputation):\n")
+  cat("  χ² =", round(chisq_test$statistic, 2), "\n")
+  cat("  p =", format.pval(chisq_test$p.value, digits = 3), "\n\n")
+}
+
+cat("⚠ IMPORTANT: This is EXPLORATORY, not predictive\n")
+cat("   Use regression (below) for actual prediction\n\n")
+
+# Save plot with pooled rates
+p_explore <- ggplot(pooled_discont, 
+                    aes(x = profile, y = Rate_Pct, fill = profile)) +
+  geom_col(alpha = 0.8) +
+  geom_errorbar(aes(ymin = CI_lower_Pct, ymax = CI_upper_Pct), width = 0.3) +
+  geom_text(aes(label = paste0(Rate_Pct, "%")), vjust = -0.5, size = 4) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  labs(title = "EXPLORATORY: Discontinuation by Profile (Pooled)",
+       subtitle = paste0("Rates averaged across ", mids_obj$m, " imputations"),
+       y = "Discontinuation Rate (%)", x = "Profile") +
+  theme(legend.position = "none")
+
+ggsave("lpa_exploratory_discontinuation_MI.png", plot = p_explore, 
+       width = 10, height = 6, dpi = 300)
+cat("✓ Saved exploratory plot\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 9: Save results
+# -----------------------------------------------------------------------------
+
+cat("Saving LPA results...\n\n")
+
+lpa_mi_results <- list(
+  # Consensus information
+  consensus_k = consensus_k,
+  n_imputations = mids_obj$m,
+  
+  # Profile assignments
+  consensus_profiles = consensus_data$profile,
+  assignment_stability = assignment_stability,
+  
+  # Model information
+  mean_entropy = mean(entropy_list),
+  entropy_sd = sd(entropy_list),
+  
+  # Pooled characteristics
+  pooled_means = profile_summary,
+  
+  # All LPA fits
+  lpa_fits = lpa_consensus_list,
+  
+  # Distribution
+  profile_distribution = table(consensus_data$profile)
+)
+
+saveRDS(lpa_mi_results, "lpa_results_multiple_imputation.rds")
+cat("✓ Saved: lpa_results_multiple_imputation.rds\n\n")
+
+# Also save consensus profiles to merge with other data later
+consensus_profiles_df <- data.frame(
+  row_id = 1:nrow(consensus_data),
+  profile = consensus_data$profile,
+  stability = assignment_stability
+)
+
+saveRDS(consensus_profiles_df, "consensus_profiles.rds")
+cat("✓ Saved: consensus_profiles.rds\n\n")
+
+# -----------------------------------------------------------------------------
+# SUMMARY
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("LPA WITH MULTIPLE IMPUTATION - COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("RESULTS SUMMARY:\n")
+cat("  Imputations analyzed:", mids_obj$m, "\n")
+cat("  Consensus profiles:", consensus_k, "\n")
+cat("  Mean entropy:", round(mean(entropy_list), 3), "±", round(sd(entropy_list), 3), "\n")
+cat("  Mean assignment stability:", round(100 * mean(assignment_stability), 1), "%\n\n")
+
+cat("PROFILE SIZES:\n")
+print(table(consensus_data$profile))
+cat("\nProportions:\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+cat("ADVANTAGES OF THIS APPROACH:\n")
+cat("  ✓ Uses all", mids_obj$m, "imputations (not just one)\n")
+cat("  ✓ Accounts for imputation uncertainty\n")
+cat("  ✓ More stable profile assignments\n")
+cat("  ✓ Pooled estimates reduce bias\n")
+cat("  ✓ Provides assignment stability metric\n\n")
+
+cat("OUTPUT FILES:\n")
+cat("  ✓ lpa_bic_selection_MI.png\n")
+cat("  ✓ lpa_profiles_descriptive_MI.png\n")
+cat("  ✓ lpa_profile_heatmap_MI.png\n")
+if(exists("p_explore")) {
+  cat("  ✓ lpa_exploratory_discontinuation_MI.png\n")
+}
+cat("  ✓ lpa_results_multiple_imputation.rds\n")
+cat("  ✓ consensus_profiles.rds\n\n")
+
+97.5 %`[i], 3), "]\n")
+    cat("      p =", format.pval(sig_pers$p.value[i], digits = 3), "\n")
+  }
+} else {
+  cat("  (None)\n")
+}
+cat("\n")
+
+# Calculate pooled AUC
+auc_pers_list <- numeric(mids_obj$m)
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  model_m <- glm(formula_pers, data = imp_data, family = binomial)
+  pred_m <- predict(model_m, type = "response")
+  
+  outcome_numeric <- as.numeric(as.character(imp_data$scrn_stopped_bzra))
+  roc_m <- roc(outcome_numeric, pred_m, quiet = TRUE)
+  auc_pers_list[m] <- auc(roc_m)
+}
+
+mean_auc_pers <- mean(auc_pers_list)
+se_auc_pers <- sd(auc_pers_list) / sqrt(mids_obj$m)
+
+cat("Pooled AUC (Personality Only):\n")
+cat("  Mean AUC:", round(mean_auc_pers, 3), "\n")
+cat("  SE:", round(se_auc_pers, 4), "\n")
+cat("  95% CI:", round(mean_auc_pers - 1.96 * se_auc_pers, 3), "-",
+    round(mean_auc_pers + 1.96 * se_auc_pers, 3), "\n\n")
+
+# -----------------------------------------------------------------------------
+# MODEL 3: Demographics + Personality
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("MODEL 3: DEMOGRAPHICS + PERSONALITY (FULL MODEL)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Create formula
+formula_full <- as.formula(paste("scrn_stopped_bzra ~", 
+                                 paste(all_predictors, collapse = " + ")))
+
+cat("Formula:", deparse(formula_full), "\n\n")
+
+# Fit on each imputation
+cat("Fitting full model on", mids_obj$m, "imputations...\n")
+fit_full <- with(mids_obj, glm(formula_full, family = binomial))
+
+# Pool results
+pooled_full <- pool(fit_full)
+summary_full <- summary(pooled_full, conf.int = TRUE, exponentiate = TRUE)
+
+cat("\nPooled results (Rubin's rules):\n")
+print(summary_full, digits = 3)
+cat("\n")
+
+# Get significant predictors
+sig_full <- summary_full %>%
+  filter(p.value < 0.05, term != "(Intercept)")
+
+cat("Significant predictors (p < 0.05):\n")
+if(nrow(sig_full) > 0) {
+  for(i in 1:nrow(sig_full)) {
+    cat("  ✓", sig_full$term[i], "\n")
+    cat("      OR =", round(sig_full$estimate[i], 3), 
+        ", 95% CI: [", round(sig_full#==============================================================================
+# LPA WITH MULTIPLE IMPUTATION - USING ALL 35 IMPUTED DATASETS
+# Approach: Fit LPA on each imputation, then combine results
+#==============================================================================
+
+library(tidyverse)
+library(mice)
+library(mclust)
+library(factoextra)
+library(tableone)
+library(ggplot2)
+library(gridExtra)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART 1: LATENT PROFILE ANALYSIS - WITH MULTIPLE IMPUTATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load mids imputed data
+mids_obj <- readRDS("imputed_data_with_subscales.rds")
+cat("Loaded mids object with", mids_obj$m, "imputations\n\n")
+
+cat("STAGE 1 OBJECTIVE: Identify distinct personality-based patient profiles\n")
+cat("Using ALL", mids_obj$m, "imputations for robust estimates\n")
+cat("This is DESCRIPTIVE, not predictive\n\n")
+
+# -----------------------------------------------------------------------------
+# Define personality variables for profiling
+# -----------------------------------------------------------------------------
+
+personality_vars <- c(
+  # BFI-10 subscales
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  
+  # SURPS subscales
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+  "SURPS_Anxiety_Sensitivity",
+  
+  # DBAS subscales
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", 
+  "DBAS_Medications",
+  
+  # CISS subscales
+  "CISS_Task", "CISS_Emotion", "CISS_Avoidance"
+)
+
+# Get first imputation to check variables
+first_imp <- complete(mids_obj, 1)
+personality_vars <- personality_vars[personality_vars %in% names(first_imp)]
+
+cat("Personality variables for profiling:\n")
+for(v in personality_vars) {
+  cat("  ✓", v, "\n")
+}
+cat("\nTotal:", length(personality_vars), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 1: Fit LPA on each imputed dataset
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 1: Fitting LPA on each of", mids_obj$m, "imputed datasets\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Store results from each imputation
+lpa_results_list <- list()
+bic_results <- list()
+selected_k_list <- numeric(mids_obj$m)
+
+set.seed(123)
+
+for(m in 1:mids_obj$m) {
+  cat("Processing imputation", m, "of", mids_obj$m, "...\n")
+  
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data (no missing values needed for LPA)
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale variables
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit LPA models (1-8 profiles)
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = 1:8, verbose = FALSE)
+  
+  # Store results
+  lpa_results_list[[m]] <- lpa_fit_m
+  bic_results[[m]] <- lpa_fit_m$BIC
+  selected_k_list[m] <- lpa_fit_m$G
+  
+  cat("  → Best k =", lpa_fit_m$G, ", BIC =", round(lpa_fit_m$bic, 2), "\n")
+}
+
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 2: Determine consensus number of profiles
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 2: Determining consensus number of profiles\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Most common k selected
+k_table <- table(selected_k_list)
+cat("Number of profiles selected across imputations:\n")
+print(k_table)
+cat("\n")
+
+# Use modal (most common) k
+consensus_k <- as.numeric(names(k_table)[which.max(k_table)])
+cat("Consensus number of profiles:", consensus_k, "\n")
+cat("Selected in", max(k_table), "out of", mids_obj$m, "imputations\n\n")
+
+# If there's a tie or concern, you could also use median/mean
+cat("Distribution of selected k:\n")
+cat("  Mode:", consensus_k, "\n")
+cat("  Median:", median(selected_k_list), "\n")
+cat("  Mean:", round(mean(selected_k_list), 2), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 3: Refit LPA with consensus k on all imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 3: Refitting LPA with k =", consensus_k, "on all imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+lpa_consensus_list <- list()
+profile_assignments_list <- list()
+entropy_list <- numeric(mids_obj$m)
+
+for(m in 1:mids_obj$m) {
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit with consensus k
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = consensus_k, verbose = FALSE)
+  
+  # Calculate entropy
+  entropy_m <- 1 - (sum(-lpa_fit_m$z * log(lpa_fit_m$z), na.rm = TRUE) / 
+                    (nrow(lpa_scaled_m) * log(consensus_k)))
+  
+  # Store
+  lpa_consensus_list[[m]] <- lpa_fit_m
+  profile_assignments_list[[m]] <- lpa_fit_m$classification
+  entropy_list[m] <- entropy_m
+}
+
+cat("Entropy across imputations:\n")
+cat("  Mean:", round(mean(entropy_list), 3), "\n")
+cat("  SD:", round(sd(entropy_list), 3), "\n")
+cat("  Range:", round(min(entropy_list), 3), "-", round(max(entropy_list), 3), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 4: Obtain consensus profile assignments
+# Method: Use first imputation as reference, assign based on modal profile
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 4: Creating consensus profile assignments\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use first imputation as reference
+reference_lpa <- lpa_consensus_list[[1]]
+reference_profiles <- profile_assignments_list[[1]]
+
+# For simplicity, use the modal profile assignment across imputations
+# This is more stable than using just one imputation
+n_obs <- length(reference_profiles)
+
+# Create matrix of profile assignments (rows = obs, cols = imputations)
+profile_matrix <- do.call(cbind, profile_assignments_list)
+
+# Get modal profile for each observation
+modal_profiles <- apply(profile_matrix, 1, function(x) {
+  as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+})
+
+# Create final dataset with consensus profiles
+consensus_data <- complete(mids_obj, 1) %>%
+  select(all_of(personality_vars)) %>%
+  mutate(
+    profile = factor(modal_profiles,
+                    levels = 1:consensus_k,
+                    labels = paste0("Profile_", 1:consensus_k))
+  )
+
+cat("Consensus profile distribution:\n")
+print(table(consensus_data$profile))
+cat("\nProportions (%):\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+# Calculate assignment stability (what % of imputations agree with modal?)
+assignment_stability <- apply(profile_matrix, 1, function(x) {
+  modal_val <- as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+  mean(x == modal_val)
+})
+
+cat("Profile assignment stability:\n")
+cat("  Mean agreement:", round(100 * mean(assignment_stability), 1), "%\n")
+cat("  Median agreement:", round(100 * median(assignment_stability), 1), "%\n")
+cat("  Min agreement:", round(100 * min(assignment_stability), 1), "%\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 5: Pool profile characteristics across imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 5: Pooling profile characteristics across imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# For each imputation, calculate profile means
+profile_means_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    select(all_of(personality_vars)) %>%
+    mutate(profile = factor(profile_assignments_list[[m]],
+                           levels = 1:consensus_k,
+                           labels = paste0("Profile_", 1:consensus_k)))
+  
+  profile_means_m <- imp_data %>%
+    group_by(profile) %>%
+    summarise(across(all_of(personality_vars), mean, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(imputation = m)
+  
+  profile_means_list[[m]] <- profile_means_m
+}
+
+# Combine and average across imputations
+pooled_profile_means <- bind_rows(profile_means_list) %>%
+  group_by(profile) %>%
+  summarise(across(all_of(personality_vars), 
+                   list(mean = mean, sd = sd)),
+            .groups = "drop")
+
+cat("Pooled profile characteristics (averaged across", mids_obj$m, "imputations):\n\n")
+
+# Create a cleaner table
+profile_summary <- pooled_profile_means %>%
+  select(profile, ends_with("_mean")) %>%
+  rename_with(~str_remove(., "_mean"), ends_with("_mean"))
+
+print(profile_summary, n = Inf)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 6: Statistical comparison of profiles (pooled)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PERSONALITY CHARACTERISTICS BY PROFILE (POOLED)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use consensus profiles with first imputation for TableOne
+profile_table <- CreateTableOne(
+  vars = personality_vars,
+  strata = "profile",
+  data = consensus_data,
+  test = TRUE
+)
+
+print(profile_table, smd = TRUE)
+cat("\n")
+cat("Note: Statistics based on consensus profile assignments\n")
+cat("      Means are pooled across", mids_obj$m, "imputations\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 7: Visualizations using reference imputation
+# -----------------------------------------------------------------------------
+
+cat("Creating profile visualizations...\n\n")
+
+# Use reference LPA for BIC plot
+bic_plot <- fviz_mclust(reference_lpa, "BIC", palette = "jco") +
+  labs(title = "LPA Model Selection: BIC Values (Reference Imputation)",
+       subtitle = paste0("Consensus k = ", consensus_k, " across ", mids_obj$m, " imputations")) +
+  theme_minimal()
+
+ggsave("lpa_bic_selection_MI.png", plot = bic_plot, width = 10, height = 6, dpi = 300)
+
+# Classification plot using consensus profiles
+consensus_scaled <- scale(consensus_data %>% select(-profile))
+pca_result <- prcomp(consensus_scaled, scale. = FALSE)
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  profile = consensus_data$profile
+)
+
+class_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = profile)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(title = paste("Patient Profiles (k =", consensus_k, ") - Consensus Assignment"),
+       subtitle = paste0("Based on ", mids_obj$m, " imputed datasets"),
+       x = "First Principal Component",
+       y = "Second Principal Component",
+       color = "Profile")
+
+ggsave("lpa_profiles_descriptive_MI.png", plot = class_plot, 
+       width = 10, height = 8, dpi = 300)
+
+# Heatmap with pooled means
+heatmap_data <- profile_summary %>%
+  pivot_longer(-profile, names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  mutate(z_score = scale(value)[, 1]) %>%
+  ungroup()
+
+p_heatmap <- ggplot(heatmap_data, aes(x = variable, y = profile, fill = z_score)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B",
+                       midpoint = 0, name = "Z-Score",
+                       limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        plot.title = element_text(size = 14, face = "bold")) +
+  labs(title = paste("Personality Profiles (k =", consensus_k, ") - Pooled Estimates"),
+       subtitle = paste0("Averaged across ", mids_obj$m, " imputations - Red = Higher, Blue = Lower"),
+       x = NULL, y = "Profile")
+
+ggsave("lpa_profile_heatmap_MI.png", plot = p_heatmap, 
+       width = 12, height = 6, dpi = 300)
+
+cat("✓ Profile visualizations saved\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 8: Exploratory discontinuation comparison (pooled across imputations)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("EXPLORATORY: Profile differences in discontinuation\n")
+cat("(Descriptive comparison - NOT predictive modeling)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Calculate discontinuation rates pooled across all imputations
+discont_rates_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    mutate(row_id = row_number()) %>%
+    select(row_id, scrn_stopped_bzra) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  # Merge with consensus profiles
+  imp_with_profile <- consensus_profiles_df %>%
+    left_join(imp_data, by = "row_id") %>%
+    filter(!is.na(scrn_stopped_bzra)) %>%
+    mutate(discontinued = as.numeric(as.character(scrn_stopped_bzra)))
+  
+  # Calculate rates by profile
+  rates_m <- imp_with_profile %>%
+    group_by(profile) %>%
+    summarise(
+      N = n(),
+      N_discontinued = sum(discontinued, na.rm = TRUE),
+      Rate = mean(discontinued, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(imputation = m)
+  
+  discont_rates_list[[m]] <- rates_m
+}
+
+# Pool discontinuation rates
+pooled_discont <- bind_rows(discont_rates_list) %>%
+  group_by(profile) %>%
+  summarise(
+    N = mean(N),  # Should be same across imputations
+    Mean_Rate = mean(Rate),
+    SD_Rate = sd(Rate),
+    SE_Rate = SD_Rate / sqrt(mids_obj$m),
+    CI_lower = Mean_Rate - 1.96 * SE_Rate,
+    CI_upper = Mean_Rate + 1.96 * SE_Rate,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Rate_Pct = round(100 * Mean_Rate, 1),
+    CI_lower_Pct = round(100 * CI_lower, 1),
+    CI_upper_Pct = round(100 * CI_upper, 1)
+  )
+
+cat("Discontinuation rates by profile (POOLED ACROSS", mids_obj$m, "IMPUTATIONS):\n")
+print(pooled_discont %>% 
+        select(profile, N, Rate_Pct, CI_lower_Pct, CI_upper_Pct))
+cat("\n")
+
+# Chi-square test using first imputation (for reference)
+first_imp_test <- complete(mids_obj, 1) %>%
+  mutate(row_id = row_number()) %>%
+  inner_join(consensus_profiles_df, by = "row_id") %>%
+  filter(!is.na(scrn_stopped_bzra))
+
+if(nrow(first_imp_test) > 0) {
+  chisq_test <- chisq.test(table(first_imp_test$profile, 
+                                 first_imp_test$scrn_stopped_bzra))
+  cat("Chi-square test (exploratory, first imputation):\n")
+  cat("  χ² =", round(chisq_test$statistic, 2), "\n")
+  cat("  p =", format.pval(chisq_test$p.value, digits = 3), "\n\n")
+}
+
+cat("⚠ IMPORTANT: This is EXPLORATORY, not predictive\n")
+cat("   Use regression (below) for actual prediction\n\n")
+
+# Save plot with pooled rates
+p_explore <- ggplot(pooled_discont, 
+                    aes(x = profile, y = Rate_Pct, fill = profile)) +
+  geom_col(alpha = 0.8) +
+  geom_errorbar(aes(ymin = CI_lower_Pct, ymax = CI_upper_Pct), width = 0.3) +
+  geom_text(aes(label = paste0(Rate_Pct, "%")), vjust = -0.5, size = 4) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  labs(title = "EXPLORATORY: Discontinuation by Profile (Pooled)",
+       subtitle = paste0("Rates averaged across ", mids_obj$m, " imputations"),
+       y = "Discontinuation Rate (%)", x = "Profile") +
+  theme(legend.position = "none")
+
+ggsave("lpa_exploratory_discontinuation_MI.png", plot = p_explore, 
+       width = 10, height = 6, dpi = 300)
+cat("✓ Saved exploratory plot\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 9: Save results
+# -----------------------------------------------------------------------------
+
+cat("Saving LPA results...\n\n")
+
+lpa_mi_results <- list(
+  # Consensus information
+  consensus_k = consensus_k,
+  n_imputations = mids_obj$m,
+  
+  # Profile assignments
+  consensus_profiles = consensus_data$profile,
+  assignment_stability = assignment_stability,
+  
+  # Model information
+  mean_entropy = mean(entropy_list),
+  entropy_sd = sd(entropy_list),
+  
+  # Pooled characteristics
+  pooled_means = profile_summary,
+  
+  # All LPA fits
+  lpa_fits = lpa_consensus_list,
+  
+  # Distribution
+  profile_distribution = table(consensus_data$profile)
+)
+
+saveRDS(lpa_mi_results, "lpa_results_multiple_imputation.rds")
+cat("✓ Saved: lpa_results_multiple_imputation.rds\n\n")
+
+# Also save consensus profiles to merge with other data later
+consensus_profiles_df <- data.frame(
+  row_id = 1:nrow(consensus_data),
+  profile = consensus_data$profile,
+  stability = assignment_stability
+)
+
+saveRDS(consensus_profiles_df, "consensus_profiles.rds")
+cat("✓ Saved: consensus_profiles.rds\n\n")
+
+# -----------------------------------------------------------------------------
+# SUMMARY
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("LPA WITH MULTIPLE IMPUTATION - COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("RESULTS SUMMARY:\n")
+cat("  Imputations analyzed:", mids_obj$m, "\n")
+cat("  Consensus profiles:", consensus_k, "\n")
+cat("  Mean entropy:", round(mean(entropy_list), 3), "±", round(sd(entropy_list), 3), "\n")
+cat("  Mean assignment stability:", round(100 * mean(assignment_stability), 1), "%\n\n")
+
+cat("PROFILE SIZES:\n")
+print(table(consensus_data$profile))
+cat("\nProportions:\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+cat("ADVANTAGES OF THIS APPROACH:\n")
+cat("  ✓ Uses all", mids_obj$m, "imputations (not just one)\n")
+cat("  ✓ Accounts for imputation uncertainty\n")
+cat("  ✓ More stable profile assignments\n")
+cat("  ✓ Pooled estimates reduce bias\n")
+cat("  ✓ Provides assignment stability metric\n\n")
+
+cat("OUTPUT FILES:\n")
+cat("  ✓ lpa_bic_selection_MI.png\n")
+cat("  ✓ lpa_profiles_descriptive_MI.png\n")
+cat("  ✓ lpa_profile_heatmap_MI.png\n")
+if(exists("p_explore")) {
+  cat("  ✓ lpa_exploratory_discontinuation_MI.png\n")
+}
+cat("  ✓ lpa_results_multiple_imputation.rds\n")
+cat("  ✓ consensus_profiles.rds\n\n")
+
+2.5 %`[i], 3), ",",
+        round(sig_full#==============================================================================
+# LPA WITH MULTIPLE IMPUTATION - USING ALL 35 IMPUTED DATASETS
+# Approach: Fit LPA on each imputation, then combine results
+#==============================================================================
+
+library(tidyverse)
+library(mice)
+library(mclust)
+library(factoextra)
+library(tableone)
+library(ggplot2)
+library(gridExtra)
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART 1: LATENT PROFILE ANALYSIS - WITH MULTIPLE IMPUTATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load mids imputed data
+mids_obj <- readRDS("imputed_data_with_subscales.rds")
+cat("Loaded mids object with", mids_obj$m, "imputations\n\n")
+
+cat("STAGE 1 OBJECTIVE: Identify distinct personality-based patient profiles\n")
+cat("Using ALL", mids_obj$m, "imputations for robust estimates\n")
+cat("This is DESCRIPTIVE, not predictive\n\n")
+
+# -----------------------------------------------------------------------------
+# Define personality variables for profiling
+# -----------------------------------------------------------------------------
+
+personality_vars <- c(
+  # BFI-10 subscales
+  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  
+  # SURPS subscales
+  "SURPS_Impulsivity", "SURPS_Sensation_Seeking", "SURPS_Hopelessness", 
+  "SURPS_Anxiety_Sensitivity",
+  
+  # DBAS subscales
+  "DBAS_Consequences", "DBAS_Worry_Helplessness", "DBAS_Expectations", 
+  "DBAS_Medications",
+  
+  # CISS subscales
+  "CISS_Task", "CISS_Emotion", "CISS_Avoidance"
+)
+
+# Get first imputation to check variables
+first_imp <- complete(mids_obj, 1)
+personality_vars <- personality_vars[personality_vars %in% names(first_imp)]
+
+cat("Personality variables for profiling:\n")
+for(v in personality_vars) {
+  cat("  ✓", v, "\n")
+}
+cat("\nTotal:", length(personality_vars), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 1: Fit LPA on each imputed dataset
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 1: Fitting LPA on each of", mids_obj$m, "imputed datasets\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Store results from each imputation
+lpa_results_list <- list()
+bic_results <- list()
+selected_k_list <- numeric(mids_obj$m)
+
+set.seed(123)
+
+for(m in 1:mids_obj$m) {
+  cat("Processing imputation", m, "of", mids_obj$m, "...\n")
+  
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data (no missing values needed for LPA)
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale variables
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit LPA models (1-8 profiles)
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = 1:8, verbose = FALSE)
+  
+  # Store results
+  lpa_results_list[[m]] <- lpa_fit_m
+  bic_results[[m]] <- lpa_fit_m$BIC
+  selected_k_list[m] <- lpa_fit_m$G
+  
+  cat("  → Best k =", lpa_fit_m$G, ", BIC =", round(lpa_fit_m$bic, 2), "\n")
+}
+
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 2: Determine consensus number of profiles
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 2: Determining consensus number of profiles\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Most common k selected
+k_table <- table(selected_k_list)
+cat("Number of profiles selected across imputations:\n")
+print(k_table)
+cat("\n")
+
+# Use modal (most common) k
+consensus_k <- as.numeric(names(k_table)[which.max(k_table)])
+cat("Consensus number of profiles:", consensus_k, "\n")
+cat("Selected in", max(k_table), "out of", mids_obj$m, "imputations\n\n")
+
+# If there's a tie or concern, you could also use median/mean
+cat("Distribution of selected k:\n")
+cat("  Mode:", consensus_k, "\n")
+cat("  Median:", median(selected_k_list), "\n")
+cat("  Mean:", round(mean(selected_k_list), 2), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 3: Refit LPA with consensus k on all imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 3: Refitting LPA with k =", consensus_k, "on all imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+lpa_consensus_list <- list()
+profile_assignments_list <- list()
+entropy_list <- numeric(mids_obj$m)
+
+for(m in 1:mids_obj$m) {
+  # Extract imputation
+  imp_data <- complete(mids_obj, m)
+  
+  # Prepare LPA data
+  lpa_data_m <- imp_data %>%
+    select(all_of(personality_vars))
+  
+  # Scale
+  lpa_scaled_m <- scale(lpa_data_m)
+  
+  # Fit with consensus k
+  lpa_fit_m <- Mclust(lpa_scaled_m, G = consensus_k, verbose = FALSE)
+  
+  # Calculate entropy
+  entropy_m <- 1 - (sum(-lpa_fit_m$z * log(lpa_fit_m$z), na.rm = TRUE) / 
+                    (nrow(lpa_scaled_m) * log(consensus_k)))
+  
+  # Store
+  lpa_consensus_list[[m]] <- lpa_fit_m
+  profile_assignments_list[[m]] <- lpa_fit_m$classification
+  entropy_list[m] <- entropy_m
+}
+
+cat("Entropy across imputations:\n")
+cat("  Mean:", round(mean(entropy_list), 3), "\n")
+cat("  SD:", round(sd(entropy_list), 3), "\n")
+cat("  Range:", round(min(entropy_list), 3), "-", round(max(entropy_list), 3), "\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 4: Obtain consensus profile assignments
+# Method: Use first imputation as reference, assign based on modal profile
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 4: Creating consensus profile assignments\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use first imputation as reference
+reference_lpa <- lpa_consensus_list[[1]]
+reference_profiles <- profile_assignments_list[[1]]
+
+# For simplicity, use the modal profile assignment across imputations
+# This is more stable than using just one imputation
+n_obs <- length(reference_profiles)
+
+# Create matrix of profile assignments (rows = obs, cols = imputations)
+profile_matrix <- do.call(cbind, profile_assignments_list)
+
+# Get modal profile for each observation
+modal_profiles <- apply(profile_matrix, 1, function(x) {
+  as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+})
+
+# Create final dataset with consensus profiles
+consensus_data <- complete(mids_obj, 1) %>%
+  select(all_of(personality_vars)) %>%
+  mutate(
+    profile = factor(modal_profiles,
+                    levels = 1:consensus_k,
+                    labels = paste0("Profile_", 1:consensus_k))
+  )
+
+cat("Consensus profile distribution:\n")
+print(table(consensus_data$profile))
+cat("\nProportions (%):\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+# Calculate assignment stability (what % of imputations agree with modal?)
+assignment_stability <- apply(profile_matrix, 1, function(x) {
+  modal_val <- as.numeric(names(sort(table(x), decreasing = TRUE)[1]))
+  mean(x == modal_val)
+})
+
+cat("Profile assignment stability:\n")
+cat("  Mean agreement:", round(100 * mean(assignment_stability), 1), "%\n")
+cat("  Median agreement:", round(100 * median(assignment_stability), 1), "%\n")
+cat("  Min agreement:", round(100 * min(assignment_stability), 1), "%\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 5: Pool profile characteristics across imputations
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("STEP 5: Pooling profile characteristics across imputations\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# For each imputation, calculate profile means
+profile_means_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    select(all_of(personality_vars)) %>%
+    mutate(profile = factor(profile_assignments_list[[m]],
+                           levels = 1:consensus_k,
+                           labels = paste0("Profile_", 1:consensus_k)))
+  
+  profile_means_m <- imp_data %>%
+    group_by(profile) %>%
+    summarise(across(all_of(personality_vars), mean, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(imputation = m)
+  
+  profile_means_list[[m]] <- profile_means_m
+}
+
+# Combine and average across imputations
+pooled_profile_means <- bind_rows(profile_means_list) %>%
+  group_by(profile) %>%
+  summarise(across(all_of(personality_vars), 
+                   list(mean = mean, sd = sd)),
+            .groups = "drop")
+
+cat("Pooled profile characteristics (averaged across", mids_obj$m, "imputations):\n\n")
+
+# Create a cleaner table
+profile_summary <- pooled_profile_means %>%
+  select(profile, ends_with("_mean")) %>%
+  rename_with(~str_remove(., "_mean"), ends_with("_mean"))
+
+print(profile_summary, n = Inf)
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# STEP 6: Statistical comparison of profiles (pooled)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PERSONALITY CHARACTERISTICS BY PROFILE (POOLED)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Use consensus profiles with first imputation for TableOne
+profile_table <- CreateTableOne(
+  vars = personality_vars,
+  strata = "profile",
+  data = consensus_data,
+  test = TRUE
+)
+
+print(profile_table, smd = TRUE)
+cat("\n")
+cat("Note: Statistics based on consensus profile assignments\n")
+cat("      Means are pooled across", mids_obj$m, "imputations\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 7: Visualizations using reference imputation
+# -----------------------------------------------------------------------------
+
+cat("Creating profile visualizations...\n\n")
+
+# Use reference LPA for BIC plot
+bic_plot <- fviz_mclust(reference_lpa, "BIC", palette = "jco") +
+  labs(title = "LPA Model Selection: BIC Values (Reference Imputation)",
+       subtitle = paste0("Consensus k = ", consensus_k, " across ", mids_obj$m, " imputations")) +
+  theme_minimal()
+
+ggsave("lpa_bic_selection_MI.png", plot = bic_plot, width = 10, height = 6, dpi = 300)
+
+# Classification plot using consensus profiles
+consensus_scaled <- scale(consensus_data %>% select(-profile))
+pca_result <- prcomp(consensus_scaled, scale. = FALSE)
+pca_data <- data.frame(
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  profile = consensus_data$profile
+)
+
+class_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = profile)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(title = paste("Patient Profiles (k =", consensus_k, ") - Consensus Assignment"),
+       subtitle = paste0("Based on ", mids_obj$m, " imputed datasets"),
+       x = "First Principal Component",
+       y = "Second Principal Component",
+       color = "Profile")
+
+ggsave("lpa_profiles_descriptive_MI.png", plot = class_plot, 
+       width = 10, height = 8, dpi = 300)
+
+# Heatmap with pooled means
+heatmap_data <- profile_summary %>%
+  pivot_longer(-profile, names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  mutate(z_score = scale(value)[, 1]) %>%
+  ungroup()
+
+p_heatmap <- ggplot(heatmap_data, aes(x = variable, y = profile, fill = z_score)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B",
+                       midpoint = 0, name = "Z-Score",
+                       limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        plot.title = element_text(size = 14, face = "bold")) +
+  labs(title = paste("Personality Profiles (k =", consensus_k, ") - Pooled Estimates"),
+       subtitle = paste0("Averaged across ", mids_obj$m, " imputations - Red = Higher, Blue = Lower"),
+       x = NULL, y = "Profile")
+
+ggsave("lpa_profile_heatmap_MI.png", plot = p_heatmap, 
+       width = 12, height = 6, dpi = 300)
+
+cat("✓ Profile visualizations saved\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 8: Exploratory discontinuation comparison (pooled across imputations)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("EXPLORATORY: Profile differences in discontinuation\n")
+cat("(Descriptive comparison - NOT predictive modeling)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Calculate discontinuation rates pooled across all imputations
+discont_rates_list <- list()
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    mutate(row_id = row_number()) %>%
+    select(row_id, scrn_stopped_bzra) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  # Merge with consensus profiles
+  imp_with_profile <- consensus_profiles_df %>%
+    left_join(imp_data, by = "row_id") %>%
+    filter(!is.na(scrn_stopped_bzra)) %>%
+    mutate(discontinued = as.numeric(as.character(scrn_stopped_bzra)))
+  
+  # Calculate rates by profile
+  rates_m <- imp_with_profile %>%
+    group_by(profile) %>%
+    summarise(
+      N = n(),
+      N_discontinued = sum(discontinued, na.rm = TRUE),
+      Rate = mean(discontinued, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(imputation = m)
+  
+  discont_rates_list[[m]] <- rates_m
+}
+
+# Pool discontinuation rates
+pooled_discont <- bind_rows(discont_rates_list) %>%
+  group_by(profile) %>%
+  summarise(
+    N = mean(N),  # Should be same across imputations
+    Mean_Rate = mean(Rate),
+    SD_Rate = sd(Rate),
+    SE_Rate = SD_Rate / sqrt(mids_obj$m),
+    CI_lower = Mean_Rate - 1.96 * SE_Rate,
+    CI_upper = Mean_Rate + 1.96 * SE_Rate,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Rate_Pct = round(100 * Mean_Rate, 1),
+    CI_lower_Pct = round(100 * CI_lower, 1),
+    CI_upper_Pct = round(100 * CI_upper, 1)
+  )
+
+cat("Discontinuation rates by profile (POOLED ACROSS", mids_obj$m, "IMPUTATIONS):\n")
+print(pooled_discont %>% 
+        select(profile, N, Rate_Pct, CI_lower_Pct, CI_upper_Pct))
+cat("\n")
+
+# Chi-square test using first imputation (for reference)
+first_imp_test <- complete(mids_obj, 1) %>%
+  mutate(row_id = row_number()) %>%
+  inner_join(consensus_profiles_df, by = "row_id") %>%
+  filter(!is.na(scrn_stopped_bzra))
+
+if(nrow(first_imp_test) > 0) {
+  chisq_test <- chisq.test(table(first_imp_test$profile, 
+                                 first_imp_test$scrn_stopped_bzra))
+  cat("Chi-square test (exploratory, first imputation):\n")
+  cat("  χ² =", round(chisq_test$statistic, 2), "\n")
+  cat("  p =", format.pval(chisq_test$p.value, digits = 3), "\n\n")
+}
+
+cat("⚠ IMPORTANT: This is EXPLORATORY, not predictive\n")
+cat("   Use regression (below) for actual prediction\n\n")
+
+# Save plot with pooled rates
+p_explore <- ggplot(pooled_discont, 
+                    aes(x = profile, y = Rate_Pct, fill = profile)) +
+  geom_col(alpha = 0.8) +
+  geom_errorbar(aes(ymin = CI_lower_Pct, ymax = CI_upper_Pct), width = 0.3) +
+  geom_text(aes(label = paste0(Rate_Pct, "%")), vjust = -0.5, size = 4) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  labs(title = "EXPLORATORY: Discontinuation by Profile (Pooled)",
+       subtitle = paste0("Rates averaged across ", mids_obj$m, " imputations"),
+       y = "Discontinuation Rate (%)", x = "Profile") +
+  theme(legend.position = "none")
+
+ggsave("lpa_exploratory_discontinuation_MI.png", plot = p_explore, 
+       width = 10, height = 6, dpi = 300)
+cat("✓ Saved exploratory plot\n\n")
+
+# -----------------------------------------------------------------------------
+# STEP 9: Save results
+# -----------------------------------------------------------------------------
+
+cat("Saving LPA results...\n\n")
+
+lpa_mi_results <- list(
+  # Consensus information
+  consensus_k = consensus_k,
+  n_imputations = mids_obj$m,
+  
+  # Profile assignments
+  consensus_profiles = consensus_data$profile,
+  assignment_stability = assignment_stability,
+  
+  # Model information
+  mean_entropy = mean(entropy_list),
+  entropy_sd = sd(entropy_list),
+  
+  # Pooled characteristics
+  pooled_means = profile_summary,
+  
+  # All LPA fits
+  lpa_fits = lpa_consensus_list,
+  
+  # Distribution
+  profile_distribution = table(consensus_data$profile)
+)
+
+saveRDS(lpa_mi_results, "lpa_results_multiple_imputation.rds")
+cat("✓ Saved: lpa_results_multiple_imputation.rds\n\n")
+
+# Also save consensus profiles to merge with other data later
+consensus_profiles_df <- data.frame(
+  row_id = 1:nrow(consensus_data),
+  profile = consensus_data$profile,
+  stability = assignment_stability
+)
+
+saveRDS(consensus_profiles_df, "consensus_profiles.rds")
+cat("✓ Saved: consensus_profiles.rds\n\n")
+
+# -----------------------------------------------------------------------------
+# SUMMARY
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("LPA WITH MULTIPLE IMPUTATION - COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("RESULTS SUMMARY:\n")
+cat("  Imputations analyzed:", mids_obj$m, "\n")
+cat("  Consensus profiles:", consensus_k, "\n")
+cat("  Mean entropy:", round(mean(entropy_list), 3), "±", round(sd(entropy_list), 3), "\n")
+cat("  Mean assignment stability:", round(100 * mean(assignment_stability), 1), "%\n\n")
+
+cat("PROFILE SIZES:\n")
+print(table(consensus_data$profile))
+cat("\nProportions:\n")
+print(round(100 * prop.table(table(consensus_data$profile)), 1))
+cat("\n\n")
+
+cat("ADVANTAGES OF THIS APPROACH:\n")
+cat("  ✓ Uses all", mids_obj$m, "imputations (not just one)\n")
+cat("  ✓ Accounts for imputation uncertainty\n")
+cat("  ✓ More stable profile assignments\n")
+cat("  ✓ Pooled estimates reduce bias\n")
+cat("  ✓ Provides assignment stability metric\n\n")
+
+cat("OUTPUT FILES:\n")
+cat("  ✓ lpa_bic_selection_MI.png\n")
+cat("  ✓ lpa_profiles_descriptive_MI.png\n")
+cat("  ✓ lpa_profile_heatmap_MI.png\n")
+if(exists("p_explore")) {
+  cat("  ✓ lpa_exploratory_discontinuation_MI.png\n")
+}
+cat("  ✓ lpa_results_multiple_imputation.rds\n")
+cat("  ✓ consensus_profiles.rds\n\n")
+
+97.5 %`[i], 3), "]\n")
+    cat("      p =", format.pval(sig_full$p.value[i], digits = 3), "\n")
+  }
+} else {
+  cat("  (None)\n")
+}
+cat("\n")
+
+# Calculate pooled AUC
+auc_full_list <- numeric(mids_obj$m)
+
+for(m in 1:mids_obj$m) {
+  imp_data <- complete(mids_obj, m) %>%
+    filter(!is.na(scrn_stopped_bzra))
+  
+  model_m <- glm(formula_full, data = imp_data, family = binomial)
+  pred_m <- predict(model_m, type = "response")
+  
+  outcome_numeric <- as.numeric(as.character(imp_data$scrn_stopped_bzra))
+  roc_m <- roc(outcome_numeric, pred_m, quiet = TRUE)
+  auc_full_list[m] <- auc(roc_m)
+}
+
+mean_auc_full <- mean(auc_full_list)
+se_auc_full <- sd(auc_full_list) / sqrt(mids_obj$m)
+
+cat("Pooled AUC (Full Model):\n")
+cat("  Mean AUC:", round(mean_auc_full, 3), "\n")
+cat("  SE:", round(se_auc_full, 4), "\n")
+cat("  95% CI:", round(mean_auc_full - 1.96 * se_auc_full, 3), "-",
+    round(mean_auc_full + 1.96 * se_auc_full, 3), "\n\n")
+
+# -----------------------------------------------------------------------------
+# MODEL COMPARISON
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("MODEL COMPARISON SUMMARY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+comparison_table <- data.frame(
+  Model = c("Demographics Only", "Personality Only", "Demographics + Personality"),
+  N_Predictors = c(length(demographic_predictors), 
+                   length(personality_predictors), 
+                   length(all_predictors)),
+  Mean_AUC = c(mean_auc_demo, mean_auc_pers, mean_auc_full),
+  SE_AUC = c(se_auc_demo, se_auc_pers, se_auc_full),
+  CI_Lower = c(mean_auc_demo - 1.96 * se_auc_demo,
+               mean_auc_pers - 1.96 * se_auc_pers,
+               mean_auc_full - 1.96 * se_auc_full),
+  CI_Upper = c(mean_auc_demo + 1.96 * se_auc_demo,
+               mean_auc_pers + 1.96 * se_auc_pers,
+               mean_auc_full + 1.96 * se_auc_full)
+) %>%
+  mutate(
+    Mean_AUC = round(Mean_AUC, 3),
+    SE_AUC = round(SE_AUC, 4),
+    CI_Lower = round(CI_Lower, 3),
+    CI_Upper = round(CI_Upper, 3)
+  )
+
+print(comparison_table, row.names = FALSE)
+cat("\n")
+
+# Test if full model is significantly better
+cat("AUC Improvements:\n")
+cat("  Personality vs Demographics: +", 
+    round(mean_auc_pers - mean_auc_demo, 3), "\n")
+cat("  Full vs Demographics: +", 
+    round(mean_auc_full - mean_auc_demo, 3), "\n")
+cat("  Full vs Personality: +", 
+    round(mean_auc_full - mean_auc_pers, 3), "\n\n")
+
+# Determine best model
+best_model <- comparison_table$Model[which.max(comparison_table$Mean_AUC)]
+best_auc <- max(comparison_table$Mean_AUC)
+
+cat("BEST MODEL:", best_model, "\n")
+cat("  AUC:", best_auc, "\n")
+cat("  Discrimination:", ifelse(best_auc >= 0.8, "Excellent",
+                          ifelse(best_auc >= 0.7, "Acceptable", "Fair")), "\n\n")
+
+# -----------------------------------------------------------------------------
+# Visualization: ROC curves (using first imputation for plot)
+# -----------------------------------------------------------------------------
+
+cat("Creating ROC curve visualization...\n")
+
+first_imp <- complete(mids_obj, 1) %>%
+  filter(!is.na(scrn_stopped_bzra)) %>%
+  mutate(outcome = as.numeric(as.character(scrn_stopped_bzra)))
+
+# Fit models on first imputation
+model_demo_1 <- glm(formula_demo, data = first_imp, family = binomial)
+model_pers_1 <- glm(formula_pers, data = first_imp, family = binomial)
+model_full_1 <- glm(formula_full, data = first_imp, family = binomial)
+
+# Get predictions
+pred_demo_1 <- predict(model_demo_1, type = "response")
+pred_pers_1 <- predict(model_pers_1, type = "response")
+pred_full_1 <- predict(model_full_1, type = "response")
+
+# Create ROC objects
+roc_demo_1 <- roc(first_imp$outcome, pred_demo_1, quiet = TRUE)
+roc_pers_1 <- roc(first_imp$outcome, pred_pers_1, quiet = TRUE)
+roc_full_1 <- roc(first_imp$outcome, pred_full_1, quiet = TRUE)
+
+# Plot
+roc_plot <- ggroc(list(
+  Demographics = roc_demo_1,
+  Personality = roc_pers_1,
+  Full = roc_full_1
+), size = 1.2) +
+  geom_abline(intercept = 1, slope = 1, linetype = "dashed", color = "gray50") +
+  scale_color_manual(
+    values = c("Demographics" = "#E41A1C", 
+               "Personality" = "#377EB8", 
+               "Full" = "#4DAF4A"),
+    name = "Model",
+    labels = c(
+      paste0("Demographics (AUC=", round(mean_auc_demo, 3), ")"),
+      paste0("Personality (AUC=", round(mean_auc_pers, 3), ")"),
+      paste0("Full (AUC=", round(mean_auc_full, 3), ")")
+    )
+  ) +
+  theme_minimal() +
+  labs(
+    title = "ROC Curves: Predicting BZRA Discontinuation",
+    subtitle = paste0("AUCs are pooled estimates across ", mids_obj$m, " imputations"),
+    x = "1 - Specificity (False Positive Rate)",
+    y = "Sensitivity (True Positive Rate)"
+  ) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.position = "bottom"
+  )
+
+ggsave("regression_roc_comparison_MI.png", plot = roc_plot, 
+       width = 10, height = 8, dpi = 300)
+
+cat("✓ Saved: regression_roc_comparison_MI.png\n\n")
+
+# -----------------------------------------------------------------------------
+# Coefficient plot for significant predictors
+# -----------------------------------------------------------------------------
+
+cat("Creating coefficient plot for significant predictors...\n")
+
+if(nrow(sig_full) > 0) {
+  # Prepare data
+  coef_plot_data <- sig_full %>%
+    mutate(
+      term = factor(term, levels = term[order(estimate)]),
+      log_OR = log(estimate),
+      log_lower = log(`2.5 %`),
+      log_upper = log(`97.5 %`),
+      direction = ifelse(log_OR > 0, "Increases Risk", "Decreases Risk")
+    )
+  
+  p_coef <- ggplot(coef_plot_data, aes(x = log_OR, y = term, color = direction)) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = log_lower, xmax = log_upper), height = 0.2) +
+    scale_color_manual(values = c("Increases Risk" = "#B2182B", 
+                                  "Decreases Risk" = "#2166AC")) +
+    theme_minimal() +
+    labs(
+      title = "Significant Predictors of BZRA Discontinuation",
+      subtitle = paste0("Pooled across ", mids_obj$m, " imputations (p < 0.05)"),
+      x = "Log Odds Ratio (with 95% CI)",
+      y = "Predictor",
+      color = "Direction"
+    ) +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      legend.position = "bottom"
+    )
+  
+  ggsave("regression_coefficients_MI.png", plot = p_coef, 
+         width = 10, height = 6, dpi = 300)
+  
+  cat("✓ Saved: regression_coefficients_MI.png\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# Save regression results
+# -----------------------------------------------------------------------------
+
+cat("Saving regression results...\n")
+
+regression_mi_results <- list(
+  # Model summaries
+  demographics_summary = summary_demo,
+  personality_summary = summary_pers,
+  full_summary = summary_full,
+  
+  # Pooled objects
+  demographics_pooled = pooled_demo,
+  personality_pooled = pooled_pers,
+  full_pooled = pooled_full,
+  
+  # AUC results
+  auc_demographics = list(mean = mean_auc_demo, se = se_auc_demo, values = auc_demo_list),
+  auc_personality = list(mean = mean_auc_pers, se = se_auc_pers, values = auc_pers_list),
+  auc_full = list(mean = mean_auc_full, se = se_auc_full, values = auc_full_list),
+  
+  # Significant predictors
+  sig_demographics = sig_demo,
+  sig_personality = sig_pers,
+  sig_full = sig_full,
+  
+  # Comparison
+  comparison_table = comparison_table,
+  
+  # Sample info
+  n_imputations = mids_obj$m,
+  sample_size = round(mean(sample_sizes)),
+  discontinuation_rate = list(mean = mean_rate, se = se_rate)
+)
+
+saveRDS(regression_mi_results, "regression_results_MI.rds")
+cat("✓ Saved: regression_results_MI.rds\n\n")
+
+# Save comparison table
+write.csv(comparison_table, "regression_model_comparison_MI.csv", row.names = FALSE)
+cat("✓ Saved: regression_model_comparison_MI.csv\n\n")
+
+# -----------------------------------------------------------------------------
+# FINAL SUMMARY
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("COMPLETE ANALYSIS SUMMARY: LPA + REGRESSION WITH MI\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("PART 1 - LPA (DESCRIPTIVE):\n")
+cat("  Imputations used:", mids_obj$m, "\n")
+cat("  Profiles identified:", consensus_k, "\n")
+cat("  Mean entropy:", round(mean(entropy_list), 3), "±", round(sd(entropy_list), 3), "\n")
+cat("  Assignment stability:", round(100 * mean(assignment_stability), 1), "%\n")
+cat("  → Describes patient heterogeneity\n\n")
+
+cat("PART 2 - REGRESSION (PREDICTIVE):\n")
+cat("  Sample size:", round(mean(sample_sizes)), "\n")
+cat("  Discontinuation rate:", round(100 * mean_rate, 1), "%\n")
+cat("  Predictors used:", length(all_predictors), 
+    "(", length(demographic_predictors), "demo +", 
+    length(personality_predictors), "personality)\n\n")
+
+cat("BEST PREDICTIVE MODEL:", best_model, "\n")
+cat("  Pooled AUC:", best_auc, 
+    "(", ifelse(best_auc >= 0.8, "excellent", 
+         ifelse(best_auc >= 0.7, "acceptable", "fair")), ")\n")
+cat("  Significant predictors:", nrow(sig_full), "\n\n")
+
+cat("KEY FINDINGS:\n")
+cat("  • Personality variables", 
+    ifelse(mean_auc_pers > mean_auc_demo, "outperform", "underperform"),
+    "demographics (ΔAUC =", round(mean_auc_pers - mean_auc_demo, 3), ")\n")
+cat("  • Full model provides", 
+    ifelse(mean_auc_full > max(mean_auc_demo, mean_auc_pers), "best", "comparable"),
+    "prediction\n")
+cat("  • All estimates properly account for imputation uncertainty\n\n")
+
+cat("OUTPUT FILES:\n")
+cat("  LPA:\n")
+cat("    ✓ lpa_bic_selection_MI.png\n")
+cat("    ✓ lpa_profiles_descriptive_MI.png\n")
+cat("    ✓ lpa_profile_heatmap_MI.png\n")
+cat("    ✓ lpa_exploratory_discontinuation_MI.png\n")
+cat("    ✓ lpa_results_multiple_imputation.rds\n")
+cat("    ✓ consensus_profiles.rds\n\n")
+cat("  Regression:\n")
+cat("    ✓ regression_roc_comparison_MI.png\n")
+if(exists("p_coef")) {
+  cat("    ✓ regression_coefficients_MI.png\n")
+}
+cat("    ✓ regression_results_MI.rds\n")
+cat("    ✓ regression_model_comparison_MI.csv\n\n")
+
+cat("ADVANTAGES OF THIS APPROACH:\n")
+cat("  ✓ All", mids_obj$m, "imputations used (no information loss)\n")
+cat("  ✓ Properly pooled standard errors (Rubin's rules)\n")
+cat("  ✓ Accounts for imputation uncertainty\n")
+cat("  ✓ Valid confidence intervals and p-values\n")
+cat("  ✓ More generalizable findings\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("ANALYSIS COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n")
 ```
+
+
 
 ## Sensitivity Analysis
 ```{r}
