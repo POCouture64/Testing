@@ -9,7 +9,6 @@ editor: visual
 
 This is the code I will use for my MSc thesis because I am going to fix the issues with my previous code and will allow me to better keep track of everything that I have changed and things that I am investigating versus trying to edit all the code and gettign confused about which parts have and have not been changed.
 
-
 ## Loading in the SIMOA
 
 The section I will use to load the SIMOAset that I will use for the analysis.
@@ -86,7 +85,6 @@ cat("After scrn_stopped_bzra filtering:", n_after_scrn, " (", round(n_after_scrn
 cat("After prov_terr == 14 removal:", n_after_prov, " (", round(n_after_prov / n_after_scrn * 100, 1), "% retained)\n")
 cat("Participants removed because they do not live in Canada:", n_removed_prov, "\n")
 ```
-
 
 ## Missing CISS Investigation
 
@@ -337,7 +335,6 @@ saveRDS(list(
 
 cat("✓ Investigation complete. Results saved to CISS_investigation_results.rds\n\n")
 ```
-
 
 ## Personality Missingness
 
@@ -1217,7 +1214,6 @@ cat("✓ Variable reduction and missingness analysis complete!\n\n")
 colnames(SIMOA_analysis)
 ```
 
-
 ```{r}
 # CRITICAL FIX: Verify all critical items are in df_imp BEFORE initializing mice
 critical_vars_check <- c(side_effects_items, safety_items, adl_items, dependence_items)
@@ -1264,8 +1260,6 @@ if(!all(vars_in_pred %in% vars_in_data) || !all(vars_in_method %in% vars_in_data
   cat("     ✓ Method vector length:", length(method), "\n\n")
 }
 ```
-
-
 
 ## Multiple Imputation
 
@@ -2224,7 +2218,6 @@ cat("═════════════════════════
 cat("END OF STEP 4: MULTIPLE IMPUTATION\n")
 cat("═══════════════════════════════════════════════════════════════\n")
 ```
-
 
 ## Subscale Creation
 
@@ -3190,7 +3183,6 @@ cat("\nExample reverse coding (first 5 rows):\n")
 head(data_imp1[, c("reserved", "reserved_rev")], 5)
 ```
 
-
 ## VSURF Variable Selection
 
 ```{r}
@@ -3914,7 +3906,6 @@ cat("  4. Use 'imputed_data_with_subscales_recoded.rds' for downstream analyses\
 cat("✓ Ready for downstream analysis!\n\n")
 ```
 
-
 ## Random Forest Modeling
 
 ```{r}
@@ -4402,7 +4393,6 @@ cat("  4. Interpret findings in clinical context\n\n")
 
 cat("✓ Random Forest modeling complete!\n\n")
 ```
-
 
 ## Logistic Regression Validation
 
@@ -5732,8 +5722,6 @@ cat("  approach, but provide Cohen's d for readers more familiar with it.\n\n")
 
 cat("Done!\n")
 ```
-
-
 
 ## Cluster Analysis
 
@@ -9879,9 +9867,8 @@ cat("ANALYSIS COMPLETE\n")
 cat("═══════════════════════════════════════════════════════════════\n")
 ```
 
-
-
 ## Sensitivity Analysis
+
 ```{r}
 #==============================================================================
 # CHUNK 10: MANDATORY SENSITIVITY ANALYSES - FIXED VERSION
@@ -10493,6 +10480,7 @@ cat("✓ Ready for FDR correction!\n\n")
 ```
 
 ## False Decision Rate Comparison
+
 ```{r}
 #==============================================================================
 # CHUNK 11: FDR-CORRECTED CLUSTER COMPARISONS
@@ -11090,6 +11078,7 @@ cat("✓ Ready for final documentation!\n\n")
 ```
 
 ## Final Documentation and Reporting
+
 ```{r}
 #==============================================================================
 # CHUNK 12: FINAL DOCUMENTATION AND REPORTING
@@ -12207,4 +12196,3 @@ cat("═════════════════════════
 cat("END OF ANALYSIS\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 ```
-
