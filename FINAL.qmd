@@ -1224,8 +1224,27 @@ if(all(withdrawal_indicators %in% names(SIMOA))) {
     SIMOA_analysis$wdl_symptom_count <- SIMOA$wdl_symptom_count
   }
   
+  # If wdl_symptom_count wasn't in original SIMOA_analysis, add it now
+  if(!"wdl_symptom_count" %in% names(SIMOA_analysis) && "wdl_symptom_count" %in% names(SIMOA)) {
+    SIMOA_analysis$wdl_symptom_count <- SIMOA$wdl_symptom_count
+    cat("✓ Added wdl_symptom_count to analysis dataset\n\n")
+  }
+  
 } else {
   cat("⚠️  Withdrawal variables not found in original data\n\n")
+}
+
+# Verify withdrawal count variable status after cleaning
+if("wdl_symptom_count" %in% names(SIMOA_analysis)) {
+  cat("✓ wdl_symptom_count successfully added to analysis dataset\n")
+  cat(sprintf("  Range: %d to %d\n", 
+              min(SIMOA_analysis$wdl_symptom_count, na.rm = TRUE),
+              max(SIMOA_analysis$wdl_symptom_count, na.rm = TRUE)))
+  cat(sprintf("  Missing: %d (%.1f%%)\n\n", 
+              sum(is.na(SIMOA_analysis$wdl_symptom_count)),
+              100*sum(is.na(SIMOA_analysis$wdl_symptom_count))/nrow(SIMOA_analysis)))
+} else {
+  cat("⚠️  wdl_symptom_count not available in analysis dataset\n\n")
 }
 
 # -----------------------------------------------------------------------------
@@ -1571,6 +1590,8 @@ cat("✓ All outputs saved to working directory\n")
 cat("✓ Ready for composite validation (separate script)\n")
 cat("✓ Ready for imputation step\n\n")
 ```
+
+
 
 
 
