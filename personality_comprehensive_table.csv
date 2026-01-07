@@ -1,4 +1,4 @@
-"Variable","Type","Continuer","Discontinuer","Test","p_value","Cohens_d","Cohens_d_95CI","Rank_Biserial","Rank_Biserial_95CI","Cramers_V","Cramers_V_95CI","q_value","Significant_FDR","Effect_Interpretation"
+"Variable","Type","Continuer","Discontinuer","Test","p_value","Cohens_d","Cohens_d_95CI","Rank_Biserial","Rank_Biserial_95CI","Cramers_V","Cramers_V_95CI","q_value_domain","Significant_FDR","Effect_Interpretation"
 "DBAS_Medications","Continuous","5.9 (1.83)","4.6 (2.22)","Mann-Whitney U",4.40017535974817e-07,0.673705326526375,"[0.44, 0.91]",0.343456423316355,"[0.22, 0.46]",NA,NA,7.48029811157188e-06,TRUE,"Medium"
 "DBAS_Total","Continuous","23.88 (5.9)","22.03 (6.21)","Mann-Whitney U",0.00876760451433977,0.311194083184246,"[0.08, 0.54]",0.177082828037837,"[0.04, 0.3]",NA,NA,0.0745246383718881,FALSE,"Small"
 "Extraversion","Continuous","6.22 (2.12)","6.85 (2.13)","Mann-Whitney U",0.0205960653269341,-0.295940667358856,"[-0.53, -0.06]",-0.157858355566335,"[-0.29, -0.03]",NA,NA,0.116711036852627,FALSE,"Small"
