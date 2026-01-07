@@ -1700,7 +1700,7 @@ critical_vars_to_add <- c(
   "gen_health", "med_quant", "osss_3_score", "phq2_score",
   
   # Medication burden (CORRECT: from variable reduction script)
-  "med_burden_1", "medburden_2", "medburden_3", "med_burden_4",
+  "med_burden_1", "med_burden2", "medburden_3", "med_burden_4",
   
   # Health condition counts
   "n_health_conditions", "n_physical_conditions", "n_ment_conditions", "n_sleep_conditions",
