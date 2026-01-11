@@ -7049,11 +7049,6 @@ cat("═════════════════════════
 
 
 
-
-
-
-
-
 ## FDR Comparison Descriptive Stats
 
 ```{r}
@@ -7061,6 +7056,7 @@ cat("═════════════════════════
 # ENHANCED BZRA DISCONTINUATION GROUP COMPARISONS
 # With comprehensive descriptive statistics, effect sizes, and CIs
 # FDR correction applied within each domain (family of tests)
+# Updated with proper variable recoding
 #==============================================================================
 
 library(tidyverse)
@@ -7079,18 +7075,119 @@ cat("  • Comprehensive descriptive statistics for all variables\n")
 cat("  • Multiple effect size metrics with 95% CIs\n")
 cat("  • Effect size interpretations\n")
 cat("  • Separate tables by domain\n")
-cat("  • FDR correction applied WITHIN each domain (family-wise)\n\n")
+cat("  • FDR correction applied WITHIN each domain (family-wise)\n")
+cat("  • Proper variable recoding for demographics\n\n")
 
-# Load data
-mids_with_subscales <- readRDS("imputed_data_with_subscales_recoded.rds")
-m <- mids_with_subscales$m
-cat("Number of imputations:", m, "\n\n")
+#==============================================================================
+# STEP 1: LOAD AND PREPARE DATA
+#==============================================================================
 
-# Check and prepare data
-analysis_data_check <- complete(mids_with_subscales, 1)
-if(!"scrn_stopped_bzra" %in% names(analysis_data_check)) {
-  stop("ERROR: scrn_stopped_bzra variable not found in data")
+cat("STEP 1: Loading data with outcome variable\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Load imputed data
+mids_original <- readRDS("imputed_data_with_subscales_recoded.rds")
+
+# Convert to long format including original data
+cat("Converting to long format...\n")
+long_data <- complete(mids_original, action = "long", include = TRUE)
+
+cat("Data structure:\n")
+cat("  Total rows:", nrow(long_data), "\n")
+cat("  Total columns:", ncol(long_data), "\n")
+cat("  Number of imputations:", max(long_data$.imp), "\n\n")
+
+# Check if outcome exists
+if(!"scrn_stopped_bzra" %in% names(long_data)) {
+  stop("Outcome variable 'scrn_stopped_bzra' not found!")
 }
+
+#==============================================================================
+# STEP 2: RECODE DEMOGRAPHIC VARIABLES
+#==============================================================================
+
+cat("STEP 2: Recoding demographic variables\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+long_data <- long_data %>%
+  mutate(
+    # Recode region (from prov_terr)
+    region = case_when(
+      prov_terr %in% c(1, 2, 3, 12) ~ "Western Canada",
+      prov_terr %in% c(9, 11) ~ "Central Canada",
+      prov_terr %in% c(4, 5, 7, 10) ~ "Atlantic Canada",
+      prov_terr %in% c(6, 8, 13) ~ "Territories",
+      TRUE ~ NA_character_
+    ),
+    region = factor(region, levels = c("Western Canada", "Central Canada", 
+                                        "Atlantic Canada", "Territories")),
+    
+    # Recode education_level (from education)
+    education_level = case_when(
+      education %in% c(1, 2, 3) ~ "High School or Less",
+      education %in% c(4, 5) ~ "University/Trade School",
+      TRUE ~ NA_character_
+    ),
+    education_level = factor(education_level, 
+                             levels = c("High School or Less", "University/Trade School")),
+    
+    # Recode employment_status (from employment)
+    employment_status = case_when(
+      employment %in% c(1, 2) ~ "Full- or Part-Time Work",
+      employment %in% c(0, 3, 4) ~ "Not in Workforce",
+      TRUE ~ NA_character_
+    ),
+    employment_status = factor(employment_status,
+                               levels = c("Full- or Part-Time Work", "Not in Workforce")),
+    
+    # Recode income as factor with labels
+    income = factor(income,
+                   levels = 1:5,
+                   labels = c("$15,000 or less", "$15,000 to $30,000", 
+                            "$30,000 to $50,000", "$50,000 to $80,000", 
+                            "$80,000 or more")),
+    
+    # Recode driving_freq as factor with labels
+    driving_freq = factor(driving_freq,
+                         levels = 0:3,
+                         labels = c("Do not drive", "Less than 1 day/week",
+                                  "1-3 days/week", "4-7 days/week")),
+    
+    # Recode sex as factor
+    sex = factor(sex, levels = c(1, 2), labels = c("Male", "Female"))
+  )
+
+cat("✓ Recoded: region (from prov_terr)\n")
+cat("✓ Recoded: education_level (from education)\n")
+cat("✓ Recoded: employment_status (from employment)\n")
+cat("✓ Recoded: income with labels\n")
+cat("✓ Recoded: driving_freq with labels\n")
+cat("✓ Recoded: sex with labels\n\n")
+
+# Verify recoding
+cat("Verification of recoded variables:\n")
+cat("  region distribution:\n")
+print(table(long_data$region[long_data$.imp == 1], useNA = "ifany"))
+cat("\n  education_level distribution:\n")
+print(table(long_data$education_level[long_data$.imp == 1], useNA = "ifany"))
+cat("\n  employment_status distribution:\n")
+print(table(long_data$employment_status[long_data$.imp == 1], useNA = "ifany"))
+cat("\n")
+
+# Convert back to mids
+cat("Converting back to mids object...\n")
+mids_with_subscales <- as.mids(long_data)
+
+cat("✓ Mids object created\n")
+cat("  Variables in mids$data:", ncol(mids_with_subscales$data), "\n\n")
+
+m <- mids_with_subscales$m
+
+#==============================================================================
+# STEP 3: VERIFY OUTCOME AND SAMPLE COMPOSITION
+#==============================================================================
+
+analysis_data_check <- complete(mids_with_subscales, 1)
 
 analysis_data_check$scrn_stopped_bzra <- factor(
   analysis_data_check$scrn_stopped_bzra,
@@ -7108,14 +7205,17 @@ cat("  Total N:", n_total, "\n")
 cat("  Discontinuers:", n_discontinuers, "(", round(100*n_discontinuers/n_total, 1), "%)\n")
 cat("  Continuers:", n_continuers, "(", round(100*n_continuers/n_total, 1), "%)\n\n")
 
-# -----------------------------------------------------------------------------
-# Define variable domains and categorical variables
-# -----------------------------------------------------------------------------
+#==============================================================================
+# STEP 4: DEFINE VARIABLE DOMAINS
+#==============================================================================
+
+cat("STEP 4: Defining variable domains\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
 
 # Get all variables from dataset
 all_vars <- names(analysis_data_check)
 
-# DEMOGRAPHICS DOMAIN
+# DEMOGRAPHICS DOMAIN - using recoded variables
 demographic_domain <- c(
   "age", "sex", "region", "education_level", "employment_status",
   "income", "driving_freq"
@@ -7124,11 +7224,14 @@ demographic_domain <- c(
 # CLINICAL/HEALTH DOMAIN - Include ALL clinical variables
 clinical_domain <- c(
   # Health and conditions
-  "phq2_score", "osss_3_score", "gen_health", "n_health_conditions",
+  "phq2_score", "osss_3_score", "n_health_conditions",
   "n_physical_conditions", "n_ment_conditions", "n_sleep_conditions",
   
+  # General health checkboxes
+  grep("^gen_health___", all_vars, value = TRUE),
+  
   # Insomnia definition
-  "def_insomnia___1", "def_insomnia___2", "def_insomnia___3",
+  grep("^def_insomnia___", all_vars, value = TRUE),
   
   # Medication quantity
   "med_quant",
@@ -7177,13 +7280,13 @@ cat("  Demographics:", length(demographic_domain), "variables\n")
 cat("  Clinical/Health:", length(clinical_domain), "variables\n")
 cat("  Personality/Behavioral:", length(personality_domain), "variables\n\n")
 
-# Define categorical variables more comprehensively
+# Define categorical variables
 categorical_vars <- c(
-  # Demographics
+  # Demographics - using recoded variables
   "sex", "region", "education_level", "employment_status", "income", "driving_freq",
   
   # Clinical categorical
-  "gen_health", 
+  grep("^gen_health___", all_vars, value = TRUE),
   grep("^def_insomnia___", all_vars, value = TRUE),
   
   # Likert scale variables (treat as ordinal categorical for descriptives)
@@ -7201,9 +7304,9 @@ categorical_vars <- unique(categorical_vars)
 
 cat("Categorical variables identified:", length(categorical_vars), "\n\n")
 
-# -----------------------------------------------------------------------------
-# ENHANCED DESCRIPTIVE STATISTICS FUNCTIONS
-# -----------------------------------------------------------------------------
+#==============================================================================
+# STEP 5: DEFINE ANALYSIS FUNCTIONS
+#==============================================================================
 
 get_enhanced_continuous_desc <- function(var, mids_obj, group_var = "scrn_stopped_bzra") {
   
@@ -7278,10 +7381,6 @@ get_enhanced_categorical_desc <- function(var, mids_obj, group_var = "scrn_stopp
   
   return(pooled)
 }
-
-# -----------------------------------------------------------------------------
-# ENHANCED EFFECT SIZE CALCULATIONS WITH CIs
-# -----------------------------------------------------------------------------
 
 calculate_enhanced_effect_sizes <- function(var, mids_obj, group_var = "scrn_stopped_bzra",
                                            is_categorical = FALSE) {
@@ -7377,7 +7476,6 @@ calculate_enhanced_effect_sizes <- function(var, mids_obj, group_var = "scrn_sto
   }
 }
 
-# Effect size interpretation (vectorized)
 interpret_effect_size <- function(es_value, type = "cohens_d") {
   sapply(es_value, function(x) {
     if(is.na(x)) return("Cannot calculate")
@@ -7402,10 +7500,6 @@ interpret_effect_size <- function(es_value, type = "cohens_d") {
     }
   })
 }
-
-# -----------------------------------------------------------------------------
-# POOLED STATISTICAL TESTS
-# -----------------------------------------------------------------------------
 
 test_one_imputation <- function(var, data, group_var = "scrn_stopped_bzra", 
                                 categorical_list = categorical_vars) {
@@ -7523,12 +7617,12 @@ pool_test_results <- function(var, mids_obj, group_var = "scrn_stopped_bzra") {
   ))
 }
 
-# -----------------------------------------------------------------------------
-# RUN ANALYSIS FOR ALL DOMAINS WITH FAMILY-WISE FDR CORRECTION
-# -----------------------------------------------------------------------------
+#==============================================================================
+# STEP 6: RUN ANALYSIS FOR ALL DOMAINS
+#==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("RUNNING COMPREHENSIVE ANALYSIS\n")
+cat("STEP 6: RUNNING COMPREHENSIVE ANALYSIS\n")
 cat("FDR correction applied WITHIN each domain (family of tests)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
@@ -7536,74 +7630,97 @@ create_comprehensive_table <- function(variables, domain_name, mids_obj) {
   
   cat("Processing", domain_name, "domain (", length(variables), "variables)...\n")
   
+  if(length(variables) == 0) {
+    cat("  ⚠ WARNING: No variables in this domain!\n\n")
+    return(data.frame())
+  }
+  
   results_list <- list()
   
   for(var in variables) {
+    
+    cat("  Analyzing:", var, "...\n")
+    
+    # Check if variable exists
+    if(!var %in% names(complete(mids_obj, 1))) {
+      cat("    ⚠ Variable not found, skipping...\n")
+      next
+    }
     
     # Determine if categorical
     is_cat <- var %in% categorical_vars
     
     # Get descriptive statistics
-    if(!is_cat && is.numeric(complete(mids_obj, 1)[[var]])) {
-      desc <- get_enhanced_continuous_desc(var, mids_obj)
+    tryCatch({
+      if(!is_cat && is.numeric(complete(mids_obj, 1)[[var]])) {
+        desc <- get_enhanced_continuous_desc(var, mids_obj)
+        
+        # Format for table
+        desc_formatted <- desc %>%
+          mutate(
+            descriptive = paste0(
+              round(mean, 2), " (", round(sd, 2), ")"
+            )
+          ) %>%
+          select(group, descriptive) %>%
+          pivot_wider(names_from = group, values_from = descriptive)
+        
+      } else {
+        desc <- get_enhanced_categorical_desc(var, mids_obj)
+        
+        # Format all categories
+        desc_formatted <- desc %>%
+          mutate(
+            category_label = paste0(!!sym(var), ": ", round(n, 0), " (", round(pct, 1), "%)"),
+            row_id = row_number()
+          ) %>%
+          select(group, category_label) %>%
+          group_by(group) %>%
+          summarise(descriptive = paste(category_label, collapse = "; "), .groups = "drop") %>%
+          pivot_wider(names_from = group, values_from = descriptive)
+      }
       
-      # Format for table
-      desc_formatted <- desc %>%
-        mutate(
-          descriptive = paste0(
-            round(mean, 2), " (", round(sd, 2), ")"
-          )
-        ) %>%
-        select(group, descriptive) %>%
-        pivot_wider(names_from = group, values_from = descriptive)
+      # Get statistical test
+      test_result <- pool_test_results(var, mids_obj)
       
-    } else {
-      desc <- get_enhanced_categorical_desc(var, mids_obj)
+      # Get effect sizes
+      effect_sizes <- calculate_enhanced_effect_sizes(var, mids_obj, is_categorical = is_cat)
       
-      # Format all categories
-      desc_formatted <- desc %>%
-        mutate(
-          category_label = paste0(!!sym(var), ": ", round(n, 0), " (", round(pct, 1), "%)"),
-          row_id = row_number()
-        ) %>%
-        select(group, category_label) %>%
-        group_by(group) %>%
-        summarise(descriptive = paste(category_label, collapse = "; "), .groups = "drop") %>%
-        pivot_wider(names_from = group, values_from = descriptive)
-    }
-    
-    # Get statistical test
-    test_result <- pool_test_results(var, mids_obj)
-    
-    # Get effect sizes
-    effect_sizes <- calculate_enhanced_effect_sizes(var, mids_obj, is_categorical = is_cat)
-    
-    # Combine results
-    result_row <- tibble(
-      Variable = var,
-      Type = ifelse(is_cat, "Categorical", "Continuous"),
-      Continuer = desc_formatted$Continuer,
-      Discontinuer = desc_formatted$Discontinuer,
-      Test = test_result$test,
-      p_value = test_result$p_pooled,
-      Cohens_d = effect_sizes$cohens_d,
-      Cohens_d_95CI = ifelse(!is.na(effect_sizes$cohens_d),
-                             paste0("[", round(effect_sizes$cohens_d_ci_low, 2), ", ",
-                                   round(effect_sizes$cohens_d_ci_high, 2), "]"),
-                             NA),
-      Rank_Biserial = effect_sizes$rank_biserial,
-      Rank_Biserial_95CI = ifelse(!is.na(effect_sizes$rank_biserial),
-                                  paste0("[", round(effect_sizes$rank_bis_ci_low, 2), ", ",
-                                        round(effect_sizes$rank_bis_ci_high, 2), "]"),
-                                  NA),
-      Cramers_V = effect_sizes$cramers_v,
-      Cramers_V_95CI = ifelse(!is.na(effect_sizes$cramers_v),
-                             paste0("[", round(effect_sizes$cramers_ci_low, 2), ", ",
-                                   round(effect_sizes$cramers_ci_high, 2), "]"),
-                             NA)
-    )
-    
-    results_list[[var]] <- result_row
+      # Combine results
+      result_row <- tibble(
+        Variable = var,
+        Type = ifelse(is_cat, "Categorical", "Continuous"),
+        Continuer = desc_formatted$Continuer,
+        Discontinuer = desc_formatted$Discontinuer,
+        Test = test_result$test,
+        p_value = test_result$p_pooled,
+        Cohens_d = effect_sizes$cohens_d,
+        Cohens_d_95CI = ifelse(!is.na(effect_sizes$cohens_d),
+                               paste0("[", round(effect_sizes$cohens_d_ci_low, 2), ", ",
+                                     round(effect_sizes$cohens_d_ci_high, 2), "]"),
+                               NA),
+        Rank_Biserial = effect_sizes$rank_biserial,
+        Rank_Biserial_95CI = ifelse(!is.na(effect_sizes$rank_biserial),
+                                    paste0("[", round(effect_sizes$rank_bis_ci_low, 2), ", ",
+                                          round(effect_sizes$rank_bis_ci_high, 2), "]"),
+                                    NA),
+        Cramers_V = effect_sizes$cramers_v,
+        Cramers_V_95CI = ifelse(!is.na(effect_sizes$cramers_v),
+                               paste0("[", round(effect_sizes$cramers_ci_low, 2), ", ",
+                                     round(effect_sizes$cramers_ci_high, 2), "]"),
+                               NA)
+      )
+      
+      results_list[[var]] <- result_row
+      
+    }, error = function(e) {
+      cat("    ✗ Error analyzing", var, ":", e$message, "\n")
+    })
+  }
+  
+  if(length(results_list) == 0) {
+    cat("  ⚠ WARNING: No results generated for this domain!\n\n")
+    return(data.frame())
   }
   
   results_table <- bind_rows(results_list)
@@ -7638,23 +7755,96 @@ create_comprehensive_table <- function(variables, domain_name, mids_obj) {
   return(results_table)
 }
 
-# Create tables for each domain
-demo_table <- create_comprehensive_table(demographic_domain, "Demographics", mids_with_subscales)
-clinical_table <- create_comprehensive_table(clinical_domain, "Clinical", mids_with_subscales)
-personality_table <- create_comprehensive_table(personality_domain, "Personality", mids_with_subscales)
+# Create tables for each domain with error handling
+cat("Creating Demographics table...\n")
+demo_table <- tryCatch({
+  create_comprehensive_table(demographic_domain, "Demographics", mids_with_subscales)
+}, error = function(e) {
+  cat("✗ Error creating demographics table:", e$message, "\n\n")
+  data.frame()
+})
+
+cat("Creating Clinical table...\n")
+clinical_table <- tryCatch({
+  create_comprehensive_table(clinical_domain, "Clinical", mids_with_subscales)
+}, error = function(e) {
+  cat("✗ Error creating clinical table:", e$message, "\n\n")
+  data.frame()
+})
+
+cat("Creating Personality table...\n")
+personality_table <- tryCatch({
+  create_comprehensive_table(personality_domain, "Personality", mids_with_subscales)
+}, error = function(e) {
+  cat("✗ Error creating personality table:", e$message, "\n\n")
+  data.frame()
+})
 
 # Save tables
-write.csv(demo_table, "demographics_comprehensive_table.csv", row.names = FALSE)
-write.csv(clinical_table, "clinical_comprehensive_table.csv", row.names = FALSE)
-write.csv(personality_table, "personality_comprehensive_table.csv", row.names = FALSE)
+if(nrow(demo_table) > 0) {
+  write.csv(demo_table, "demographics_comprehensive_table.csv", row.names = FALSE)
+  cat("✓ Saved: demographics_comprehensive_table.csv\n")
+} else {
+  cat("⚠ Demographics table empty, not saved\n")
+}
 
-cat("\n✓ Saved: demographics_comprehensive_table.csv\n")
-cat("✓ Saved: clinical_comprehensive_table.csv\n")
-cat("✓ Saved: personality_comprehensive_table.csv\n\n")
+if(nrow(clinical_table) > 0) {
+  write.csv(clinical_table, "clinical_comprehensive_table.csv", row.names = FALSE)
+  cat("✓ Saved: clinical_comprehensive_table.csv\n")
+} else {
+  cat("⚠ Clinical table empty, not saved\n")
+}
 
-# -----------------------------------------------------------------------------
-# SUMMARY
-# -----------------------------------------------------------------------------
+if(nrow(personality_table) > 0) {
+  write.csv(personality_table, "personality_comprehensive_table.csv", row.names = FALSE)
+  cat("✓ Saved: personality_comprehensive_table.csv\n")
+} else {
+  cat("⚠ Personality table empty, not saved\n")
+}
+
+cat("\n")
+
+#==============================================================================
+# STEP 7: DISPLAY TABLES IN OUTPUT
+#==============================================================================
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("COMPLETE RESULTS TABLES\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+if(nrow(demo_table) > 0) {
+  cat("───────────────────────────────────────────────────────────────\n")
+  cat("DEMOGRAPHICS TABLE (", nrow(demo_table), " variables)\n", sep = "")
+  cat("───────────────────────────────────────────────────────────────\n\n")
+  print(demo_table)
+  cat("\n\n")
+} else {
+  cat("⚠ Demographics table is empty\n\n")
+}
+
+if(nrow(clinical_table) > 0) {
+  cat("───────────────────────────────────────────────────────────────\n")
+  cat("CLINICAL/HEALTH TABLE (", nrow(clinical_table), " variables)\n", sep = "")
+  cat("───────────────────────────────────────────────────────────────\n\n")
+  print(clinical_table)
+  cat("\n\n")
+} else {
+  cat("⚠ Clinical table is empty\n\n")
+}
+
+if(nrow(personality_table) > 0) {
+  cat("───────────────────────────────────────────────────────────────\n")
+  cat("PERSONALITY/BEHAVIORAL TABLE (", nrow(personality_table), " variables)\n", sep = "")
+  cat("───────────────────────────────────────────────────────────────\n\n")
+  print(personality_table)
+  cat("\n\n")
+} else {
+  cat("⚠ Personality table is empty\n\n")
+}
+
+#==============================================================================
+# STEP 8: SUMMARY
+#==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
 cat("ANALYSIS COMPLETE\n")
@@ -7732,33 +7922,6 @@ cat("  - Personality:", nrow(pers_sig),
     "(", round(100*nrow(pers_sig)/nrow(personality_table), 1), "%)\n\n")
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("FDR CORRECTION APPROACH\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("WHY DOMAIN-SPECIFIC (FAMILY-WISE) FDR?\n\n")
-
-cat("RATIONALE:\n")
-cat("  • Each domain (Demographics, Clinical, Personality) represents\n")
-cat("    a distinct family of related hypotheses\n")
-cat("  • Domain-specific correction balances Type I error control with\n")
-cat("    statistical power better than correcting across ALL variables\n")
-cat("  • Theoretically justified: domains represent conceptually\n")
-cat("    distinct conceptual questions\n")
-cat("  • Avoids being overly conservative (as would happen with\n")
-cat("    correction across all ~150+ variables simultaneously)\n\n")
-
-cat("INTERPRETATION:\n")
-cat("  • Variables with q < 0.05 are significant after controlling\n")
-cat("    for false discovery rate WITHIN their domain\n")
-cat("  • Expected proportion of false discoveries among significant\n")
-cat("    findings within each domain is < 5%\n\n")
-
-cat("ALTERNATIVE APPROACHES CONSIDERED:\n")
-cat("  • Global FDR (all variables): More conservative, lower power\n")
-cat("  • No correction: Higher Type I error rate\n")
-cat("  • Bonferroni: Extremely conservative, likely too strict\n\n")
-
-cat("═══════════════════════════════════════════════════════════════\n")
 cat("END OF ANALYSIS\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
@@ -7775,14 +7938,17 @@ cat("  • Effect sizes with 95% CIs\n")
 cat("  • Effect size interpretations\n")
 cat("  • Significance indicators\n\n")
 
-cat("NEXT STEPS:\n")
-cat("  • Review significant findings in each domain\n")
-cat("  • Examine effect sizes and confidence intervals\n")
-cat("  • Consider clinical/practical significance\n")
-cat("  • Identify variables for further analysis or modeling\n\n")
+cat("RECODED DEMOGRAPHIC VARIABLES:\n")
+cat("  • region: Western/Central/Atlantic Canada, Territories\n")
+cat("  • education_level: High School or Less, University/Trade School\n")
+cat("  • employment_status: Full/Part-Time Work, Not in Workforce\n")
+cat("  • income: Labeled income brackets\n")
+cat("  • driving_freq: Labeled driving frequency\n\n")
 
 cat("═══════════════════════════════════════════════════════════════\n\n")
 ```
+
+
 
 
 ## Cluster Analysis
