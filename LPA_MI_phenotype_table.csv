@@ -1,0 +1,5 @@
+"Class","N_Total","Discontinuation_Rate","High_Traits","Low_Traits"
+1,115,24.3,"DBAS_Consequences, BFI_Extraversion, DBAS_Worry_Helplessness","SURPS_Hopelessness, BFI_Neuroticism, CISS_Emotion"
+2,84,25,"BFI_Conscientiousness, BFI_Agreeableness, CISS_Task","DBAS_Consequences, SURPS_Anxiety_Sensitivity, CISS_Emotion"
+3,80,15,"CISS_Emotion, DBAS_Worry_Helplessness, BFI_Neuroticism","BFI_Extraversion, BFI_Agreeableness, CISS_Task"
+4,118,27.1,"SURPS_Impulsivity, SURPS_Hopelessness, BFI_Neuroticism","BFI_Conscientiousness, DBAS_Worry_Helplessness, CISS_Task"
