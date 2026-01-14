@@ -7536,31 +7536,46 @@ cat("─────────────────────────
 
 all_vars <- names(data_complete)
 
-# Define all personality variables
+# Define personality variables explicitly (16 variables total)
 personality_vars <- c(
-  # Big Five
-  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
+  # Big Five (5 variables)
+  "BFI_Extraversion",
+  "BFI_Agreeableness",
+  "BFI_Conscientiousness",
+  "BFI_Neuroticism",
+  "BFI_Openness",
   
-  # DBAS subscales and total
-  grep("^DBAS_", all_vars, value = TRUE),
+  # DBAS subscales only - excluding DBAS_Total (4 variables)
+  "DBAS_Consequences",
+  "DBAS_Worry_Helplessness",
+  "DBAS_Expectations",
+  "DBAS_Medications",
   
-  # SURPS subscales
-  grep("^SURPS_", all_vars, value = TRUE),
+  # SURPS subscales (4 variables)
+  "SURPS_Impulsivity",
+  "SURPS_Sensation_Seeking",
+  "SURPS_Hopelessness",
+  "SURPS_Anxiety_Sensitivity",
   
-  # CISS subscales
-  grep("^CISS_", all_vars, value = TRUE)
+  # CISS subscales (3 variables)
+  "CISS_Task",
+  "CISS_Emotion",
+  "CISS_Avoidance"
 )
 
 # Check which variables actually exist in the data
 available_personality <- intersect(personality_vars, all_vars)
 
 cat("Personality variables found:\n")
-cat("  Big Five:", sum(c("Extraversion", "Agreeableness", "Conscientiousness", 
-                          "Neuroticism", "Openness") %in% available_personality), "\n")
-cat("  DBAS:", sum(grepl("^DBAS_", available_personality)), "\n")
+cat("  Big Five:", sum(grepl("^BFI_", available_personality)), "\n")
+cat("  DBAS subscales:", sum(grepl("^DBAS_", available_personality)), "(excluding DBAS_Total)\n")
 cat("  SURPS:", sum(grepl("^SURPS_", available_personality)), "\n")
 cat("  CISS:", sum(grepl("^CISS_", available_personality)), "\n")
 cat("  Total:", length(available_personality), "variables\n\n")
+
+if(length(available_personality) != 16) {
+  cat("⚠ WARNING: Expected 16 variables but found", length(available_personality), "\n\n")
+}
 
 cat("Variables included:\n")
 for(var in available_personality) {
@@ -7751,6 +7766,14 @@ cat("  2. hopkins_distance_distribution.png\n\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 ```
 
+## LPA TEST
+
+```{r}
+
+```
+
+
+
 
 
 
@@ -7758,705 +7781,10 @@ cat("═════════════════════════
 
 ```{r}
 #==============================================================================
-# COMPREHENSIVE SENSITIVITY ANALYSES - 8 TESTS
-# Updated for imputed_data_with_subscales.rds
-#==============================================================================
-
-library(tidyverse)
-library(mice)
-library(randomForest)
-library(pROC)
-library(caret)
-library(glmnet)
-library(xgboost)
-
-cat("\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("COMPREHENSIVE SENSITIVITY ANALYSES\n")
-cat("8 Tests to Assess Robustness of Findings\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-#==============================================================================
-# LOAD DATA
-#==============================================================================
-
-cat("Loading data and results...\n\n")
-
-mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
-
-# Define variables
-outcome_var <- "scrn_stopped_bzra"
-
-# Get all available variables
-all_vars <- names(complete(mids_with_subscales, 1))
-
-# Personality subscales
-personality_subscales <- c(
-  # Big Five
-  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
-  # DBAS
-  grep("^DBAS_", all_vars, value = TRUE),
-  # SURPS
-  grep("^SURPS_", all_vars, value = TRUE),
-  # CISS
-  grep("^CISS_", all_vars, value = TRUE)
-)
-personality_subscales <- intersect(personality_subscales, all_vars)
-
-# Individual personality traits for exclusion testing
-big_five <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness")
-big_five <- intersect(big_five, all_vars)
-
-# Dimensional composites (if available)
-personality_dims <- c("Distress", "Sleep_Dysfunction", "Impulsivity", "Adaptive_Coping")
-personality_dims <- intersect(personality_dims, all_vars)
-
-# Confounders
-confounders <- c("age", "sex", "education_level", "phq2_score", 
-                 "osss_3_score", "n_health_conditions")
-confounders <- intersect(confounders, all_vars)
-
-cat("Variables identified:\n")
-cat("  Personality subscales:", length(personality_subscales), "\n")
-cat("  Big Five traits:", length(big_five), "\n")
-cat("  Dimensional composites:", length(personality_dims), "\n")
-cat("  Confounders:", length(confounders), "\n\n")
-
-# All predictors for main model
-all_predictors <- c(personality_subscales, confounders)
-
-#==============================================================================
-# HELPER FUNCTIONS
-#==============================================================================
-
-# Fit and evaluate Random Forest
-fit_rf <- function(data, predictors, outcome, test_prop = 0.2) {
-  
-  model_data <- data %>%
-    select(all_of(c(outcome, predictors))) %>%
-    drop_na() %>%
-    mutate(!!outcome := factor(.data[[outcome]], 
-                              levels = c(0, 1),
-                              labels = c("Still_Using", "Discontinued")))
-  
-  if(nrow(model_data) < 50) {
-    return(list(auc = NA, n = nrow(model_data), error = "Insufficient data"))
-  }
-  
-  set.seed(123)
-  train_idx <- createDataPartition(model_data[[outcome]], p = 1 - test_prop, list = FALSE)
-  train_data <- model_data[train_idx, ]
-  test_data <- model_data[-train_idx, ]
-  
-  rf_model <- tryCatch({
-    randomForest(
-      as.formula(paste(outcome, "~ .")),
-      data = train_data,
-      ntree = 1000,
-      importance = TRUE
-    )
-  }, error = function(e) NULL)
-  
-  if(is.null(rf_model)) {
-    return(list(auc = NA, n = nrow(model_data), error = "Model failed"))
-  }
-  
-  pred_prob <- predict(rf_model, test_data, type = "prob")[, "Discontinued"]
-  roc_obj <- roc(test_data[[outcome]], pred_prob, quiet = TRUE)
-  
-  return(list(
-    auc = as.numeric(auc(roc_obj)),
-    n = nrow(model_data),
-    n_train = nrow(train_data),
-    n_test = nrow(test_data),
-    error = NULL
-  ))
-}
-
-# Fit and evaluate Logistic Regression
-fit_lr <- function(data, predictors, outcome, test_prop = 0.2) {
-  
-  model_data <- data %>%
-    select(all_of(c(outcome, predictors))) %>%
-    drop_na() %>%
-    mutate(!!outcome := factor(.data[[outcome]], 
-                              levels = c(0, 1),
-                              labels = c("Still_Using", "Discontinued")))
-  
-  if(nrow(model_data) < 50) {
-    return(list(auc = NA, n = nrow(model_data), error = "Insufficient data"))
-  }
-  
-  set.seed(123)
-  train_idx <- createDataPartition(model_data[[outcome]], p = 1 - test_prop, list = FALSE)
-  train_data <- model_data[train_idx, ]
-  test_data <- model_data[-train_idx, ]
-  
-  lr_model <- tryCatch({
-    glm(as.formula(paste(outcome, "~ .")),
-        data = train_data,
-        family = binomial)
-  }, error = function(e) NULL)
-  
-  if(is.null(lr_model)) {
-    return(list(auc = NA, n = nrow(model_data), error = "Model failed"))
-  }
-  
-  pred_prob <- predict(lr_model, test_data, type = "response")
-  roc_obj <- roc(test_data[[outcome]], pred_prob, quiet = TRUE)
-  
-  return(list(
-    auc = as.numeric(auc(roc_obj)),
-    n = nrow(model_data),
-    error = NULL
-  ))
-}
-
-# Fit and evaluate XGBoost
-fit_xgb <- function(data, predictors, outcome, test_prop = 0.2) {
-  
-  model_data <- data %>%
-    select(all_of(c(outcome, predictors))) %>%
-    drop_na()
-  
-  # Convert factors to numeric
-  for(col in names(model_data)) {
-    if(is.factor(model_data[[col]]) && col != outcome) {
-      model_data[[col]] <- as.numeric(model_data[[col]])
-    }
-  }
-  
-  model_data <- model_data %>%
-    mutate(!!outcome := as.numeric(as.factor(.data[[outcome]])) - 1)
-  
-  if(nrow(model_data) < 50) {
-    return(list(auc = NA, n = nrow(model_data), error = "Insufficient data"))
-  }
-  
-  set.seed(123)
-  train_idx <- createDataPartition(model_data[[outcome]], p = 1 - test_prop, list = FALSE)
-  train_data <- model_data[train_idx, ]
-  test_data <- model_data[-train_idx, ]
-  
-  # Prepare matrices
-  train_x <- as.matrix(train_data %>% select(-all_of(outcome)))
-  train_y <- train_data[[outcome]]
-  test_x <- as.matrix(test_data %>% select(-all_of(outcome)))
-  test_y <- test_data[[outcome]]
-  
-  dtrain <- xgb.DMatrix(data = train_x, label = train_y)
-  dtest <- xgb.DMatrix(data = test_x, label = test_y)
-  
-  xgb_model <- tryCatch({
-    xgboost(
-      data = dtrain,
-      nrounds = 100,
-      objective = "binary:logistic",
-      eval_metric = "auc",
-      verbose = 0
-    )
-  }, error = function(e) NULL)
-  
-  if(is.null(xgb_model)) {
-    return(list(auc = NA, n = nrow(model_data), error = "Model failed"))
-  }
-  
-  pred_prob <- predict(xgb_model, dtest)
-  roc_obj <- roc(test_y, pred_prob, quiet = TRUE)
-  
-  return(list(
-    auc = as.numeric(auc(roc_obj)),
-    n = nrow(model_data),
-    error = NULL
-  ))
-}
-
-#==============================================================================
-# BASELINE MODEL
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("BASELINE MODEL\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-baseline_data <- complete(mids_with_subscales, 1)
-baseline_result <- fit_rf(baseline_data, all_predictors, outcome_var)
-
-baseline_auc <- baseline_result$auc
-cat("Baseline Random Forest AUC:", round(baseline_auc, 3), "\n")
-cat("Sample size:", baseline_result$n, "\n\n")
-
-# Initialize results storage
-sensitivity_results <- list()
-all_auc_results <- data.frame(
-  Analysis = character(),
-  AUC = numeric(),
-  Difference = numeric(),
-  Assessment = character(),
-  Details = character(),
-  stringsAsFactors = FALSE
-)
-
-#==============================================================================
-# 1. COMPLETE-CASE ANALYSIS
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("TEST 1: COMPLETE-CASE ANALYSIS\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-# Get original pre-imputation data
-if(file.exists("imputation_preparation_reduced.rds")) {
-  var_reduction <- readRDS("imputation_preparation_reduced.rds")
-  SIMOA_original <- var_reduction$analysis_data
-  cat("✓ Loaded original pre-imputation data\n")
-} else {
-  cat("⚠ Using imputation 0 as proxy\n")
-  SIMOA_original <- complete(mids_with_subscales, action = "long", include = TRUE) %>%
-    filter(.imp == 0) %>%
-    select(-.imp, -.id)
-}
-
-complete_case_data <- SIMOA_original %>%
-  select(all_of(c(outcome_var, all_predictors))) %>%
-  drop_na()
-
-n_imputed <- nrow(baseline_data %>% select(all_of(c(outcome_var, all_predictors))) %>% drop_na())
-n_complete <- nrow(complete_case_data)
-
-cat("Sample sizes:\n")
-cat("  Multiple imputation:", n_imputed, "\n")
-cat("  Complete-case:", n_complete, "\n")
-cat("  Loss:", n_imputed - n_complete, 
-    "(", round(100 * (n_imputed - n_complete) / n_imputed, 1), "%)\n\n")
-
-if(n_complete >= 50) {
-  cc_result <- fit_rf(complete_case_data, all_predictors, outcome_var)
-  
-  cat("RESULTS:\n")
-  cat("  MI AUC:", round(baseline_auc, 3), "\n")
-  cat("  Complete-case AUC:", round(cc_result$auc, 3), "\n")
-  cat("  Difference:", round(abs(baseline_auc - cc_result$auc), 3), "\n\n")
-  
-  assessment <- ifelse(abs(baseline_auc - cc_result$auc) < 0.05, "Robust", "Concerning")
-  
-  all_auc_results <- bind_rows(all_auc_results, data.frame(
-    Analysis = "Complete-Case",
-    AUC = cc_result$auc,
-    Difference = cc_result$auc - baseline_auc,
-    Assessment = assessment,
-    Details = paste0("n=", n_complete)
-  ))
-  
-  sensitivity_results$complete_case <- cc_result
-} else {
-  cat("✗ Insufficient complete cases (n=", n_complete, ")\n\n")
-  all_auc_results <- bind_rows(all_auc_results, data.frame(
-    Analysis = "Complete-Case",
-    AUC = NA,
-    Difference = NA,
-    Assessment = "Insufficient data",
-    Details = paste0("n=", n_complete)
-  ))
-}
-
-#==============================================================================
-# 2. INDIVIDUAL PERSONALITY TRAIT EXCLUSION
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("TEST 2: INDIVIDUAL PERSONALITY TRAIT EXCLUSION\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Testing exclusion of each Big Five trait individually...\n\n")
-
-trait_exclusion_results <- data.frame()
-
-for(trait in big_five) {
-  cat("  Excluding:", trait, "...\n")
-  
-  predictors_without <- setdiff(all_predictors, trait)
-  result <- fit_rf(baseline_data, predictors_without, outcome_var)
-  
-  if(!is.na(result$auc)) {
-    diff <- result$auc - baseline_auc
-    assessment <- ifelse(abs(diff) < 0.03, "Robust", 
-                        ifelse(abs(diff) < 0.05, "Acceptable", "Concerning"))
-    
-    trait_exclusion_results <- bind_rows(trait_exclusion_results, data.frame(
-      Trait = trait,
-      AUC = result$auc,
-      Difference = diff,
-      Assessment = assessment
-    ))
-    
-    all_auc_results <- bind_rows(all_auc_results, data.frame(
-      Analysis = paste0("Without ", trait),
-      AUC = result$auc,
-      Difference = diff,
-      Assessment = assessment,
-      Details = ""
-    ))
-  }
-}
-
-cat("\nRESULTS:\n")
-print(trait_exclusion_results, row.names = FALSE, digits = 3)
-cat("\n")
-
-critical_traits <- trait_exclusion_results %>% 
-  filter(Assessment == "Concerning")
-
-if(nrow(critical_traits) > 0) {
-  cat("⚠ CRITICAL TRAITS (removal changes AUC >0.05):\n")
-  cat("  ", paste(critical_traits$Trait, collapse = ", "), "\n\n")
-} else {
-  cat("✓ No single trait is driving the results\n\n")
-}
-
-sensitivity_results$trait_exclusion <- trait_exclusion_results
-
-#==============================================================================
-# 3. MODEL TYPE COMPARISON
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("TEST 3: MODEL TYPE COMPARISON\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Testing Random Forest vs Logistic Regression vs XGBoost...\n\n")
-
-# Logistic Regression
-cat("  Fitting Logistic Regression...\n")
-lr_result <- fit_lr(baseline_data, all_predictors, outcome_var)
-
-# XGBoost
-cat("  Fitting XGBoost...\n")
-xgb_result <- fit_xgb(baseline_data, all_predictors, outcome_var)
-
-cat("\nRESULTS:\n")
-cat("  Random Forest AUC:", round(baseline_auc, 3), "\n")
-cat("  Logistic Regression AUC:", round(lr_result$auc, 3), "\n")
-cat("  XGBoost AUC:", round(xgb_result$auc, 3), "\n\n")
-
-# Add to results
-all_auc_results <- bind_rows(all_auc_results, data.frame(
-  Analysis = "Logistic Regression",
-  AUC = lr_result$auc,
-  Difference = lr_result$auc - baseline_auc,
-  Assessment = ifelse(abs(lr_result$auc - baseline_auc) < 0.05, "Robust", "Different"),
-  Details = "Alternative algorithm"
-))
-
-all_auc_results <- bind_rows(all_auc_results, data.frame(
-  Analysis = "XGBoost",
-  AUC = xgb_result$auc,
-  Difference = xgb_result$auc - baseline_auc,
-  Assessment = ifelse(abs(xgb_result$auc - baseline_auc) < 0.05, "Robust", "Different"),
-  Details = "Alternative algorithm"
-))
-
-auc_range <- max(c(baseline_auc, lr_result$auc, xgb_result$auc), na.rm = TRUE) - 
-             min(c(baseline_auc, lr_result$auc, xgb_result$auc), na.rm = TRUE)
-
-if(auc_range < 0.05) {
-  cat("✓ ROBUST: Results consistent across algorithms (range < 0.05)\n\n")
-} else {
-  cat("⚠ ALGORITHM-SENSITIVE: Results vary across methods\n\n")
-}
-
-sensitivity_results$model_comparison <- list(
-  rf = baseline_auc,
-  lr = lr_result$auc,
-  xgb = xgb_result$auc
-)
-
-#==============================================================================
-# 4. OUTLIER REMOVAL
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("TEST 4: OUTLIER REMOVAL\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-# Identify continuous variables
-continuous_vars <- all_predictors[sapply(baseline_data[, all_predictors], is.numeric)]
-
-if(length(continuous_vars) > 0) {
-  
-  cat("Identifying outliers (>3 SD) on", length(continuous_vars), "continuous variables...\n\n")
-  
-  outlier_flags <- apply(baseline_data[, continuous_vars, drop = FALSE], 1, function(row) {
-    any(abs(scale(row)) > 3, na.rm = TRUE)
-  })
-  
-  n_outliers <- sum(outlier_flags)
-  
-  cat("Observations with outliers:", n_outliers, 
-      "(", round(100 * n_outliers / nrow(baseline_data), 1), "%)\n\n")
-  
-  if(n_outliers > 0 && n_outliers < nrow(baseline_data) * 0.1) {
-    
-    data_no_outliers <- baseline_data[!outlier_flags, ]
-    outlier_result <- fit_rf(data_no_outliers, all_predictors, outcome_var)
-    
-    cat("RESULTS:\n")
-    cat("  With outliers AUC:", round(baseline_auc, 3), "\n")
-    cat("  Without outliers AUC:", round(outlier_result$auc, 3), "\n")
-    cat("  Difference:", round(abs(baseline_auc - outlier_result$auc), 3), "\n\n")
-    
-    assessment <- ifelse(abs(baseline_auc - outlier_result$auc) < 0.03, "Robust", "Sensitive")
-    
-    all_auc_results <- bind_rows(all_auc_results, data.frame(
-      Analysis = "Without Outliers",
-      AUC = outlier_result$auc,
-      Difference = outlier_result$auc - baseline_auc,
-      Assessment = assessment,
-      Details = paste0(n_outliers, " outliers removed")
-    ))
-    
-    sensitivity_results$outlier <- outlier_result
-  } else {
-    cat("No meaningful outlier removal possible\n\n")
-    all_auc_results <- bind_rows(all_auc_results, data.frame(
-      Analysis = "Without Outliers",
-      AUC = NA,
-      Difference = NA,
-      Assessment = ifelse(n_outliers == 0, "No outliers", "Too many outliers"),
-      Details = paste0(n_outliers, " outliers")
-    ))
-  }
-} else {
-  cat("No continuous variables to check\n\n")
-}
-
-#==============================================================================
-# 5. AGE STRATIFICATION
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("TEST 5: AGE STRATIFICATION\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-if("age" %in% names(baseline_data)) {
-  
-  # Create age groups
-  data_with_age_group <- baseline_data %>%
-    mutate(age_group = ifelse(age < 75, "65-74", "75+"))
-  
-  cat("Sample sizes by age group:\n")
-  print(table(data_with_age_group$age_group))
-  cat("\n")
-  
-  # Younger group
-  data_young <- data_with_age_group %>% filter(age_group == "65-74")
-  young_result <- fit_rf(data_young, all_predictors, outcome_var)
-  
-  # Older group
-  data_old <- data_with_age_group %>% filter(age_group == "75+")
-  old_result <- fit_rf(data_old, all_predictors, outcome_var)
-  
-  cat("RESULTS:\n")
-  cat("  Full sample AUC:", round(baseline_auc, 3), "\n")
-  cat("  Age 65-74 AUC:", round(young_result$auc, 3), "(n=", young_result$n, ")\n")
-  cat("  Age 75+ AUC:", round(old_result$auc, 3), "(n=", old_result$n, ")\n")
-  cat("  Difference:", round(abs(young_result$auc - old_result$auc), 3), "\n\n")
-  
-  all_auc_results <- bind_rows(all_auc_results, data.frame(
-    Analysis = "Age 65-74",
-    AUC = young_result$auc,
-    Difference = young_result$auc - baseline_auc,
-    Assessment = ifelse(abs(young_result$auc - old_result$auc) < 0.10, "Consistent", "Age-dependent"),
-    Details = paste0("n=", young_result$n)
-  ))
-  
-  all_auc_results <- bind_rows(all_auc_results, data.frame(
-    Analysis = "Age 75+",
-    AUC = old_result$auc,
-    Difference = old_result$auc - baseline_auc,
-    Assessment = ifelse(abs(young_result$auc - old_result$auc) < 0.10, "Consistent", "Age-dependent"),
-    Details = paste0("n=", old_result$n)
-  ))
-  
-  sensitivity_results$age_stratification <- list(
-    young = young_result,
-    old = old_result
-  )
-  
-  if(abs(young_result$auc - old_result$auc) < 0.10) {
-    cat("✓ CONSISTENT: Model performs similarly across age groups\n\n")
-  } else {
-    cat("⚠ AGE-DEPENDENT: Performance differs by age\n\n")
-  }
-  
-} else {
-  cat("Age variable not available\n\n")
-}
-
-#==============================================================================
-# 6. SEX STRATIFICATION
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("TEST 6: SEX STRATIFICATION\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-if("sex" %in% names(baseline_data)) {
-  
-  # Check sex coding
-  sex_table <- table(baseline_data$sex)
-  cat("Sample sizes by sex:\n")
-  print(sex_table)
-  cat("\n")
-  
-  # Get unique sex values
-  sex_values <- sort(unique(baseline_data$sex[!is.na(baseline_data$sex)]))
-  
-  if(length(sex_values) >= 2) {
-    
-    # First group (should be female based on your coding)
-    data_sex1 <- baseline_data %>% filter(sex == sex_values[1])
-    sex1_result <- fit_rf(data_sex1, all_predictors, outcome_var)
-    
-    # Second group (should be male)
-    data_sex2 <- baseline_data %>% filter(sex == sex_values[2])
-    sex2_result <- fit_rf(data_sex2, all_predictors, outcome_var)
-    
-    # Determine labels
-    sex1_label <- ifelse(is.factor(baseline_data$sex), 
-                         levels(baseline_data$sex)[sex_values[1]], 
-                         paste0("Sex ", sex_values[1]))
-    sex2_label <- ifelse(is.factor(baseline_data$sex), 
-                         levels(baseline_data$sex)[sex_values[2]], 
-                         paste0("Sex ", sex_values[2]))
-    
-    cat("RESULTS:\n")
-    cat("  Full sample AUC:", round(baseline_auc, 3), "\n")
-    cat(" ", sex1_label, "AUC:", round(sex1_result$auc, 3), "(n=", sex1_result$n, ")\n")
-    cat(" ", sex2_label, "AUC:", round(sex2_result$auc, 3), "(n=", sex2_result$n, ")\n")
-    cat("  Difference:", round(abs(sex1_result$auc - sex2_result$auc), 3), "\n\n")
-    
-    all_auc_results <- bind_rows(all_auc_results, data.frame(
-      Analysis = sex1_label,
-      AUC = sex1_result$auc,
-      Difference = sex1_result$auc - baseline_auc,
-      Assessment = ifelse(abs(sex1_result$auc - sex2_result$auc) < 0.10, "Consistent", "Sex-dependent"),
-      Details = paste0("n=", sex1_result$n)
-    ))
-    
-    all_auc_results <- bind_rows(all_auc_results, data.frame(
-      Analysis = sex2_label,
-      AUC = sex2_result$auc,
-      Difference = sex2_result$auc - baseline_auc,
-      Assessment = ifelse(abs(sex1_result$auc - sex2_result$auc) < 0.10, "Consistent", "Sex-dependent"),
-      Details = paste0("n=", sex2_result$n)
-    ))
-    
-    sensitivity_results$sex_stratification <- list(
-      sex1 = sex1_result,
-      sex2 = sex2_result
-    )
-    
-    if(abs(sex1_result$auc - sex2_result$auc) < 0.10) {
-      cat("✓ CONSISTENT: Model performs similarly across sexes\n\n")
-    } else {
-      cat("⚠ SEX-DEPENDENT: Performance differs by sex\n\n")
-    }
-  } else {
-    cat("Only one sex category in data\n\n")
-  }
-} else {
-  cat("Sex variable not available\n\n")
-}
-
-#==============================================================================
-# 7. INTERACTION TERMS
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("TEST 7: INTERACTION TERMS\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Testing key interactions: Age×Personality, Sex×Personality\n\n")
-
-# Create interaction terms for key personality variables
-key_personality <- big_five[1:min(3, length(big_five))]  # Use top 3 Big Five
-
-interaction_data <- baseline_data
-
-# Age interactions
-if("age" %in% names(baseline_data) && length(key_personality) > 0) {
-  for(trait in key_personality) {
-    if(trait %in% names(baseline_data) && is.numeric(baseline_data[[trait]])) {
-      int_name <- paste0("age_x_", trait)
-      interaction_data[[int_name]] <- baseline_data$age * baseline_data[[trait]]
-    }
-  }
-}
-
-# Sex interactions
-if("sex" %in% names(baseline_data) && length(key_personality) > 0) {
-  for(trait in key_personality) {
-    if(trait %in% names(baseline_data) && is.numeric(baseline_data[[trait]])) {
-      int_name <- paste0("sex_x_", trait)
-      sex_numeric <- as.numeric(as.factor(baseline_data$sex))
-      interaction_data[[int_name]] <- sex_numeric * baseline_data[[trait]]
-    }
-  }
-}
-
-# Get interaction term names
-interaction_terms <- grep("_x_", names(interaction_data), value = TRUE)
-
-if(length(interaction_terms) > 0) {
-  
-  cat("Created", length(interaction_terms), "interaction terms\n\n")
-  
-  predictors_with_int <- c(all_predictors, interaction_terms)
-  int_result <- fit_rf(interaction_data, predictors_with_int, outcome_var)
-  
-  cat("RESULTS:\n")
-  cat("  Without interactions AUC:", round(baseline_auc, 3), "\n")
-  cat("  With interactions AUC:", round(int_result$auc, 3), "\n")
-  cat("  Difference:", round(int_result$auc - baseline_auc, 3), "\n\n")
-  
-  assessment <- ifelse(int_result$auc > baseline_auc + 0.03, "Interactions improve model",
-                      ifelse(abs(int_result$auc - baseline_auc) < 0.03, "No meaningful interactions",
-                             "Interactions worsen model"))
-  
-  all_auc_results <- bind_rows(all_auc_results, data.frame(
-    Analysis = "With Interactions",
-    AUC = int_result$auc,
-    Difference = int_result$auc - baseline_auc,
-    Assessment = assessment,
-    Details = paste0(length(interaction_terms), " interactions")
-  ))
-  
-  sensitivity_results$interactions <- int_result
-  
-  if(int_result$auc > baseline_auc + 0.03) {
-    cat("✓ INTERACTIONS MATTER: Including interactions improves prediction\n\n")
-  } else {
-    cat("✓ ADDITIVE EFFECTS: Main effects model is sufficient\n\n")
-  }
-} else {
-  cat("Could not create interaction terms\n\n")
-}
-
-#==============================================================================
-# 8. DIMENSIONAL VS INDIVIDUAL SUBSCALES
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════
-```
-
-
-```{r}
-#==============================================================================
-# COMPREHENSIVE DIMENSIONAL PERSONALITY REGRESSION ANALYSIS (FIXED)
+# COMPREHENSIVE DIMENSIONAL PERSONALITY REGRESSION ANALYSIS (UPDATED)
 #==============================================================================
 # Purpose: Test personality dimensions as continuous predictors of BZRA cessation
-# Fix: Added safe_numeric() to handle non-numeric mediator variables
+# Updates: Uses correct variable names from Hopkins and FDR code
 #==============================================================================
 
 library(tidyverse)
@@ -8477,24 +7805,35 @@ cat("═════════════════════════
 cat("PART 1: DATA PREPARATION\n\n")
 
 mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
-subscales_info <- readRDS("subscales_created.rds")
-
 m <- mids_with_subscales$m
 cat("Number of imputations:", m, "\n\n")
 
-personality_subscales <- subscales_info$all_subscales
-personality_subscales <- personality_subscales[personality_subscales != "DBAS_Total"]
+#==============================================================================
+# PART 2: IDENTIFY AVAILABLE VARIABLES
+#==============================================================================
+cat("PART 2: Identifying available personality variables\n\n")
+
+all_vars <- names(complete(mids_with_subscales, 1))
+
+# Personality variables (from Hopkins code)
+big_five <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness")
+dbas_vars <- grep("^DBAS_", all_vars, value = TRUE)
+surps_vars <- grep("^SURPS_", all_vars, value = TRUE)
+ciss_vars <- grep("^CISS_", all_vars, value = TRUE)
+
+cat("Available personality variables:\n")
+cat("  Big Five:", sum(big_five %in% all_vars), "/", length(big_five), "\n")
+cat("  DBAS:", length(dbas_vars), "\n")
+cat("  SURPS:", length(surps_vars), "\n")
+cat("  CISS:", length(ciss_vars), "\n\n")
 
 #==============================================================================
-# PART 2: CREATE COMPOSITE SCORES (FIXED)
+# PART 3: CREATE COMPOSITE SCORES
 #==============================================================================
-cat("PART 2: Creating personality dimension composites\n\n")
+cat("PART 3: Creating personality dimension composites\n\n")
 
-# Define variables
-personality_dims <- c("Distress", "Sleep_Dysfunction", "Impulsivity", "Adaptive_Coping")
-confounders <- c("age", "sex", "education_level", "phq2_score", 
-                 "osss_3_score", "n_health_conditions")
-demo_vars <- c("age", "sex_binary", "education_level")
+# Define demographic and clinical confounders (from FDR code)
+demo_vars <- c("age", "sex", "education_level")
 clinical_vars <- c("phq2_score", "osss_3_score", "n_health_conditions")
 
 cat("Creating composite scores with numeric conversion...\n\n")
@@ -8503,15 +7842,32 @@ composite_list <- lapply(1:m, function(i) {
   
   data_imp <- complete(mids_with_subscales, i)
   
+  # Recode demographic variables (from FDR code)
+  data_imp <- data_imp %>%
+    mutate(
+      # Recode education_level (from education)
+      education_level = case_when(
+        education %in% c(1, 2, 3) ~ "High School or Less",
+        education %in% c(4, 5) ~ "University/Trade School",
+        TRUE ~ NA_character_
+      ),
+      education_level = factor(education_level, 
+                               levels = c("High School or Less", "University/Trade School")),
+      
+      # Convert to numeric for modeling
+      education_level_numeric = as.numeric(education_level) - 1  # 0 = HS or less, 1 = Univ/Trade
+    )
+  
   # Helper function to safely convert to numeric
   safe_numeric <- function(x) {
     if(is.numeric(x)) return(x)
     as.numeric(as.character(x))
   }
   
+  # Create personality composites
   data_imp <- data_imp %>%
     mutate(
-      # Personality composites
+      # Distress dimension: Neuroticism + SURPS anxiety/hopelessness + CISS emotion
       Distress = rowMeans(
         select(., any_of(c("Neuroticism", "SURPS_Anxiety_Sensitivity", 
                           "SURPS_Hopelessness", "CISS_Emotion"))) %>%
@@ -8519,45 +7875,48 @@ composite_list <- lapply(1:m, function(i) {
         na.rm = TRUE
       ),
       
+      # Sleep Dysfunction: DBAS worry/helplessness + consequences
       Sleep_Dysfunction = rowMeans(
         select(., any_of(c("DBAS_Worry_Helplessness", "DBAS_Consequences"))) %>%
           mutate(across(everything(), ~scale(safe_numeric(.))[,1])),
         na.rm = TRUE
       ),
       
+      # Impulsivity: SURPS impulsivity + sensation seeking
       Impulsivity = rowMeans(
         select(., any_of(c("SURPS_Impulsivity", "SURPS_Sensation_Seeking"))) %>%
           mutate(across(everything(), ~scale(safe_numeric(.))[,1])),
         na.rm = TRUE
       ),
       
+      # Adaptive Coping: CISS task-oriented + Conscientiousness
       Adaptive_Coping = rowMeans(
         select(., any_of(c("CISS_Task", "Conscientiousness"))) %>%
           mutate(across(everything(), ~scale(safe_numeric(.))[,1])),
         na.rm = TRUE
       ),
       
-      # Mediator composites with safe_numeric
+      # Mediator composites (from FDR code variable names)
       Side_Effects_Composite = rowMeans(
-        select(., any_of(paste0("side_effects_", 1:4))) %>%
+        select(., matches("^side_effects_\\d+$")) %>%
           mutate(across(everything(), safe_numeric)),
         na.rm = TRUE
       ),
       
       Safety_Composite = rowMeans(
-        select(., any_of(paste0("safety_", 1:4))) %>%
+        select(., matches("^safety_\\d+$")) %>%
           mutate(across(everything(), safe_numeric)),
         na.rm = TRUE
       ),
       
       ADL_Composite = rowMeans(
-        select(., any_of(paste0("adls_", 1:2))) %>%
+        select(., matches("^adls_\\d+$")) %>%
           mutate(across(everything(), safe_numeric)),
         na.rm = TRUE
       ),
       
       Dependence_Composite = rowMeans(
-        select(., any_of(paste0("dependence_", 1:3))) %>%
+        select(., matches("^dependence_\\d+$")) %>%
           mutate(across(everything(), safe_numeric)),
         na.rm = TRUE
       ),
@@ -8568,7 +7927,6 @@ composite_list <- lapply(1:m, function(i) {
         na.rm = TRUE
       ),
       
-      sex_binary = ifelse(sex == 1, 0, 1),
       .imp = i,
       .id = row_number()
     )
@@ -8578,25 +7936,52 @@ composite_list <- lapply(1:m, function(i) {
 
 cat("✓ Composite scores created\n\n")
 
-long_data <- bind_rows(composite_list)
+# Get original data and bind with imputations
+cat("Converting to long format with original data...\n")
+original_data <- complete(mids_with_subscales, 0)  # Get original data
+
+# Add composite scores to original data (with NAs where appropriate)
+original_data <- original_data %>%
+  mutate(
+    .imp = 0,
+    .id = row_number(),
+    Distress = NA_real_,
+    Sleep_Dysfunction = NA_real_,
+    Impulsivity = NA_real_,
+    Adaptive_Coping = NA_real_,
+    Side_Effects_Composite = NA_real_,
+    Safety_Composite = NA_real_,
+    ADL_Composite = NA_real_,
+    Dependence_Composite = NA_real_,
+    Med_Burden_Composite = NA_real_,
+    education_level_numeric = NA_real_
+  )
+
+# Bind original data with imputations
+long_data <- bind_rows(original_data, composite_list)
+
+# Convert to mids
 mids_composite <- as.mids(long_data)
 
 cat("✓ Converted to mids object\n\n")
 
 #==============================================================================
-# PART 3: DESCRIPTIVE STATISTICS
+# PART 4: DESCRIPTIVE STATISTICS
 #==============================================================================
-cat("PART 3: DESCRIPTIVE STATISTICS\n\n")
+cat("PART 4: DESCRIPTIVE STATISTICS\n\n")
 
 desc_data <- composite_list[[1]]
 cat("Total N:", nrow(desc_data), "\n")
 cat("Discontinuation rate:", 
     round(100 * mean(desc_data$scrn_stopped_bzra, na.rm = TRUE), 1), "%\n\n")
 
+# Define personality dimensions
+personality_dims <- c("Distress", "Sleep_Dysfunction", "Impulsivity", "Adaptive_Coping")
+
 #==============================================================================
-# PART 4: HIERARCHICAL REGRESSION
+# PART 5: HIERARCHICAL REGRESSION
 #==============================================================================
-cat("PART 4: HIERARCHICAL REGRESSION MODELS\n\n")
+cat("PART 5: HIERARCHICAL REGRESSION MODELS\n\n")
 
 # Model 1: Personality only
 cat("Fitting Model 1: Personality only...\n")
@@ -8605,10 +7990,11 @@ fit_m1 <- with(mids_composite, glm(formula_m1, family = binomial))
 pooled_m1 <- pool(fit_m1)
 summary_m1 <- summary(pooled_m1)
 
-# Model 2: + Demographics
+# Model 2: + Demographics (using numeric education_level)
 cat("Fitting Model 2: + Demographics...\n")
+demo_vars_model <- c("age", "sex", "education_level_numeric")
 formula_m2 <- as.formula(paste("scrn_stopped_bzra ~", 
-                               paste(c(personality_dims, demo_vars), collapse = " + ")))
+                               paste(c(personality_dims, demo_vars_model), collapse = " + ")))
 fit_m2 <- with(mids_composite, glm(formula_m2, family = binomial))
 pooled_m2 <- pool(fit_m2)
 summary_m2 <- summary(pooled_m2)
@@ -8616,7 +8002,7 @@ summary_m2 <- summary(pooled_m2)
 # Model 3: + Clinical
 cat("Fitting Model 3: + Clinical factors...\n")
 formula_m3 <- as.formula(paste("scrn_stopped_bzra ~", 
-                               paste(c(personality_dims, demo_vars, clinical_vars), 
+                               paste(c(personality_dims, demo_vars_model, clinical_vars), 
                                      collapse = " + ")))
 fit_m3 <- with(mids_composite, glm(formula_m3, family = binomial))
 pooled_m3 <- pool(fit_m3)
@@ -8646,12 +8032,12 @@ print(or_m3, n = Inf, digits = 3)
 cat("\n")
 
 #==============================================================================
-# PART 5: VIF CHECK
+# PART 6: VIF CHECK
 #==============================================================================
-cat("PART 5: MULTICOLLINEARITY CHECK\n\n")
+cat("PART 6: MULTICOLLINEARITY CHECK\n\n")
 
 data_vif <- composite_list[[1]] %>%
-  drop_na(scrn_stopped_bzra, all_of(c(personality_dims, demo_vars, clinical_vars)))
+  drop_na(scrn_stopped_bzra, all_of(c(personality_dims, demo_vars_model, clinical_vars)))
 
 model_vif <- glm(formula_m3, data = data_vif, family = binomial)
 vif_values <- vif(model_vif)
@@ -8669,11 +8055,11 @@ if(max(vif_values) > 10) {
 }
 
 #==============================================================================
-# PART 6: INTERACTION SCREENING
+# PART 7: INTERACTION SCREENING
 #==============================================================================
-cat("PART 6: INTERACTION SCREENING\n\n")
+cat("PART 7: INTERACTION SCREENING\n\n")
 
-all_confounders <- c(demo_vars, clinical_vars)
+all_confounders <- c(demo_vars_model, clinical_vars)
 interaction_terms <- expand.grid(
   Personality = personality_dims,
   Confounder = all_confounders,
@@ -8721,14 +8107,12 @@ if(nrow(sig_interactions) > 0) {
   cat("\n")
 } else {
   cat("No significant interactions detected\n\n")
-  summary_m4 <- NULL
-  or_m4 <- NULL
 }
 
 #==============================================================================
-# PART 7: MEDIATION ANALYSIS
+# PART 8: MEDIATION ANALYSIS
 #==============================================================================
-cat("PART 7: MEDIATION ANALYSIS\n\n")
+cat("PART 8: MEDIATION ANALYSIS\n\n")
 
 mediator_vars <- c("Side_Effects_Composite", "Safety_Composite", 
                    "ADL_Composite", "Dependence_Composite", "Med_Burden_Composite")
@@ -8785,7 +8169,7 @@ for(pers in personality_dims) {
         predictor = pers,
         mediator = med,
         outcome = "scrn_stopped_bzra",
-        covariates = c(demo_vars, clinical_vars)
+        covariates = c(demo_vars_model, clinical_vars)
       )
     })
     
@@ -8818,9 +8202,9 @@ if(nrow(sig_mediation) > 0) {
 cat("\n")
 
 #==============================================================================
-# PART 8: SAVE RESULTS
+# PART 9: SAVE RESULTS
 #==============================================================================
-cat("PART 8: SAVING RESULTS\n\n")
+cat("PART 9: SAVING RESULTS\n\n")
 
 results_list <- list(
   sample_size = nrow(desc_data),
@@ -8864,9 +8248,6 @@ cat("  • dimensional_model3_odds_ratios.csv\n")
 cat("  • dimensional_mediation_results.csv\n\n")
 ```
 
-
-```{r}
-```
 
 
 
@@ -10366,1122 +9747,4 @@ cat("  Proceed to Chunk 12 (Final Documentation and Reporting)\n\n")
 cat("✓ Ready for final documentation!\n\n")
 ```
 
-## Final Documentation and Reporting
 
-```{r}
-#==============================================================================
-# CHUNK 12: FINAL DOCUMENTATION AND REPORTING
-#==============================================================================
-
-library(tidyverse)
-library(knitr)
-library(kableExtra)
-library(gridExtra)
-library(patchwork)
-
-cat("\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("STEP 12: FINAL DOCUMENTATION AND REPORTING\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("PURPOSE: Create publication-ready materials synthesizing all analyses\n")
-cat("OUTPUTS: Tables, figures, and narrative summaries for manuscript\n\n")
-
-# Load all results
-SIMOA_original <- readRDS("variable_reduction_results.rds")$analysis_data
-vsurf_results <- readRDS("VSURF_results.rds")
-rf_results <- readRDS("RF_modeling_results.rds")
-lr_results <- readRDS("LR_validation_results.rds")
-clustering_results <- readRDS("clustering_results.rds")
-fdr_results <- readRDS("FDR_correction_results.rds")
-sensitivity_results <- readRDS("sensitivity_analysis_results.rds")
-
-# -----------------------------------------------------------------------------
-# A. Sample characteristics table (Table 1)
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART A: Table 1 - Sample Characteristics\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-library(tableone)
-
-# Variables for Table 1
-table1_vars <- c(
-  "age", "sex", "education", "income", "employment",
-  "phq2_score", "osss_3_score", "med_quant", "gen_health"
-)
-
-# Available vars
-table1_vars_available <- table1_vars[table1_vars %in% names(SIMOA_original)]
-
-# Overall and by cluster
-cluster_data_full <- clustering_results$data_with_clusters
-
-table1 <- CreateTableOne(
-  vars = table1_vars_available,
-  strata = "cluster_named",
-  data = cluster_data_full,
-  test = FALSE  # Don't show p-values (will use FDR results instead)
-)
-
-cat("Creating Table 1: Sample Characteristics by Cluster\n\n")
-
-# Print to console
-print(table1, smd = FALSE)
-
-# Save as formatted table
-table1_formatted <- print(table1, printToggle = FALSE, smd = FALSE)
-write.csv(table1_formatted, "Table1_Sample_Characteristics.csv")
-cat("✓ Saved: Table1_Sample_Characteristics.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# B. Variable selection table (Table 2)
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART B: Table 2 - VSURF Variable Selection Results\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Creating Table 2: Variables Selected by VSURF\n\n")
-
-# VSURF results summary
-vsurf_summary <- data.frame(
-  Selection_Step = c("Thresholding", "Interpretation", "Prediction"),
-  N_Variables = c(
-    length(vsurf_results$threshold_vars),
-    length(vsurf_results$interpretation_vars),
-    length(vsurf_results$prediction_vars)
-  ),
-  Purpose = c(
-    "Eliminate irrelevant variables",
-    "Select for understanding (used in analysis)",
-    "Minimal optimal set for prediction"
-  )
-)
-
-print(vsurf_summary)
-
-write.csv(vsurf_summary, "Table2_VSURF_Selection.csv", row.names = FALSE)
-cat("✓ Saved: Table2_VSURF_Selection.csv\n\n")
-
-# List of selected variables
-vsurf_vars_table <- data.frame(
-  Variable = vsurf_results$interpretation_vars,
-  Selected_by_VSURF = "Yes",
-  Variable_Type = case_when(
-    grepl("DBAS|SURPS|CISS|Extraversion|Agreeableness|Conscientiousness|Neuroticism|Openness", 
-          vsurf_results$interpretation_vars) ~ "Personality",
-    grepl("age|sex|gender|region|education|employment|income", 
-          vsurf_results$interpretation_vars) ~ "Demographics",
-    grepl("phq|osss|med|health|composite", 
-          vsurf_results$interpretation_vars, ignore.case = TRUE) ~ "Clinical",
-    TRUE ~ "Other"
-  )
-) %>%
-  arrange(Variable_Type, Variable)
-
-write.csv(vsurf_vars_table, "Table2_Selected_Variables_List.csv", row.names = FALSE)
-cat("✓ Saved: Table2_Selected_Variables_List.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# C. Model performance table (Table 3)
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART C: Table 3 - Model Performance Comparison\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Creating Table 3: Random Forest vs Logistic Regression Performance\n\n")
-
-# Combine RF and LR performance
-performance_comparison <- data.frame(
-  Model = c("Random Forest", "Logistic Regression"),
-  AUC = c(
-    paste0(round(rf_results$mean_auc, 3), " (", 
-           round(rf_results$performance_summary$SD[1], 3), ")"),
-    paste0(round(lr_results$performance_summary$Mean[1], 3), " (",
-           round(lr_results$performance_summary$SD[1], 3), ")")
-  ),
-  Accuracy = c(
-    paste0(round(rf_results$performance_summary$Mean[2], 3), " (",
-           round(rf_results$performance_summary$SD[2], 3), ")"),
-    paste0(round(lr_results$performance_summary$Mean[2], 3), " (",
-           round(lr_results$performance_summary$SD[2], 3), ")")
-  ),
-  Sensitivity = c(
-    paste0(round(rf_results$performance_summary$Mean[3], 3), " (",
-           round(rf_results$performance_summary$SD[3], 3), ")"),
-    paste0(round(lr_results$performance_summary$Mean[3], 3), " (",
-           round(lr_results$performance_summary$SD[3], 3), ")")
-  ),
-  Specificity = c(
-    paste0(round(rf_results$performance_summary$Mean[4], 3), " (",
-           round(rf_results$performance_summary$SD[4], 3), ")"),
-    paste0(round(lr_results$performance_summary$Mean[4], 3), " (",
-           round(lr_results$performance_summary$SD[4], 3), ")")
-  )
-)
-
-print(performance_comparison)
-
-write.csv(performance_comparison, "Table3_Model_Performance.csv", row.names = FALSE)
-cat("✓ Saved: Table3_Model_Performance.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# D. Logistic regression results table (Table 4)
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART D: Table 4 - Logistic Regression Odds Ratios\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Creating Table 4: Predictors of BZRA Discontinuation (Odds Ratios)\n\n")
-
-# Get OR results (already computed in Chunk 8)
-or_table <- lr_results$odds_ratios %>%
-  mutate(
-    OR_CI = paste0(round(OR, 2), " [", round(OR_lower, 2), ", ", 
-                   round(OR_upper, 2), "]"),
-    p_formatted = format.pval(p.value, digits = 3, eps = 0.001)
-  ) %>%
-  select(Variable = term, OR_CI, p_value = p_formatted, Significance) %>%
-  arrange(Variable)
-
-print(or_table)
-
-write.csv(or_table, "Table4_Logistic_Regression_ORs.csv", row.names = FALSE)
-cat("✓ Saved: Table4_Logistic_Regression_ORs.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# E. Cluster characteristics table (Table 5)
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART E: Table 5 - Cluster Characteristics\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Creating Table 5: Patient Cluster Profiles\n\n")
-
-# Basic cluster info
-cluster_summary_table <- clustering_results$discontinuation_by_cluster %>%
-  mutate(
-    Discontinuation = paste0(Discontinuation_Rate, "% [",
-                            CI_lower, ", ", CI_upper, "]")
-  ) %>%
-  select(Cluster = cluster_named, N, Discontinuation)
-
-print(cluster_summary_table)
-
-write.csv(cluster_summary_table, "Table5_Cluster_Summary.csv", row.names = FALSE)
-cat("✓ Saved: Table5_Cluster_Summary.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# F. FDR-corrected differences table (Table 6)
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART F: Table 6 - FDR-Corrected Cluster Differences\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Creating Table 6: Significant Differences Between Clusters (FDR q < .05)\n\n")
-
-# Get all significant vars from FDR analysis
-all_sig_fdr <- bind_rows(
-  fdr_results$personality %>% mutate(Domain = "Personality"),
-  fdr_results$clinical %>% mutate(Domain = "Clinical"),
-  fdr_results$demographics %>% mutate(Domain = "Demographics")
-) %>%
-  filter(significant) %>%
-  mutate(
-    effect_size_formatted = round(effect_size, 3),
-    q_formatted = format.pval(q_value, digits = 3, eps = 0.001)
-  ) %>%
-  select(Domain, Variable = var, Test = test, 
-         Effect_Size = effect_size_formatted, q_value = q_formatted) %>%
-  arrange(Domain, q_value)
-
-print(all_sig_fdr)
-
-write.csv(all_sig_fdr, "Table6_FDR_Significant_Differences.csv", row.names = FALSE)
-cat("✓ Saved: Table6_FDR_Significant_Differences.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# G. Sensitivity analysis table (Table 7)
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART G: Table 7 - Sensitivity Analysis Results\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Creating Table 7: Robustness Checks\n\n")
-
-sensitivity_table <- sensitivity_results$summary_table %>%
-  filter(!is.na(AUC)) %>%
-  mutate(
-    AUC_formatted = round(AUC, 3),
-    Difference = round(Difference_from_Main, 3)
-  ) %>%
-  select(Analysis, AUC = AUC_formatted, 
-         Difference_from_Main = Difference, Assessment)
-
-print(sensitivity_table)
-
-write.csv(sensitivity_table, "Table7_Sensitivity_Analyses.csv", row.names = FALSE)
-cat("✓ Saved: Table7_Sensitivity_Analyses.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# H. Create figure panel for manuscript
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART H: Assembling key figures\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Key figures already created in previous chunks:\n")
-cat("  • Figure 1: VSURF_selection_process.png\n")
-cat("  • Figure 2: RF_variable_importance_pooled.png\n")
-cat("  • Figure 3: cluster_discontinuation_rates.png\n")
-cat("  • Figure 4: cluster_FDR_heatmap.png\n")
-cat("  • Figure 5: RF_vs_LR_comparison.png\n")
-cat("  • Figure 6: LR_odds_ratios_forest_plot.png\n\n")
-
-# Create a master figure list
-figure_manifest <- data.frame(
-  Figure_Number = 1:6,
-  Filename = c(
-    "VSURF_selection_process.png",
-    "RF_variable_importance_pooled.png",
-    "cluster_discontinuation_rates.png",
-    "cluster_FDR_heatmap.png",
-    "RF_vs_LR_comparison.png",
-    "LR_odds_ratios_forest_plot.png"
-  ),
-  Caption = c(
-    "VSURF variable selection process showing three-step filtering",
-    "Random Forest variable importance pooled across imputations",
-    "BZRA discontinuation rates by patient cluster with 95% CIs",
-    "FDR-significant variables distinguishing patient clusters",
-    "Model performance comparison: Random Forest vs Logistic Regression",
-    "Logistic regression odds ratios for BZRA discontinuation"
-  ),
-  Section = c(
-    "Methods - Variable Selection",
-    "Results - Prediction Analysis",
-    "Results - Clustering Analysis",
-    "Results - Cluster Characterization",
-    "Results - Model Validation",
-    "Results - Prediction Analysis"
-  )
-)
-
-write.csv(figure_manifest, "Figure_Manifest.csv", row.names = FALSE)
-cat("✓ Saved: Figure_Manifest.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# I. Methods section draft
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART I: Methods Section Draft\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-methods_text <- paste0(
-  "METHODS\n",
-  "=======\n\n",
-  
-  "Participants and Procedures\n",
-  "---------------------------\n",
-  "Data were collected from ", nrow(SIMOA_original), " older adults (≥65 years) who reported ",
-  "current benzodiazepine receptor agonist (BZRA) use. Participants completed an online survey ",
-  "assessing demographics, health status, personality traits, and BZRA use patterns. The primary ",
-  "outcome was self-reported BZRA discontinuation at follow-up.\n\n",
-  
-  "Missing Data\n",
-  "------------\n",
-  "Multiple imputation by chained equations (MICE) was used to handle missing data on personality ",
-  "scales. We generated 30 imputed datasets. Analyses were conducted on each imputed dataset and ",
-  "results were pooled using Rubin's rules.\n\n",
-  
-  "Variable Selection\n",
-  "------------------\n",
-  "From ", ncol(SIMOA_original), " initial variables, we used VSURF (Variable Selection Using Random ",
-  "Forests; Genuer et al., 2015) to identify important predictors. VSURF selected ",
-  length(vsurf_results$interpretation_vars), " variables through a three-step process: (1) ",
-  "thresholding to eliminate irrelevant variables, (2) interpretation to select stable important ",
-  "variables, and (3) prediction to identify the minimal optimal set.\n\n",
-  
-  "Clustering Analysis\n",
-  "-------------------\n",
-  "K-means clustering was performed to identify distinct patient profiles based on the VSURF-selected ",
-  "variables. The optimal number of clusters (k = ", clustering_results$chosen_k, ") was determined ",
-  "using the gap statistic, silhouette method, and elbow method. Clusters were compared on all ",
-  "variables using appropriate statistical tests (Kruskal-Wallis for continuous, chi-square for ",
-  "categorical) with False Discovery Rate (FDR) correction applied separately within personality, ",
-  "clinical, and demographic domains (q = 0.05).\n\n",
-  
-  "Prediction Modeling\n",
-  "-------------------\n",
-  "Random Forest (RF) and logistic regression models were fitted to predict BZRA discontinuation. ",
-  "RF models used ", length(vsurf_results$interpretation_vars), " VSURF-selected predictors with ",
-  "optimal hyperparameters (mtry = ", rf_results$optimal_mtry, ") determined via 10-fold cross-validation. ",
-  "Logistic regression provided interpretable effect sizes (odds ratios). Both models were validated ",
-  "using 80/20 train-test splits across all imputed datasets.\n\n",
-  
-  "Sensitivity Analyses\n",
-  "--------------------\n",
-  "Robustness of findings was assessed through sensitivity analyses testing: (1) CISS inclusion, ",
-  "(2) complete-case vs multiple imputation, (3) outlier influence, and (4) alternative variable ",
-  "selection approaches.\n\n"
-)
-
-writeLines(methods_text, "Methods_Section_Draft.txt")
-cat("✓ Saved: Methods_Section_Draft.txt\n\n")
-
-# -----------------------------------------------------------------------------
-# J. Results section draft
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART J: Results Section Draft\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-results_text <- paste0(
-  "RESULTS\n",
-  "=======\n\n",
-  
-  "Sample Characteristics\n",
-  "----------------------\n",
-  "The final analytic sample included ", nrow(cluster_data_full), " participants. ",
-  "[Add key demographics from Table 1]\n\n",
-  
-  "Variable Selection\n",
-  "------------------\n",
-  "VSURF reduced the initial ", ncol(SIMOA_original), " variables to ",
-  length(vsurf_results$interpretation_vars), " predictors (Table 2). These included ",
-  sum(vsurf_vars_table$Variable_Type == "Personality"), " personality variables, ",
-  sum(vsurf_vars_table$Variable_Type == "Clinical"), " clinical variables, and ",
-  sum(vsurf_vars_table$Variable_Type == "Demographics"), " demographic variables.\n\n",
-  
-  "Patient Clusters\n",
-  "----------------\n",
-  "K-means clustering identified ", clustering_results$chosen_k, " distinct patient profiles ",
-  "(Figure 3). Clusters differed significantly in discontinuation rates (χ² = [VALUE], p = [VALUE]). ",
-  "[Describe each cluster briefly with reference to Table 5 and FDR results in Table 6]\n\n",
-  
-  paste0("Cluster 1 (", clustering_results$cluster_names[1], ", n = ",
-         clustering_results$cluster_sizes[1], "): [Describe characteristics and discontinuation rate]\n\n"),
-  
-  if(clustering_results$chosen_k >= 2) paste0(
-    "Cluster 2 (", clustering_results$cluster_names[2], ", n = ",
-    clustering_results$cluster_sizes[2], "): [Describe characteristics and discontinuation rate]\n\n"
-  ) else "",
-  
-  if(clustering_results$chosen_k >= 3) paste0(
-    "Cluster 3 (", clustering_results$cluster_names[3], ", n = ",
-    clustering_results$cluster_sizes[3], "): [Describe characteristics and discontinuation rate]\n\n"
-  ) else "",
-  
-  if(clustering_results$chosen_k >= 4) paste0(
-    "Cluster 4 (", clustering_results$cluster_names[4], ", n = ",
-    clustering_results$cluster_sizes[4], "): [Describe characteristics and discontinuation rate]\n\n"
-  ) else "",
-  
-  "FDR-corrected comparisons revealed ", nrow(all_sig_fdr), " significant differences between clusters ",
-  "(Table 6). [Highlight key differences]\n\n",
-  
-  "Prediction Models\n",
-  "-----------------\n",
-  "Random Forest achieved a mean AUC of ", round(rf_results$mean_auc, 3), 
-  " (SD = ", round(rf_results$performance_summary$SD[1], 3), "), indicating ",
-  ifelse(rf_results$mean_auc >= 0.80, "excellent", 
-         ifelse(rf_results$mean_auc >= 0.70, "good", "fair")),
-  " discrimination (Table 3). The most important predictors were ",
-  "[list top 3-5 from Figure 2].\n\n",
-  
-  "Logistic regression showed comparable performance (AUC = ",
-  round(lr_results$performance_summary$Mean[1], 3), ", Figure 5). ",
-  "Significant predictors included [list significant ORs from Table 4].\n\n",
-  
-  "Sensitivity Analyses\n",
-  "--------------------\n",
-  "Results were robust across sensitivity analyses (Table 7). ",
-  "[Describe key findings from sensitivity tests]\n\n"
-)
-
-writeLines(results_text, "Results_Section_Draft.txt")
-cat("✓ Saved: Results_Section_Draft.txt\n\n")
-
-# -----------------------------------------------------------------------------
-# K. Clinical implications summary
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART K: Clinical Implications\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-clinical_implications <- paste0(
-  "CLINICAL IMPLICATIONS\n",
-  "=====================\n\n",
-  
-  "1. PATIENT PROFILING\n",
-  "--------------------\n",
-  "Our clustering analysis identified ", clustering_results$chosen_k, " distinct patient types ",
-  "among older BZRA users. Clinicians can use these profiles to:\n",
-  "  • Quickly identify which 'type' of patient they're working with\n",
-  "  • Tailor discontinuation support to patient profile\n",
-  "  • Set realistic expectations about discontinuation success\n\n",
-  
-  "Profile-Specific Recommendations:\n",
-  "[For each cluster, provide 1-2 sentence clinical recommendation]\n\n",
-  
-  "2. RISK ASSESSMENT\n",
-  "------------------\n",
-  "Our prediction models can help clinicians estimate individual patients' likelihood of ",
-  "successful discontinuation. Key factors to assess:\n",
-  "[List top 5 predictors from RF importance]\n\n",
-  
-  "3. TARGETED INTERVENTIONS\n",
-  "-------------------------\n",
-  "Different patient profiles may benefit from different discontinuation strategies:\n",
-  "  • [Profile 1]: [Suggested approach]\n",
-  "  • [Profile 2]: [Suggested approach]\n",
-  "  • [Profile 3]: [Suggested approach]\n\n",
-  
-  "4. CLINICAL DECISION SUPPORT\n",
-  "----------------------------\n",
-  "The models developed in this study could be implemented as clinical decision support tools ",
-  "to help clinicians:\n",
-  "  • Identify patients most likely to succeed with discontinuation\n",
-  "  • Prioritize patients for intensive support based on risk profile\n",
-  "  • Personalize taper schedules and support strategies\n\n"
-)
-
-writeLines(clinical_implications, "Clinical_Implications.txt")
-cat("✓ Saved: Clinical_Implications.txt\n\n")
-
-# -----------------------------------------------------------------------------
-# L. Strengths and limitations
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART L: Strengths and Limitations\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-strengths_limitations <- paste0(
-  "STRENGTHS AND LIMITATIONS\n",
-  "=========================\n\n",
-  
-  "Strengths:\n",
-  "----------\n",
-  "1. Rigorous variable selection: VSURF provided statistically principled reduction from ",
-  ncol(SIMOA_original), " to ", length(vsurf_results$interpretation_vars), " predictors\n\n",
-  
-  "2. Multiple imputation: Addressed missing data while preserving uncertainty (m = 30 imputations)\n\n",
-  
-  "3. Dual analytical approach: Combined exploratory clustering (patient profiles) with ",
-  "confirmatory prediction (individual risk assessment)\n\n",
-  
-  "4. Multiple testing correction: FDR correction by domain prevented false positive inflation\n\n",
-  
-  "5. Comprehensive sensitivity analyses: Findings robust to analytical choices\n\n",
-  
-  "6. Large sample: ", nrow(cluster_data_full), " participants provided adequate power\n\n",
-  
-  "Limitations:\n",
-  "------------\n",
-  "1. Cross-sectional design: Cannot establish causality or temporal relationships\n\n",
-  
-  "2. Self-report: Discontinuation outcome based on self-report (not verified)\n\n",
-  
-  "3. Online recruitment: May not represent all older BZRA users (selection bias)\n\n",
-  
-  "4. Missing data: Despite imputation, some personality scales had substantial missingness\n\n",
-  
-  "5. Generalizability: Sample predominantly [describe key demographics], limiting generalizability\n\n",
-  
-  "6. Predictive performance: Models showed ", 
-  ifelse(rf_results$mean_auc >= 0.80, "good", "modest"),
-  " discrimination, leaving room for improvement\n\n"
-)
-
-writeLines(strengths_limitations, "Strengths_Limitations.txt")
-cat("✓ Saved: Strengths_Limitations.txt\n\n")
-
-# -----------------------------------------------------------------------------
-# M. Future directions
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART M: Future Research Directions\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-future_directions <- paste0(
-  "FUTURE RESEARCH DIRECTIONS\n",
-  "==========================\n\n",
-  
-  "1. LONGITUDINAL VALIDATION\n",
-  "--------------------------\n",
-  "Follow-up studies should:\n",
-  "  • Prospectively validate cluster stability over time\n",
-  "  • Track actual discontinuation attempts and long-term success\n",
-  "  • Identify predictors of sustained discontinuation vs. relapse\n\n",
-  
-  "2. INTERVENTION STUDIES\n",
-  "-----------------------\n",
-  "RCTs testing:\n",
-  "  • Profile-matched interventions (tailored to cluster type)\n",
-  "  • Clinical decision support tools based on prediction models\n",
-  "  • Differential taper strategies by risk profile\n\n",
-  
-  "3. REPLICATION AND EXTENSION\n",
-  "----------------------------\n",
-  "  • Replicate findings in diverse samples (different countries, healthcare systems)\n",
-  "  • Include objective measures (prescription records, drug testing)\n",
-  "  • Expand to other sedative medications (Z-drugs, opioids)\n\n",
-  
-  "4. MECHANISM EXPLORATION\n",
-  "------------------------\n",
-  "  • Why do certain personality profiles struggle more with discontinuation?\n",
-  "  • What are the psychological mechanisms linking traits to outcomes?\n",
-  "  • Can modifiable factors (anxiety, sleep quality) mediate risk?\n\n",
-  
-  "5. IMPLEMENTATION SCIENCE\n",
-  "-------------------------\n",
-  "  • Develop and test clinical decision support tools\n",
-  "  • Create patient-facing resources (\"What's my profile?\")\n",
-  "  • Evaluate barriers to clinical adoption\n\n"
-)
-
-writeLines(future_directions, "Future_Directions.txt")
-cat("✓ Saved: Future_Directions.txt\n\n")
-
-# -----------------------------------------------------------------------------
-# N. Create comprehensive analysis log
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART N: Creating Analysis Log\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-analysis_log <- paste0(
-  "COMPLETE ANALYSIS LOG\n",
-  "=====================\n",
-  "Generated: ", Sys.time(), "\n\n",
-  
-  "SAMPLE\n",
-  "------\n",
-  "Original N: ", nrow(SIMOA_original), "\n",
-  "Final analytic N: ", nrow(cluster_data_full), "\n",
-  "Discontinuation rate: [ADD]%\n\n",
-  
-  "VARIABLE REDUCTION\n",
-  "------------------\n",
-  "Starting variables: ", ncol(SIMOA_original), "\n",
-  "After VSURF: ", length(vsurf_results$interpretation_vars), "\n",
-  "Reduction: ", round(100 * (1 - length(vsurf_results$interpretation_vars) / ncol(SIMOA_original)), 1), "%\n\n",
-  
-  "MISSING DATA\n",
-  "------------\n",
-  "Imputation method: MICE\n",
-  "Number of imputations: 30\n",
-  "Iterations: 20\n\n",
-  
-  "CLUSTERING\n",
-  "----------\n",
-  "Method: K-means\n",
-  "Number of clusters: ", clustering_results$chosen_k, "\n",
-  "Between-SS ratio: ", round(clustering_results$final_model$betweenss / 
-                              clustering_results$final_model$totss, 3), "\n",
-  "Clusters differ in discontinuation: ", 
-  ifelse(exists("chisq_test") && chisq_test$p.value < 0.05, "YES", "NO"), "\n\n",
-  
-  "PREDICTION MODELS\n",
-  "-----------------\n",
-  "Random Forest:\n",
-  "  AUC: ", round(rf_results$mean_auc, 3), " ± ", 
-  round(rf_results$performance_summary$SD[1], 3), "\n",
-  "  Optimal mtry: ", rf_results$optimal_mtry, "\n",
-  "  Trees: 1000\n\n",
-  
-  "Logistic Regression:\n",
-  "  AUC: ", round(lr_results$performance_summary$Mean[1], 3), " ± ",
-  round(lr_results$performance_summary$SD[1], 3), "\n",
-  "  Significant predictors: ", sum(lr_results$odds_ratios$p.value < 0.05, na.rm = TRUE), "\n\n",
-  
-  "FDR CORRECTION\n",
-  "--------------\n",
-  "Method: Benjamini-Hochberg\n",
-  "Threshold: q = 0.05\n",
-  "Domains: Personality, Clinical, Demographics (separate)\n",
-  "Significant after FDR: ", nrow(all_sig_fdr), "\n\n",
-  
-  "SENSITIVITY ANALYSES\n",
-  "--------------------\n",
-  "Number of analyses: ", nrow(sensitivity_results$summary_table), "\n",
-  "Robust results: ", sensitivity_results$overall_assessment$n_robust, "\n",
-  "Concerning results: ", sensitivity_results$overall_assessment$n_concerning, "\n\n",
-  
-  "KEY DECISIONS MADE\n",
-  "------------------\n",
-  "1. CISS handling: [Based on investigation findings]\n",
-  "2. Number of clusters: ", clustering_results$chosen_k, "\n",
-  "3. FDR correction: Separate by domain\n",
-  "4. Primary model: Random Forest with LR validation\n\n",
-  
-  "FILES GENERATED\n",
-  "---------------\n",
-  "Tables: 7 main tables + supplementary\n",
-  "Figures: 6 main figures\n",
-  "Text: Methods, Results, Clinical Implications\n",
-  "Data: All results saved as .rds files\n\n"
-)
-
-writeLines(analysis_log, "Complete_Analysis_Log.txt")
-cat("✓ Saved: Complete_Analysis_Log.txt\n\n")
-
-# -----------------------------------------------------------------------------
-# O. Create master summary document
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART O: Master Summary Document\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-master_summary <- paste0(
-  "═══════════════════════════════════════════════════════════════\n",
-  "MASTER ANALYSIS SUMMARY\n",
-  "Predictors of BZRA Discontinuation in Older Adults\n",
-  "═══════════════════════════════════════════════════════════════\n\n",
-  
-  "EXECUTIVE SUMMARY\n",
-  "-----------------\n",
-  "This study identified ", clustering_results$chosen_k, " distinct patient profiles among older ",
-  "BZRA users and developed prediction models for discontinuation success. Using rigorous variable ",
-  "selection (VSURF), we reduced ", ncol(SIMOA_original), " candidate predictors to ",
-  length(vsurf_results$interpretation_vars), " key factors. Random Forest and logistic regression ",
-  "models achieved AUCs of ", round(rf_results$mean_auc, 3), " and ",
-  round(lr_results$performance_summary$Mean[1], 3), " respectively, indicating ",
-  ifelse(rf_results$mean_auc >= 0.70, "good", "modest"), " predictive performance.\n\n",
-  
-  "KEY FINDINGS\n",
-  "------------\n\n",
-  
-  "1. PATIENT PROFILES (Clustering Analysis)\n",
-  "   • Identified ", clustering_results$chosen_k, " distinct clusters\n",
-  "   • Clusters differed significantly in discontinuation rates\n",
-  "   • FDR-corrected comparisons revealed ", nrow(all_sig_fdr), " robust differences\n\n",
-  
-  "   Cluster Descriptions:\n",
-  paste0(sapply(1:clustering_results$chosen_k, function(i) {
-    paste0("   ", i, ". ", clustering_results$cluster_names[i], 
-           " (n=", clustering_results$cluster_sizes[i], ")\n",
-           "      Discontinuation rate: ",
-           clustering_results$discontinuation_by_cluster$Discontinuation_Rate[i], "%\n",
-           "      [Key characteristics from FDR results]\n")
-  }), collapse = "\n"),
-  "\n",
-  
-  "2. PREDICTION MODELS\n",
-  "   Random Forest (Exploratory):\n",
-  "   • AUC = ", round(rf_results$mean_auc, 3), " (", 
-  ifelse(rf_results$mean_auc >= 0.80, "excellent", 
-         ifelse(rf_results$mean_auc >= 0.70, "good", "fair")), ")\n",
-  "   • Top predictors: [List from importance plot]\n\n",
-  
-  "   Logistic Regression (Confirmatory):\n",
-  "   • AUC = ", round(lr_results$performance_summary$Mean[1], 3), "\n",
-  "   • Significant predictors: ", sum(lr_results$odds_ratios$p.value < 0.05, na.rm = TRUE), "\n",
-  "   • [List key ORs]\n\n",
-  
-  "3. ROBUSTNESS\n",
-  "   • Findings stable across ", nrow(sensitivity_results$summary_table), " sensitivity analyses\n",
-  "   • ", sensitivity_results$overall_assessment$n_robust, " of ",
-  nrow(sensitivity_results$summary_table), " analyses showed robust results\n",
-  "   • Clustering stable across bootstrap resamples\n\n",
-  
-  "CLINICAL IMPLICATIONS\n",
-  "---------------------\n",
-  "1. Clinicians can use patient profiles to:\n",
-  "   • Identify which 'type' of patient they're working with\n",
-  "   • Tailor discontinuation support strategies\n",
-  "   • Set realistic expectations\n\n",
-  
-  "2. Prediction models enable:\n",
-  "   • Individual risk assessment\n",
-  "   • Prioritization of intensive support\n",
-  "   • Personalized treatment planning\n\n",
-  
-  "3. Key modifiable targets for intervention:\n",
-  "   [List from RF importance + significant ORs]\n\n",
-  
-  "METHODOLOGICAL STRENGTHS\n",
-  "------------------------\n",
-  "✓ Rigorous variable selection (VSURF)\n",
-  "✓ Multiple imputation (m=30)\n",
-  "✓ Dual analytical approach (clustering + prediction)\n",
-  "✓ FDR correction by domain\n",
-  "✓ Comprehensive sensitivity analyses\n",
-  "✓ Both RF (exploratory) and LR (confirmatory)\n\n",
-  
-  "LIMITATIONS\n",
-  "-----------\n",
-  "• Cross-sectional design (no causality)\n",
-  "• Self-reported outcome\n",
-  "• Online recruitment (selection bias)\n",
-  "• Missing data on personality scales\n",
-  "• Modest predictive performance (room for improvement)\n\n",
-  
-  "FUTURE DIRECTIONS\n",
-  "-----------------\n",
-  "1. Longitudinal validation of clusters\n",
-  "2. RCTs testing profile-matched interventions\n",
-  "3. Clinical decision support tool development\n",
-  "4. Replication in diverse samples\n",
-  "5. Mechanism exploration studies\n\n",
-  
-  "═══════════════════════════════════════════════════════════════\n",
-  "FOR YOUR DEFENSE\n",
-  "═══════════════════════════════════════════════════════════════\n\n",
-  
-  "ANTICIPATED COMMITTEE QUESTIONS & ANSWERS\n",
-  "-----------------------------------------\n\n",
-  
-  "Q1: Why did you use VSURF instead of just picking the 'top 15' variables?\n",
-  "A: VSURF provides statistically principled variable selection based on ",
-  "prediction importance, stability across bootstrap samples, and redundancy ",
-  "elimination. The 'top N' approach is arbitrary and doesn't account for ",
-  "multicollinearity or stability. VSURF's three-step process (threshold, ",
-  "interpret, predict) is published, validated, and defensible.\n\n",
-  
-  "Q2: How do you know your clusters are 'real' and not just artifacts?\n",
-  "A: Multiple lines of evidence: (1) Optimal k identified by 3 methods ",
-  "(gap statistic, silhouette, elbow), (2) Clusters differ significantly on ",
-  "outcome (p < .05), (3) Stable across bootstrap resamples (SD < 0.05), ",
-  "(4) Clinically interpretable profiles, (5) FDR-corrected differences show ",
-  "robust distinctions.\n\n",
-  
-  "Q3: Why separate FDR correction by domain instead of across all variables?\n",
-  "A: Based on statistical theory (Benjamini & Hochberg, 1995; Yekutieli, 2008), ",
-  "FDR should be applied within families of related hypotheses. Personality, ",
-  "clinical, and demographic variables are conceptually distinct families. ",
-  "Correcting across all would be overly conservative and inappropriate for ",
-  "heterogeneous variable types.\n\n",
-  
-  "Q4: Your AUC is [", round(rf_results$mean_auc, 2), "] - isn't that too low?\n",
-  "A: An AUC of ", round(rf_results$mean_auc, 2), " indicates ",
-  ifelse(rf_results$mean_auc >= 0.70, "good discrimination", "modest but meaningful discrimination"),
-  ". For comparison, [cite similar studies]. Importantly, our models are ",
-  "statistically significantly better than chance (AUC=0.50) and provide ",
-  "clinically useful information. Perfect prediction (AUC=1.0) is unrealistic ",
-  "for complex behavioral outcomes with multiple unmeasured influences.\n\n",
-  
-  "Q5: How do clustering and prediction analyses relate to each other?\n",
-  "A: They're complementary: Clustering (exploratory) identifies patient 'types' ",
-  "- clinically intuitive profiles. Prediction (confirmatory) validates that ",
-  "individual differences matter and provides tools for individual risk assessment. ",
-  "Together, they offer both population-level understanding (profiles) and ",
-  "individual-level utility (risk scores).\n\n",
-  
-  "Q6: What about missing data - can you trust your imputations?\n",
-  "A: Missingness analysis (Chunk 2) tested MAR assumptions by comparing those ",
-  "with vs without missing data. [Describe findings]. Multiple imputation (m=30) ",
-  "preserves uncertainty. Sensitivity analysis comparing complete-case to imputed ",
-  "showed [describe results], supporting imputation validity.\n\n",
-  
-  "═══════════════════════════════════════════════════════════════\n\n"
-)
-
-writeLines(master_summary, "Master_Summary_Document.txt")
-cat("✓ Saved: Master_Summary_Document.txt\n\n")
-
-# -----------------------------------------------------------------------------
-# P. File organization summary
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART P: File Organization\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Creating file inventory...\n\n")
-
-# List all generated files
-all_files <- list.files(pattern = "\\.csv$|\\.png$|\\.txt$|\\.rds$")
-
-file_inventory <- data.frame(
-  Category = c(
-    rep("Tables", 7),
-    rep("Figures", 6),
-    rep("Data Objects", 10),
-    rep("Text Documents", 5)
-  ),
-  Filename = c(
-    # Tables
-    "Table1_Sample_Characteristics.csv",
-    "Table2_VSURF_Selection.csv",
-    "Table3_Model_Performance.csv",
-    "Table4_Logistic_Regression_ORs.csv",
-    "Table5_Cluster_Summary.csv",
-    "Table6_FDR_Significant_Differences.csv",
-    "Table7_Sensitivity_Analyses.csv",
-    
-    # Figures
-    "VSURF_selection_process.png",
-    "RF_variable_importance_pooled.png",
-    "cluster_discontinuation_rates.png",
-    "cluster_FDR_heatmap.png",
-    "RF_vs_LR_comparison.png",
-    "LR_odds_ratios_forest_plot.png",
-    
-    # Data objects
-    "CISS_investigation_results.rds",
-    "missingness_diagnostics.rds",
-    "variable_reduction_results.rds",
-    "imputed_data_mids.rds",
-    "imputed_data_with_subscales.rds",
-    "VSURF_results.rds",
-    "RF_modeling_results.rds",
-    "LR_validation_results.rds",
-    "clustering_results.rds",
-    "sensitivity_analysis_results.rds",
-    
-    # Text documents
-    "Methods_Section_Draft.txt",
-    "Results_Section_Draft.txt",
-    "Clinical_Implications.txt",
-    "Strengths_Limitations.txt",
-    "Future_Directions.txt"
-  ),
-  Purpose = c(
-    # Tables
-    "Manuscript Table 1: Demographics by cluster",
-    "Manuscript Table 2: VSURF variable selection",
-    "Manuscript Table 3: RF vs LR performance",
-    "Manuscript Table 4: Logistic regression ORs",
-    "Manuscript Table 5: Cluster characteristics",
-    "Manuscript Table 6: FDR-corrected differences",
-    "Supplementary Table: Sensitivity analyses",
-    
-    # Figures
-    "Manuscript Figure 1: VSURF process",
-    "Manuscript Figure 2: Variable importance",
-    "Manuscript Figure 3: Discontinuation by cluster",
-    "Manuscript Figure 4: Cluster heatmap",
-    "Manuscript Figure 5: Model comparison",
-    "Manuscript Figure 6: Odds ratios forest plot",
-    
-    # Data objects
-    "CISS investigation findings and decision",
-    "Missingness analysis results",
-    "Variable reduction decisions",
-    "Multiple imputation object (30 imputations)",
-    "Imputed data with personality subscales",
-    "VSURF variable selection results",
-    "Random Forest model results",
-    "Logistic regression results",
-    "Clustering analysis results",
-    "Sensitivity analysis results",
-    
-    # Text
-    "Methods section ready for manuscript",
-    "Results section ready for manuscript",
-    "Clinical implications for discussion",
-    "Strengths and limitations for discussion",
-    "Future directions for discussion"
-  )
-)
-
-write.csv(file_inventory, "File_Inventory.csv", row.names = FALSE)
-cat("✓ Saved: File_Inventory.csv\n\n")
-
-print(file_inventory)
-cat("\n")
-
-# -----------------------------------------------------------------------------
-# Q. Final checklist
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART Q: FINAL COMPLETION CHECKLIST\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-checklist <- data.frame(
-  Step = c(
-    "1. CISS Investigation",
-    "2. Missingness Analysis",
-    "3. Variable Reduction",
-    "4. Multiple Imputation",
-    "5. Subscale Creation",
-    "6. VSURF Selection",
-    "7. Random Forest Modeling",
-    "8. Logistic Regression",
-    "9. Clustering Analysis",
-    "10. Sensitivity Analyses",
-    "11. FDR Correction",
-    "12. Final Documentation"
-  ),
-  Status = rep("✓ COMPLETE", 12),
-  Key_Output = c(
-    "CISS decision made and justified",
-    "MAR assumptions tested, predictors identified",
-    paste0(length(vsurf_results$interpretation_vars), " variables selected"),
-    "30 imputed datasets created",
-    "Personality subscales computed",
-    paste0(length(vsurf_results$interpretation_vars), " variables selected by VSURF"),
-    paste0("AUC = ", round(rf_results$mean_auc, 3)),
-    paste0("AUC = ", round(lr_results$performance_summary$Mean[1], 3)),
-    paste0(clustering_results$chosen_k, " clusters identified"),
-    paste0(sensitivity_results$overall_assessment$n_robust, " robust results"),
-    paste0(nrow(all_sig_fdr), " FDR-significant differences"),
-    "All tables, figures, and text complete"
-  )
-))
-
-cat("ANALYSIS COMPLETION STATUS:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-print(checklist, row.names = FALSE)
-cat("\n")
-
-write.csv(checklist, "Analysis_Completion_Checklist.csv", row.names = FALSE)
-cat("✓ Saved: Analysis_Completion_Checklist.csv\n\n")
-
-# -----------------------------------------------------------------------------
-# R. Final summary and next steps
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("    FINAL DOCUMENTATION AND REPORTING COMPLETE\n")
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("CONGRATULATIONS! Your analysis is complete.\n\n")
-
-cat("YOU NOW HAVE:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("✓ 7 manuscript-ready tables\n")
-cat("✓ 6 publication-quality figures\n")
-cat("✓ Draft methods section\n")
-cat("✓ Draft results section\n")
-cat("✓ Clinical implications summary\n")
-cat("✓ Strengths and limitations\n")
-cat("✓ Future directions\n")
-cat("✓ Complete analysis log\n")
-cat("✓ Defense preparation materials\n\n")
-
-cat("MANUSCRIPT STRUCTURE (Ready to Assemble):\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("1. ABSTRACT [Write using Master_Summary_Document.txt]\n")
-cat("2. INTRODUCTION [You write based on your lit review]\n")
-cat("3. METHODS [Use Methods_Section_Draft.txt]\n")
-cat("4. RESULTS [Use Results_Section_Draft.txt]\n")
-cat("5. DISCUSSION\n")
-cat("   • Summary of findings [Use Master_Summary_Document.txt]\n")
-cat("   • Clinical implications [Use Clinical_Implications.txt]\n")
-cat("   • Strengths [Use Strengths_Limitations.txt]\n")
-cat("   • Limitations [Use Strengths_Limitations.txt]\n")
-cat("   • Future directions [Use Future_Directions.txt]\n")
-cat("6. REFERENCES [Your bibliography]\n")
-cat("7. TABLES [Tables 1-7 ready]\n")
-cat("8. FIGURES [Figures 1-6 ready]\n\n")
-
-cat("DEFENSE PREPARATION:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("1. Review Master_Summary_Document.txt for:\n")
-cat("   • Executive summary (opening statement)\n")
-cat("   • Key findings (slides 1-10)\n")
-cat("   • Anticipated questions & answers\n\n")
-
-cat("2. Create PowerPoint using:\n")
-cat("   • Figures 1-6 (already generated)\n")
-cat("   • Tables 1, 3, 5, 6 (most important)\n")
-cat("   • Master_Summary_Document.txt for text\n\n")
-
-cat("3. Practice explaining:\n")
-cat("   • Why VSURF > arbitrary 'top 15'\n")
-cat("   • How clustering and prediction complement each other\n")
-cat("   • Why separate FDR by domain\n")
-cat("   • Clinical relevance of patient profiles\n\n")
-
-cat("SUBMISSION CHECKLIST:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("[ ] Manuscript drafted using generated materials\n")
-cat("[ ] All tables formatted per journal guidelines\n")
-cat("[ ] All figures saved at required resolution (300 DPI)\n")
-cat("[ ] Methods section includes all analysis details\n")
-cat("[ ] Results section cites all tables and figures\n")
-cat("[ ] Discussion includes clinical implications\n")
-cat("[ ] Limitations section addresses key concerns\n")
-cat("[ ] Supplementary materials prepared (if needed)\n")
-cat("[ ] Co-authors reviewed draft\n")
-cat("[ ] Supervisor approval obtained\n\n")
-
-cat("DEFENSE CHECKLIST:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("[ ] PowerPoint created (20-30 slides)\n")
-cat("[ ] Practice presentation (20 minutes)\n")
-cat("[ ] Anticipated questions prepared\n")
-cat("[ ] Analysis decisions documented\n")
-cat("[ ] R code organized and commented\n")
-cat("[ ] Committee members contacted\n")
-cat("[ ] Defense date scheduled\n\n")
-
-cat("KEY FILES FOR COMMITTEE:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("Essential:\n")
-cat("  • Master_Summary_Document.txt (overview)\n")
-cat("  • All Tables (CSV files)\n")
-cat("  • All Figures (PNG files)\n")
-cat("  • Complete_Analysis_Log.txt (analysis trail)\n\n")
-
-cat("If requested:\n")
-cat("  • All .rds files (full analysis objects)\n")
-cat("  • FINAL.qmd (complete code)\n")
-cat("  • File_Inventory.csv (file guide)\n\n")
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("WHAT TO DO NOW:\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("IMMEDIATE (Next 48 hours):\n")
-cat("1. Review Master_Summary_Document.txt thoroughly\n")
-cat("2. Look at all 6 figures - understand what each shows\n")
-cat("3. Read through all 7 tables\n")
-cat("4. Make sure cluster names are clinically meaningful\n\n")
-
-cat("SHORT-TERM (Next 1-2 weeks):\n")
-cat("1. Draft manuscript introduction\n")
-cat("2. Refine methods and results sections\n")
-cat("3. Write discussion section\n")
-cat("4. Create defense presentation\n")
-cat("5. Send draft to supervisor\n\n")
-
-cat("BEFORE DEFENSE:\n")
-cat("1. Practice presentation 3-5 times\n")
-cat("2. Review anticipated questions\n")
-cat("3. Be ready to explain ANY analysis decision\n")
-cat("4. Know your limitations and how to address them\n")
-cat("5. Have clinical implications memorized\n\n")
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("YOU'RE READY!\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("You've completed a rigorous, comprehensive analysis that:\n")
-cat("  ✓ Uses state-of-the-art methods (VSURF, MI, FDR)\n")
-cat("  ✓ Addresses dual research questions (profiles + prediction)\n")
-cat("  ✓ Includes appropriate sensitivity analyses\n")
-cat("  ✓ Has clear clinical implications\n")
-cat("  ✓ Is publication-ready\n\n")
-
-cat("Good luck with your defense! 🎓\n\n")
-
-# Save session info for reproducibility
-session_info <- sessionInfo()
-saveRDS(session_info, "R_session_info.rds")
-cat("✓ Saved: R_session_info.rds (for reproducibility)\n\n")
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("END OF ANALYSIS\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-```
