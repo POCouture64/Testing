@@ -7766,13 +7766,6 @@ cat("  2. hopkins_distance_distribution.png\n\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 ```
 
-## LPA TEST
-
-```{r}
-
-```
-
-
 
 
 
@@ -7781,10 +7774,10 @@ cat("═════════════════════════
 
 ```{r}
 #==============================================================================
-# COMPREHENSIVE DIMENSIONAL PERSONALITY REGRESSION ANALYSIS (UPDATED)
+# COMPREHENSIVE DIMENSIONAL PERSONALITY REGRESSION ANALYSIS (FIXED)
 #==============================================================================
 # Purpose: Test personality dimensions as continuous predictors of BZRA cessation
-# Updates: Uses correct variable names from Hopkins and FDR code
+# Updates: Fixed composite score calculation
 #==============================================================================
 
 library(tidyverse)
@@ -7808,6 +7801,33 @@ mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
 m <- mids_with_subscales$m
 cat("Number of imputations:", m, "\n\n")
 
+# Outcome variable
+outcome_var <- "scrn_stopped_bzra"
+
+# VERIFICATION: Check that outcome variable exists in the imputed data
+cat("Verifying outcome variable...\n")
+first_complete <- complete(mids_with_subscales, 1)
+all_vars <- names(first_complete)
+
+if(outcome_var %in% all_vars) {
+  cat("✓ Outcome variable '", outcome_var, "' found in completed data\n", sep = "")
+  cat("  - Class:", class(first_complete[[outcome_var]]), "\n")
+  cat("  - Distribution:", table(first_complete[[outcome_var]]), "\n\n")
+  
+  # Check if outcome is in the mids object's original data
+  if(!(outcome_var %in% names(mids_with_subscales$data))) {
+    cat("⚠ Outcome variable not in mids$data - adding it now...\n")
+    
+    # Add outcome to mids$data
+    mids_with_subscales$data[[outcome_var]] <- first_complete[[outcome_var]]
+    cat("✓ Outcome variable added to mids$data\n\n")
+  } else {
+    cat("✓ Outcome variable already in mids$data\n\n")
+  }
+} else {
+  stop("ERROR: Outcome variable '", outcome_var, "' NOT FOUND in imputed data!")
+}
+
 #==============================================================================
 # PART 2: IDENTIFY AVAILABLE VARIABLES
 #==============================================================================
@@ -7815,8 +7835,9 @@ cat("PART 2: Identifying available personality variables\n\n")
 
 all_vars <- names(complete(mids_with_subscales, 1))
 
-# Personality variables (from Hopkins code)
-big_five <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness")
+# Personality variables
+big_five <- c("BFI_Extraversion", "BFI_Agreeableness", "BFI_Conscientiousness", 
+              "BFI_Neuroticism", "BFI_Openness")
 dbas_vars <- grep("^DBAS_", all_vars, value = TRUE)
 surps_vars <- grep("^SURPS_", all_vars, value = TRUE)
 ciss_vars <- grep("^CISS_", all_vars, value = TRUE)
@@ -7828,142 +7849,105 @@ cat("  SURPS:", length(surps_vars), "\n")
 cat("  CISS:", length(ciss_vars), "\n\n")
 
 #==============================================================================
-# PART 3: CREATE COMPOSITE SCORES
+# PART 3: PREPARE DATA WITH PERSONALITY SUBSCALES
 #==============================================================================
-cat("PART 3: Creating personality dimension composites\n\n")
+cat("PART 3: Preparing data with personality subscales\n\n")
 
-# Define demographic and clinical confounders (from FDR code)
+# Define personality subscales (16 variables - same as Hopkins test)
+personality_vars <- c(
+  # Big Five (5 variables)
+  "BFI_Extraversion",
+  "BFI_Agreeableness",
+  "BFI_Conscientiousness",
+  "BFI_Neuroticism",
+  "BFI_Openness",
+  
+  # DBAS subscales only - excluding DBAS_Total (4 variables)
+  "DBAS_Consequences",
+  "DBAS_Worry_Helplessness",
+  "DBAS_Expectations",
+  "DBAS_Medications",
+  
+  # SURPS subscales (4 variables)
+  "SURPS_Impulsivity",
+  "SURPS_Sensation_Seeking",
+  "SURPS_Hopelessness",
+  "SURPS_Anxiety_Sensitivity",
+  
+  # CISS subscales (3 variables)
+  "CISS_Task",
+  "CISS_Emotion",
+  "CISS_Avoidance"
+)
+
+# Define demographic and clinical confounders
 demo_vars <- c("age", "sex", "education_level")
 clinical_vars <- c("phq2_score", "osss_3_score", "n_health_conditions")
 
-cat("Creating composite scores with numeric conversion...\n\n")
+cat("Preparing data with education recoding...\n\n")
 
-composite_list <- lapply(1:m, function(i) {
-  
-  data_imp <- complete(mids_with_subscales, i)
-  
-  # Recode demographic variables (from FDR code)
-  data_imp <- data_imp %>%
-    mutate(
-      # Recode education_level (from education)
-      education_level = case_when(
-        education %in% c(1, 2, 3) ~ "High School or Less",
-        education %in% c(4, 5) ~ "University/Trade School",
-        TRUE ~ NA_character_
-      ),
-      education_level = factor(education_level, 
-                               levels = c("High School or Less", "University/Trade School")),
-      
-      # Convert to numeric for modeling
-      education_level_numeric = as.numeric(education_level) - 1  # 0 = HS or less, 1 = Univ/Trade
-    )
-  
-  # Helper function to safely convert to numeric
-  safe_numeric <- function(x) {
-    if(is.numeric(x)) return(x)
-    as.numeric(as.character(x))
-  }
-  
-  # Create personality composites
-  data_imp <- data_imp %>%
-    mutate(
-      # Distress dimension: Neuroticism + SURPS anxiety/hopelessness + CISS emotion
-      Distress = rowMeans(
-        select(., any_of(c("Neuroticism", "SURPS_Anxiety_Sensitivity", 
-                          "SURPS_Hopelessness", "CISS_Emotion"))) %>%
-          mutate(across(everything(), ~scale(safe_numeric(.))[,1])),
-        na.rm = TRUE
-      ),
-      
-      # Sleep Dysfunction: DBAS worry/helplessness + consequences
-      Sleep_Dysfunction = rowMeans(
-        select(., any_of(c("DBAS_Worry_Helplessness", "DBAS_Consequences"))) %>%
-          mutate(across(everything(), ~scale(safe_numeric(.))[,1])),
-        na.rm = TRUE
-      ),
-      
-      # Impulsivity: SURPS impulsivity + sensation seeking
-      Impulsivity = rowMeans(
-        select(., any_of(c("SURPS_Impulsivity", "SURPS_Sensation_Seeking"))) %>%
-          mutate(across(everything(), ~scale(safe_numeric(.))[,1])),
-        na.rm = TRUE
-      ),
-      
-      # Adaptive Coping: CISS task-oriented + Conscientiousness
-      Adaptive_Coping = rowMeans(
-        select(., any_of(c("CISS_Task", "Conscientiousness"))) %>%
-          mutate(across(everything(), ~scale(safe_numeric(.))[,1])),
-        na.rm = TRUE
-      ),
-      
-      # Mediator composites (from FDR code variable names)
-      Side_Effects_Composite = rowMeans(
-        select(., matches("^side_effects_\\d+$")) %>%
-          mutate(across(everything(), safe_numeric)),
-        na.rm = TRUE
-      ),
-      
-      Safety_Composite = rowMeans(
-        select(., matches("^safety_\\d+$")) %>%
-          mutate(across(everything(), safe_numeric)),
-        na.rm = TRUE
-      ),
-      
-      ADL_Composite = rowMeans(
-        select(., matches("^adls_\\d+$")) %>%
-          mutate(across(everything(), safe_numeric)),
-        na.rm = TRUE
-      ),
-      
-      Dependence_Composite = rowMeans(
-        select(., matches("^dependence_\\d+$")) %>%
-          mutate(across(everything(), safe_numeric)),
-        na.rm = TRUE
-      ),
-      
-      Med_Burden_Composite = rowMeans(
-        select(., any_of(c("med_burden_1", "med_burden2", "medburden_3", "med_burden_4"))) %>%
-          mutate(across(everything(), safe_numeric)),
-        na.rm = TRUE
-      ),
-      
-      .imp = i,
-      .id = row_number()
-    )
-  
-  return(data_imp)
-})
-
-cat("✓ Composite scores created\n\n")
+# Note: Data preparation will be done after converting to long format to preserve outcome variable
 
 # Get original data and bind with imputations
 cat("Converting to long format with original data...\n")
-original_data <- complete(mids_with_subscales, 0)  # Get original data
 
-# Add composite scores to original data (with NAs where appropriate)
-original_data <- original_data %>%
+# Method 1: Use complete() with action="long" to preserve all variables
+long_data <- complete(mids_with_subscales, action = "long", include = TRUE)
+
+cat("Data structure:\n")
+cat("  Total rows:", nrow(long_data), "\n")
+cat("  Total columns:", ncol(long_data), "\n")
+cat("  Number of imputations:", max(long_data$.imp), "\n")
+
+# Verify outcome is present
+if(outcome_var %in% names(long_data)) {
+  cat("  ✓ Outcome variable present in long_data\n\n")
+} else {
+  stop("ERROR: Outcome variable lost during conversion to long format!")
+}
+
+# Add education recoding to long data
+cat("Adding education recoding to long data...\n")
+long_data <- long_data %>%
   mutate(
-    .imp = 0,
-    .id = row_number(),
-    Distress = NA_real_,
-    Sleep_Dysfunction = NA_real_,
-    Impulsivity = NA_real_,
-    Adaptive_Coping = NA_real_,
-    Side_Effects_Composite = NA_real_,
-    Safety_Composite = NA_real_,
-    ADL_Composite = NA_real_,
-    Dependence_Composite = NA_real_,
-    Med_Burden_Composite = NA_real_,
-    education_level_numeric = NA_real_
+    # Recode education_level
+    education_level = case_when(
+      education %in% c(1, 2, 3) ~ "High School or Less",
+      education %in% c(4, 5) ~ "University/Trade School",
+      TRUE ~ NA_character_
+    ),
+    education_level = factor(education_level, 
+                             levels = c("High School or Less", "University/Trade School")),
+    
+    # Convert to numeric for modeling
+    education_level_numeric = as.numeric(education_level) - 1  # 0 = HS or less, 1 = Univ/Trade
   )
 
-# Bind original data with imputations
-long_data <- bind_rows(original_data, composite_list)
-
-# Convert to mids
+# Convert back to mids
 mids_composite <- as.mids(long_data)
 
-cat("✓ Converted to mids object\n\n")
+# CRITICAL: Ensure outcome is in mids_composite$data
+cat("Ensuring outcome variable is in mids object...\n")
+if(!(outcome_var %in% names(mids_composite$data))) {
+  cat("  Adding", outcome_var, "to mids$data\n")
+  mids_composite$data[[outcome_var]] <- first_complete[[outcome_var]]
+  cat("  ✓ Added\n")
+} else {
+  cat("  ✓ Already present\n")
+}
+
+# Double check by testing on first imputation
+test_data <- complete(mids_composite, 1)
+if(!(outcome_var %in% names(test_data))) {
+  stop("ERROR: Outcome variable still missing after all fixes!")
+}
+
+cat("✓ Converted to mids object with outcome variable\n\n")
+
+# Also create list for descriptives
+composite_list <- lapply(1:m, function(i) {
+  complete(mids_composite, i)
+})
 
 #==============================================================================
 # PART 4: DESCRIPTIVE STATISTICS
@@ -7975,37 +7959,67 @@ cat("Total N:", nrow(desc_data), "\n")
 cat("Discontinuation rate:", 
     round(100 * mean(desc_data$scrn_stopped_bzra, na.rm = TRUE), 1), "%\n\n")
 
-# Define personality dimensions
-personality_dims <- c("Distress", "Sleep_Dysfunction", "Impulsivity", "Adaptive_Coping")
+cat("Personality subscales included (n=16):\n")
+for(var in personality_vars) {
+  cat("  -", var, "\n")
+}
+cat("\n")
 
 #==============================================================================
 # PART 5: HIERARCHICAL REGRESSION
 #==============================================================================
 cat("PART 5: HIERARCHICAL REGRESSION MODELS\n\n")
 
-# Model 1: Personality only
-cat("Fitting Model 1: Personality only...\n")
-formula_m1 <- as.formula(paste("scrn_stopped_bzra ~", paste(personality_dims, collapse = " + ")))
-fit_m1 <- with(mids_composite, glm(formula_m1, family = binomial))
-pooled_m1 <- pool(fit_m1)
+# Create list of complete datasets for manual fitting
+cat("Preparing data for regression...\n")
+imputed_datasets <- lapply(1:m, function(i) {
+  long_data %>% filter(.imp == i)
+})
+
+# Verify outcome is in each dataset
+cat("Verifying outcome variable in all imputations...\n")
+outcome_check <- sapply(imputed_datasets, function(d) outcome_var %in% names(d))
+if(!all(outcome_check)) {
+  stop("ERROR: Outcome variable missing from some imputations!")
+}
+cat("✓ Outcome variable present in all", m, "imputations\n\n")
+
+# Model 1: Personality subscales only (16 variables)
+cat("Fitting Model 1: Personality subscales only (16 predictors)...\n")
+formula_m1 <- as.formula(paste("scrn_stopped_bzra ~", paste(personality_vars, collapse = " + ")))
+
+fit_m1_list <- lapply(imputed_datasets, function(data) {
+  glm(formula_m1, data = data, family = binomial)
+})
+
+# Pool results manually using Rubin's rules
+pooled_m1 <- pool(as.mira(fit_m1_list))
 summary_m1 <- summary(pooled_m1)
 
-# Model 2: + Demographics (using numeric education_level)
+# Model 2: + Demographics
 cat("Fitting Model 2: + Demographics...\n")
 demo_vars_model <- c("age", "sex", "education_level_numeric")
 formula_m2 <- as.formula(paste("scrn_stopped_bzra ~", 
-                               paste(c(personality_dims, demo_vars_model), collapse = " + ")))
-fit_m2 <- with(mids_composite, glm(formula_m2, family = binomial))
-pooled_m2 <- pool(fit_m2)
+                               paste(c(personality_vars, demo_vars_model), collapse = " + ")))
+
+fit_m2_list <- lapply(imputed_datasets, function(data) {
+  glm(formula_m2, data = data, family = binomial)
+})
+
+pooled_m2 <- pool(as.mira(fit_m2_list))
 summary_m2 <- summary(pooled_m2)
 
 # Model 3: + Clinical
 cat("Fitting Model 3: + Clinical factors...\n")
 formula_m3 <- as.formula(paste("scrn_stopped_bzra ~", 
-                               paste(c(personality_dims, demo_vars_model, clinical_vars), 
+                               paste(c(personality_vars, demo_vars_model, clinical_vars), 
                                      collapse = " + ")))
-fit_m3 <- with(mids_composite, glm(formula_m3, family = binomial))
-pooled_m3 <- pool(fit_m3)
+
+fit_m3_list <- lapply(imputed_datasets, function(data) {
+  glm(formula_m3, data = data, family = binomial)
+})
+
+pooled_m3 <- pool(as.mira(fit_m3_list))
 summary_m3 <- summary(pooled_m3)
 
 cat("✓ All models fitted\n\n")
@@ -8020,7 +8034,7 @@ calc_or_table <- function(pooled_summary, model_name) {
       CI_Upper = exp(estimate + 1.96 * std.error),
       Model = model_name
     ) %>%
-    select(Model, term, OR, CI_Lower, CI_Upper, p.value)
+    dplyr::select(Model, term, OR, CI_Lower, CI_Upper, p.value)
 }
 
 or_m1 <- calc_or_table(summary_m1, "Model 1")
@@ -8028,7 +8042,8 @@ or_m2 <- calc_or_table(summary_m2, "Model 2")
 or_m3 <- calc_or_table(summary_m3, "Model 3")
 
 cat("MODEL 3 RESULTS (FULL MODEL):\n")
-print(or_m3, n = Inf, digits = 3)
+cat("─────────────────────────────────────────────────────────────\n\n")
+print(as.data.frame(or_m3), row.names = FALSE)
 cat("\n")
 
 #==============================================================================
@@ -8037,7 +8052,7 @@ cat("\n")
 cat("PART 6: MULTICOLLINEARITY CHECK\n\n")
 
 data_vif <- composite_list[[1]] %>%
-  drop_na(scrn_stopped_bzra, all_of(c(personality_dims, demo_vars_model, clinical_vars)))
+  drop_na(scrn_stopped_bzra, all_of(c(personality_vars, demo_vars_model, clinical_vars)))
 
 model_vif <- glm(formula_m3, data = data_vif, family = binomial)
 vif_values <- vif(model_vif)
@@ -8061,13 +8076,14 @@ cat("PART 7: INTERACTION SCREENING\n\n")
 
 all_confounders <- c(demo_vars_model, clinical_vars)
 interaction_terms <- expand.grid(
-  Personality = personality_dims,
+  Personality = personality_vars,
   Confounder = all_confounders,
   stringsAsFactors = FALSE
 ) %>%
   mutate(Interaction = paste(Personality, Confounder, sep = ":"))
 
-cat("Testing", nrow(interaction_terms), "interactions...\n\n")
+cat("Testing", nrow(interaction_terms), "interactions...\n")
+cat("(This may take a few minutes)\n\n")
 
 interaction_results <- data.frame()
 
@@ -8077,12 +8093,17 @@ for(i in 1:nrow(interaction_terms)) {
   
   formula_int <- as.formula(paste(
     "scrn_stopped_bzra ~",
-    paste(c(personality_dims, all_confounders), collapse = " + "),
+    paste(c(personality_vars, all_confounders), collapse = " + "),
     "+", pers, "*", conf
   ))
   
-  fit_int <- with(mids_composite, glm(formula_int, family = binomial))
-  pooled_int <- pool(fit_int)
+  # Fit to each imputed dataset
+  fit_int_list <- lapply(imputed_datasets, function(data) {
+    glm(formula_int, data = data, family = binomial)
+  })
+  
+  # Pool results
+  pooled_int <- pool(as.mira(fit_int_list))
   summary_int <- summary(pooled_int)
   
   int_term <- paste(pers, conf, sep = ":")
@@ -8103,108 +8124,24 @@ sig_interactions <- interaction_results %>% filter(Significant) %>% arrange(p_va
 
 if(nrow(sig_interactions) > 0) {
   cat("SIGNIFICANT INTERACTIONS (p < 0.10):\n")
-  print(sig_interactions, row.names = FALSE, digits = 3)
+  cat("─────────────────────────────────────────────────────────────\n\n")
+  print(as.data.frame(sig_interactions), row.names = FALSE)
   cat("\n")
 } else {
   cat("No significant interactions detected\n\n")
 }
 
 #==============================================================================
-# PART 8: MEDIATION ANALYSIS
+# PART 8: MEDIATION ANALYSIS (REMOVED)
 #==============================================================================
-cat("PART 8: MEDIATION ANALYSIS\n\n")
-
-mediator_vars <- c("Side_Effects_Composite", "Safety_Composite", 
-                   "ADL_Composite", "Dependence_Composite", "Med_Burden_Composite")
-mediator_labels <- c("Side Effects", "Safety", "ADL", "Dependence", "Med Burden")
-
-test_mediation_single <- function(data, predictor, mediator, outcome, covariates = NULL) {
-  vars_needed <- c(predictor, mediator, outcome, covariates)
-  data_clean <- data %>% drop_na(all_of(vars_needed))
-  
-  if(nrow(data_clean) < 50) return(NULL)
-  
-  if(!is.null(covariates)) {
-    formula_m <- as.formula(paste(mediator, "~", predictor, "+", 
-                                  paste(covariates, collapse = " + ")))
-    formula_y <- as.formula(paste(outcome, "~", predictor, "+", mediator, "+",
-                                  paste(covariates, collapse = " + ")))
-  } else {
-    formula_m <- as.formula(paste(mediator, "~", predictor))
-    formula_y <- as.formula(paste(outcome, "~", predictor, "+", mediator))
-  }
-  
-  model_m <- lm(formula_m, data = data_clean)
-  model_y <- glm(formula_y, data = data_clean, family = binomial)
-  
-  tryCatch({
-    med_result <- mediate(model_m, model_y, 
-                         treat = predictor, 
-                         mediator = mediator,
-                         boot = FALSE, sims = 100)
-    
-    return(list(
-      acme = med_result$d0,
-      ade = med_result$z0,
-      total = med_result$tau.coef,
-      prop_mediated = med_result$n0,
-      p_acme = med_result$d0.p,
-      p_ade = med_result$z0.p
-    ))
-  }, error = function(e) NULL)
-}
-
-mediation_results <- data.frame()
-
-for(pers in personality_dims) {
-  for(j in seq_along(mediator_vars)) {
-    med <- mediator_vars[j]
-    med_label <- mediator_labels[j]
-    
-    cat("  Testing:", pers, "→", med_label, "\n")
-    
-    med_list <- lapply(1:m, function(i) {
-      test_mediation_single(
-        data = composite_list[[i]],
-        predictor = pers,
-        mediator = med,
-        outcome = "scrn_stopped_bzra",
-        covariates = c(demo_vars_model, clinical_vars)
-      )
-    })
-    
-    med_list <- med_list[!sapply(med_list, is.null)]
-    
-    if(length(med_list) > 0) {
-      mediation_results <- bind_rows(mediation_results, data.frame(
-        Personality = pers,
-        Mediator = med_label,
-        Indirect_Effect = mean(sapply(med_list, function(x) x$acme), na.rm = TRUE),
-        Direct_Effect = mean(sapply(med_list, function(x) x$ade), na.rm = TRUE),
-        Total_Effect = mean(sapply(med_list, function(x) x$total), na.rm = TRUE),
-        Proportion_Mediated = mean(sapply(med_list, function(x) x$prop_mediated), na.rm = TRUE),
-        p_Indirect = median(sapply(med_list, function(x) x$p_acme), na.rm = TRUE),
-        Significant = median(sapply(med_list, function(x) x$p_acme), na.rm = TRUE) < 0.05
-      ))
-    }
-  }
-}
-
-cat("\n")
-sig_mediation <- mediation_results %>% filter(Significant) %>% arrange(p_Indirect)
-
-if(nrow(sig_mediation) > 0) {
-  cat("SIGNIFICANT MEDIATION:\n")
-  print(sig_mediation, row.names = FALSE, digits = 3)
-} else {
-  cat("No significant mediation effects\n")
-}
-cat("\n")
+# Note: Mediation analysis removed as ADL, side effects, safety, and dependence
+# measure different constructs and should not be combined into composites.
+# If mediation is needed, test individual mediators separately.
 
 #==============================================================================
 # PART 9: SAVE RESULTS
 #==============================================================================
-cat("PART 9: SAVING RESULTS\n\n")
+cat("PART 8: SAVING RESULTS\n\n")
 
 results_list <- list(
   sample_size = nrow(desc_data),
@@ -8214,13 +8151,12 @@ results_list <- list(
   or_model3 = or_m3,
   vif_values = vif_values,
   interactions = interaction_results,
-  mediation = mediation_results,
   n_imputations = m
 )
 
 saveRDS(results_list, "dimensional_regression_results.rds")
 write.csv(or_m3, "dimensional_model3_odds_ratios.csv", row.names = FALSE)
-write.csv(mediation_results, "dimensional_mediation_results.csv", row.names = FALSE)
+write.csv(interaction_results, "dimensional_interaction_results.csv", row.names = FALSE)
 
 cat("✓ Results saved\n\n")
 
@@ -8232,7 +8168,7 @@ cat("ANALYSIS COMPLETE\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 sig_personality <- or_m3 %>%
-  filter(grepl(paste(personality_dims, collapse = "|"), term), p.value < 0.05)
+  filter(grepl(paste(personality_vars, collapse = "|"), term), p.value < 0.05)
 
 if(nrow(sig_personality) > 0) {
   cat("SIGNIFICANT PERSONALITY PREDICTORS:\n")
@@ -8245,11 +8181,8 @@ if(nrow(sig_personality) > 0) {
 cat("\nOUTPUT FILES:\n")
 cat("  • dimensional_regression_results.rds\n")
 cat("  • dimensional_model3_odds_ratios.csv\n")
-cat("  • dimensional_mediation_results.csv\n\n")
+cat("  • dimensional_interaction_results.csv\n\n")
 ```
-
-
-
 
 
 
