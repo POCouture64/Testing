@@ -8191,7 +8191,7 @@ cat("  • dimensional_interaction_results.csv\n\n")
 ```{r}
 #==============================================================================
 # COMPREHENSIVE SENSITIVITY ANALYSES - 8 TESTS
-# Updated for imputed_data_with_subscales.rds
+# Updated to align with dimensional_regression_analysis.R
 #==============================================================================
 
 library(tidyverse)
@@ -8217,48 +8217,110 @@ cat("═════════════════════════
 
 cat("Loading data and results...\n\n")
 
+cat("Loading data and results...\n\n")
+
 mids_with_subscales <- readRDS("imputed_data_with_subscales.rds")
 
-# Define variables
+# Define outcome variable
 outcome_var <- "scrn_stopped_bzra"
 
 # Get all available variables
 all_vars <- names(complete(mids_with_subscales, 1))
 
-# Personality subscales
+# VERIFY OUTCOME VARIABLE
+cat("Verifying outcome variable...\n")
+first_complete <- complete(mids_with_subscales, 1)
+if(!(outcome_var %in% names(first_complete))) {
+  stop("ERROR: Outcome variable '", outcome_var, "' not found in imputed data!")
+}
+cat("✓ Outcome variable verified:", outcome_var, "\n")
+cat("  Distribution:", table(first_complete[[outcome_var]]), "\n\n")
+
+#==============================================================================
+# DEFINE VARIABLES (MATCHING DIMENSIONAL ANALYSIS EXACTLY)
+#==============================================================================
+
+cat("Defining variables to match dimensional regression analysis...\n\n")
+
+# Personality subscales (16 variables - EXACTLY as in dimensional analysis)
 personality_subscales <- c(
-  # Big Five
-  "Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness",
-  # DBAS
-  grep("^DBAS_", all_vars, value = TRUE),
-  # SURPS
-  grep("^SURPS_", all_vars, value = TRUE),
-  # CISS
-  grep("^CISS_", all_vars, value = TRUE)
+  # Big Five (5 variables) - WITH BFI_ prefix
+  "BFI_Extraversion",
+  "BFI_Agreeableness",
+  "BFI_Conscientiousness",
+  "BFI_Neuroticism",
+  "BFI_Openness",
+  
+  # DBAS subscales only - excluding DBAS_Total (4 variables)
+  "DBAS_Consequences",
+  "DBAS_Worry_Helplessness",
+  "DBAS_Expectations",
+  "DBAS_Medications",
+  
+  # SURPS subscales (4 variables)
+  "SURPS_Impulsivity",
+  "SURPS_Sensation_Seeking",
+  "SURPS_Hopelessness",
+  "SURPS_Anxiety_Sensitivity",
+  
+  # CISS subscales (3 variables)
+  "CISS_Task",
+  "CISS_Emotion",
+  "CISS_Avoidance"
 )
-personality_subscales <- intersect(personality_subscales, all_vars)
 
 # Individual personality traits for exclusion testing
-big_five <- c("Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness")
-big_five <- intersect(big_five, all_vars)
+big_five <- c("BFI_Extraversion", "BFI_Agreeableness", "BFI_Conscientiousness", 
+              "BFI_Neuroticism", "BFI_Openness")
 
-# Dimensional composites (if available)
-personality_dims <- c("Distress", "Sleep_Dysfunction", "Impulsivity", "Adaptive_Coping")
-personality_dims <- intersect(personality_dims, all_vars)
-
-# Confounders
-confounders <- c("age", "sex", "education_level", "phq2_score", 
-                 "osss_3_score", "n_health_conditions")
-confounders <- intersect(confounders, all_vars)
-
-cat("Variables identified:\n")
-cat("  Personality subscales:", length(personality_subscales), "\n")
-cat("  Big Five traits:", length(big_five), "\n")
-cat("  Dimensional composites:", length(personality_dims), "\n")
-cat("  Confounders:", length(confounders), "\n\n")
+# Confounders - use education_level_numeric to match dimensional analysis
+demo_vars <- c("age", "sex", "education_level_numeric")
+clinical_vars <- c("phq2_score", "osss_3_score", "n_health_conditions")
+confounders <- c(demo_vars, clinical_vars)
 
 # All predictors for main model
 all_predictors <- c(personality_subscales, confounders)
+
+# Verify all variables exist
+missing_vars <- setdiff(personality_subscales, all_vars)
+if(length(missing_vars) > 0) {
+  cat("⚠ WARNING: Missing personality variables:", paste(missing_vars, collapse = ", "), "\n")
+  personality_subscales <- intersect(personality_subscales, all_vars)
+  big_five <- intersect(big_five, all_vars)
+  all_predictors <- c(personality_subscales, confounders)
+}
+
+cat("Variables verified:\n")
+cat("  Personality subscales:", length(personality_subscales), "\n")
+cat("  Big Five traits:", length(big_five), "\n")
+cat("  Confounders:", length(confounders), "\n")
+cat("  Total predictors:", length(all_predictors), "\n\n")
+
+#==============================================================================
+# PREPARE BASELINE DATA WITH EDUCATION RECODING
+#==============================================================================
+
+cat("Preparing baseline data with education recoding...\n\n")
+
+baseline_data <- complete(mids_with_subscales, 1) %>%
+  mutate(
+    # Recode education_level (matching dimensional analysis)
+    education_level = case_when(
+      education %in% c(1, 2, 3) ~ "High School or Less",
+      education %in% c(4, 5) ~ "University/Trade School",
+      TRUE ~ NA_character_
+    ),
+    education_level = factor(education_level, 
+                             levels = c("High School or Less", "University/Trade School")),
+    
+    # Convert to numeric for modeling
+    education_level_numeric = as.numeric(education_level) - 1  # 0 = HS or less, 1 = Univ/Trade
+  )
+
+cat("✓ Education recoding complete\n")
+cat("  Education distribution:\n")
+print(table(baseline_data$education_level, useNA = "ifany"))
+cat("\n")
 
 #==============================================================================
 # HELPER FUNCTIONS
@@ -8414,7 +8476,6 @@ cat("═════════════════════════
 cat("BASELINE MODEL\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-baseline_data <- complete(mids_with_subscales, 1)
 baseline_result <- fit_rf(baseline_data, all_predictors, outcome_var)
 
 baseline_auc <- baseline_result$auc
@@ -8452,46 +8513,198 @@ if(file.exists("imputation_preparation_reduced.rds")) {
     select(-.imp, -.id)
 }
 
-complete_case_data <- SIMOA_original %>%
-  select(all_of(c(outcome_var, all_predictors))) %>%
-  drop_na()
+# Add education recoding to original data
+SIMOA_original <- SIMOA_original %>%
+  mutate(
+    education_level = case_when(
+      education %in% c(1, 2, 3) ~ "High School or Less",
+      education %in% c(4, 5) ~ "University/Trade School",
+      TRUE ~ NA_character_
+    ),
+    education_level = factor(education_level, 
+                             levels = c("High School or Less", "University/Trade School")),
+    education_level_numeric = as.numeric(education_level) - 1
+  )
 
-n_imputed <- nrow(baseline_data %>% select(all_of(c(outcome_var, all_predictors))) %>% drop_na())
-n_complete <- nrow(complete_case_data)
+cat("Recreating subscales in original pre-imputation data...\n")
 
-cat("Sample sizes:\n")
-cat("  Multiple imputation:", n_imputed, "\n")
-cat("  Complete-case:", n_complete, "\n")
-cat("  Loss:", n_imputed - n_complete, 
-    "(", round(100 * (n_imputed - n_complete) / n_imputed, 1), "%)\n\n")
+# Check if raw items exist in original data
+bfi_items <- c("reserved", "outgoing", "find_fault", "trusting", "lazy", "thorough", 
+               "relaxed", "nervous", "few_interests", "imagination")
+surps_items <- paste0("surps", 1:23)
+dbas_items <- c("dbas1", paste0("dbas_", 2:16))
+ciss_items <- paste0("ciss", 1:21)
 
-if(n_complete >= 50) {
-  cc_result <- fit_rf(complete_case_data, all_predictors, outcome_var)
+items_available <- c(
+  sum(bfi_items %in% names(SIMOA_original)),
+  sum(surps_items %in% names(SIMOA_original)),
+  sum(dbas_items %in% names(SIMOA_original)),
+  sum(ciss_items %in% names(SIMOA_original))
+)
+
+cat("  BFI items available:", items_available[1], "/", length(bfi_items), "\n")
+cat("  SURPS items available:", items_available[2], "/", length(surps_items), "\n")
+cat("  DBAS items available:", items_available[3], "/", length(dbas_items), "\n")
+cat("  CISS items available:", items_available[4], "/", length(ciss_items), "\n\n")
+
+if(sum(items_available) >= 30) {
   
-  cat("RESULTS:\n")
-  cat("  MI AUC:", round(baseline_auc, 3), "\n")
-  cat("  Complete-case AUC:", round(cc_result$auc, 3), "\n")
-  cat("  Difference:", round(abs(baseline_auc - cc_result$auc), 3), "\n\n")
+  cat("Sufficient raw items found - recreating subscales...\n")
   
-  assessment <- ifelse(abs(baseline_auc - cc_result$auc) < 0.05, "Robust", "Concerning")
+  # Recreate BFI subscales (MEAN SCORES)
+  if(all(c("reserved", "outgoing") %in% names(SIMOA_original))) {
+    SIMOA_original$BFI_Extraversion <- rowMeans(
+      SIMOA_original[, c("reserved", "outgoing")], na.rm = FALSE)
+  }
+  if(all(c("find_fault", "trusting") %in% names(SIMOA_original))) {
+    SIMOA_original$BFI_Agreeableness <- rowMeans(
+      SIMOA_original[, c("find_fault", "trusting")], na.rm = FALSE)
+  }
+  if(all(c("lazy", "thorough") %in% names(SIMOA_original))) {
+    SIMOA_original$BFI_Conscientiousness <- rowMeans(
+      SIMOA_original[, c("lazy", "thorough")], na.rm = FALSE)
+  }
+  if(all(c("relaxed", "nervous") %in% names(SIMOA_original))) {
+    SIMOA_original$BFI_Neuroticism <- rowMeans(
+      SIMOA_original[, c("relaxed", "nervous")], na.rm = FALSE)
+  }
+  if(all(c("few_interests", "imagination") %in% names(SIMOA_original))) {
+    SIMOA_original$BFI_Openness <- rowMeans(
+      SIMOA_original[, c("few_interests", "imagination")], na.rm = FALSE)
+  }
   
-  all_auc_results <- bind_rows(all_auc_results, data.frame(
-    Analysis = "Complete-Case",
-    AUC = cc_result$auc,
-    Difference = cc_result$auc - baseline_auc,
-    Assessment = assessment,
-    Details = paste0("n=", n_complete)
-  ))
+  # Recreate SURPS subscales (MEAN SCORES)
+  surps_subscales <- list(
+    SURPS_Impulsivity = paste0("surps", c(2, 5, 11, 15, 22)),
+    SURPS_Sensation_Seeking = paste0("surps", c(3, 6, 9, 12, 16, 19)),
+    SURPS_Hopelessness = paste0("surps", c(1, 4, 7, 13, 17, 20, 23)),
+    SURPS_Anxiety_Sensitivity = paste0("surps", c(8, 10, 14, 18, 21))
+  )
   
-  sensitivity_results$complete_case <- cc_result
+  for(subscale_name in names(surps_subscales)) {
+    items <- surps_subscales[[subscale_name]]
+    if(all(items %in% names(SIMOA_original))) {
+      SIMOA_original[[subscale_name]] <- rowMeans(
+        SIMOA_original[, items], na.rm = FALSE)
+    }
+  }
+  
+  # Recreate DBAS subscales (MEAN SCORES)
+  dbas_subscales <- list(
+    DBAS_Consequences = paste0("dbas_", c(5, 7, 9, 12, 16)),
+    DBAS_Worry_Helplessness = paste0("dbas_", c(3, 4, 8, 10, 11, 14)),
+    DBAS_Expectations = c("dbas1", "dbas_2"),
+    DBAS_Medications = paste0("dbas_", c(6, 13, 15))
+  )
+  
+  for(subscale_name in names(dbas_subscales)) {
+    items <- dbas_subscales[[subscale_name]]
+    if(all(items %in% names(SIMOA_original))) {
+      SIMOA_original[[subscale_name]] <- rowMeans(
+        SIMOA_original[, items], na.rm = FALSE)
+    }
+  }
+  
+  # Recreate CISS subscales (MEAN SCORES)
+  ciss_subscales <- list(
+    CISS_Task = paste0("ciss", c(2, 6, 8, 11, 13, 16, 19)),
+    CISS_Emotion = paste0("ciss", c(3, 5, 10, 12, 14, 17, 20)),
+    CISS_Avoidance = paste0("ciss", c(1, 4, 7, 9, 15, 18, 21))
+  )
+  
+  for(subscale_name in names(ciss_subscales)) {
+    items <- ciss_subscales[[subscale_name]]
+    if(all(items %in% names(SIMOA_original))) {
+      SIMOA_original[[subscale_name]] <- rowMeans(
+        SIMOA_original[, items], na.rm = FALSE)
+    }
+  }
+  
+  cat("✓ Subscales recreated in original data\n\n")
+  
+  # Now check which predictors are available
+  available_predictors <- intersect(all_predictors, names(SIMOA_original))
+  missing_predictors <- setdiff(all_predictors, names(SIMOA_original))
+  
+  cat("Predictors available in original data:", length(available_predictors), "/", length(all_predictors), "\n")
+  if(length(missing_predictors) > 0 && length(missing_predictors) <= 5) {
+    cat("  Missing:", paste(missing_predictors, collapse = ", "), "\n")
+  }
+  cat("\n")
+  
+  # Proceed with complete-case analysis
+  if(outcome_var %in% names(SIMOA_original) && length(available_predictors) >= 15) {
+    
+    complete_case_data <- SIMOA_original %>%
+      select(all_of(c(outcome_var, available_predictors))) %>%
+      drop_na()
+    
+    n_imputed <- nrow(baseline_data %>% select(all_of(c(outcome_var, all_predictors))) %>% drop_na())
+    n_complete <- nrow(complete_case_data)
+    
+    cat("Sample sizes:\n")
+    cat("  Multiple imputation:", n_imputed, "\n")
+    cat("  Complete-case:", n_complete, "\n")
+    cat("  Loss:", n_imputed - n_complete, 
+        "(", round(100 * (n_imputed - n_complete) / n_imputed, 1), "%)\n\n")
+    
+    if(n_complete >= 50) {
+      cc_result <- fit_rf(complete_case_data, available_predictors, outcome_var)
+      
+      cat("RESULTS:\n")
+      cat("  MI AUC:", round(baseline_auc, 3), "\n")
+      cat("  Complete-case AUC:", round(cc_result$auc, 3), "\n")
+      cat("  Difference:", round(abs(baseline_auc - cc_result$auc), 3), "\n\n")
+      
+      assessment <- ifelse(abs(baseline_auc - cc_result$auc) < 0.05, "Robust", "Concerning")
+      
+      all_auc_results <- bind_rows(all_auc_results, data.frame(
+        Analysis = "Complete-Case",
+        AUC = cc_result$auc,
+        Difference = cc_result$auc - baseline_auc,
+        Assessment = assessment,
+        Details = paste0("n=", n_complete, ", ", length(available_predictors), " predictors")
+      ))
+      
+      sensitivity_results$complete_case <- cc_result
+      
+      if(assessment == "Robust") {
+        cat("✓ ROBUST: Multiple imputation did not substantially alter findings\n\n")
+      } else {
+        cat("⚠ CONCERNING: Results differ substantially from complete-case analysis\n")
+        cat("  This suggests missing data may have influenced findings\n\n")
+      }
+      
+    } else {
+      cat("✗ Insufficient complete cases (n=", n_complete, ")\n\n")
+      all_auc_results <- bind_rows(all_auc_results, data.frame(
+        Analysis = "Complete-Case",
+        AUC = NA,
+        Difference = NA,
+        Assessment = "Insufficient data",
+        Details = paste0("n=", n_complete)
+      ))
+    }
+  } else {
+    cat("✗ Cannot perform complete-case analysis - outcome or insufficient predictors\n\n")
+    all_auc_results <- bind_rows(all_auc_results, data.frame(
+      Analysis = "Complete-Case",
+      AUC = NA,
+      Difference = NA,
+      Assessment = "Data unavailable",
+      Details = "Insufficient predictors after subscale recreation"
+    ))
+  }
+  
 } else {
-  cat("✗ Insufficient complete cases (n=", n_complete, ")\n\n")
+  cat("✗ Insufficient raw items in original data to recreate subscales\n")
+  cat("  Complete-case analysis not possible\n\n")
   all_auc_results <- bind_rows(all_auc_results, data.frame(
     Analysis = "Complete-Case",
     AUC = NA,
     Difference = NA,
-    Assessment = "Insufficient data",
-    Details = paste0("n=", n_complete)
+    Assessment = "Cannot recreate subscales",
+    Details = "Raw items not available in original data"
   ))
 }
 
@@ -8619,46 +8832,92 @@ continuous_vars <- all_predictors[sapply(baseline_data[, all_predictors], is.num
 
 if(length(continuous_vars) > 0) {
   
-  cat("Identifying outliers (>3 SD) on", length(continuous_vars), "continuous variables...\n\n")
+  cat("Identifying univariate outliers (>3 SD) on", length(continuous_vars), "continuous variables...\n\n")
   
-  outlier_flags <- apply(baseline_data[, continuous_vars, drop = FALSE], 1, function(row) {
-    any(abs(scale(row)) > 3, na.rm = TRUE)
+  # Count outliers per variable
+  outlier_counts <- sapply(continuous_vars, function(var) {
+    values <- baseline_data[[var]]
+    z_scores <- abs(scale(values))
+    sum(z_scores > 3, na.rm = TRUE)
   })
   
-  n_outliers <- sum(outlier_flags)
+  cat("Variables with most outliers:\n")
+  top_outliers <- sort(outlier_counts, decreasing = TRUE)[1:min(5, length(outlier_counts))]
+  for(i in seq_along(top_outliers)) {
+    cat(sprintf("  %s: %d outliers (%.1f%%)\n", 
+                names(top_outliers)[i], 
+                top_outliers[i],
+                100 * top_outliers[i] / nrow(baseline_data)))
+  }
+  cat("\n")
   
-  cat("Observations with outliers:", n_outliers, 
-      "(", round(100 * n_outliers / nrow(baseline_data), 1), "%)\n\n")
+  # More lenient approach: Remove cases with extreme outliers on MULTIPLE variables
+  # Define "extreme case" as having outliers (>3 SD) on 3+ variables
+  outlier_flags_per_row <- apply(baseline_data[, continuous_vars, drop = FALSE], 1, function(row) {
+    sum(abs(scale(row)) > 3, na.rm = TRUE)
+  })
   
-  if(n_outliers > 0 && n_outliers < nrow(baseline_data) * 0.1) {
+  # Flag cases with 3+ extreme values
+  extreme_cases <- outlier_flags_per_row >= 3
+  n_extreme <- sum(extreme_cases)
+  
+  cat("Multivariate outlier assessment:\n")
+  cat("  Cases with 1 outlier:", sum(outlier_flags_per_row == 1), "\n")
+  cat("  Cases with 2 outliers:", sum(outlier_flags_per_row == 2), "\n")
+  cat("  Cases with 3+ outliers (extreme):", n_extreme, 
+      "(", round(100 * n_extreme / nrow(baseline_data), 1), "%)\n\n")
+  
+  if(n_extreme > 0 && n_extreme < nrow(baseline_data) * 0.15) {
     
-    data_no_outliers <- baseline_data[!outlier_flags, ]
+    data_no_outliers <- baseline_data[!extreme_cases, ]
     outlier_result <- fit_rf(data_no_outliers, all_predictors, outcome_var)
     
     cat("RESULTS:\n")
-    cat("  With outliers AUC:", round(baseline_auc, 3), "\n")
-    cat("  Without outliers AUC:", round(outlier_result$auc, 3), "\n")
+    cat("  With outliers AUC:", round(baseline_auc, 3), "(n=", nrow(baseline_data), ")\n")
+    cat("  Without extreme cases AUC:", round(outlier_result$auc, 3), "(n=", outlier_result$n, ")\n")
     cat("  Difference:", round(abs(baseline_auc - outlier_result$auc), 3), "\n\n")
     
     assessment <- ifelse(abs(baseline_auc - outlier_result$auc) < 0.03, "Robust", "Sensitive")
     
     all_auc_results <- bind_rows(all_auc_results, data.frame(
-      Analysis = "Without Outliers",
+      Analysis = "Without Extreme Cases",
       AUC = outlier_result$auc,
       Difference = outlier_result$auc - baseline_auc,
       Assessment = assessment,
-      Details = paste0(n_outliers, " outliers removed")
+      Details = paste0(n_extreme, " extreme cases removed (3+ outliers)")
     ))
     
     sensitivity_results$outlier <- outlier_result
-  } else {
-    cat("No meaningful outlier removal possible\n\n")
+    
+    if(assessment == "Robust") {
+      cat("✓ ROBUST: Results not driven by extreme cases\n\n")
+    } else {
+      cat("⚠ SENSITIVE: Results change when extreme cases removed\n")
+      cat("  Consider examining these cases for data quality issues\n\n")
+    }
+    
+  } else if(n_extreme == 0) {
+    cat("✓ No multivariate extreme cases detected\n")
+    cat("  Model handles the observed range of values well\n\n")
     all_auc_results <- bind_rows(all_auc_results, data.frame(
-      Analysis = "Without Outliers",
+      Analysis = "Without Extreme Cases",
       AUC = NA,
       Difference = NA,
-      Assessment = ifelse(n_outliers == 0, "No outliers", "Too many outliers"),
-      Details = paste0(n_outliers, " outliers")
+      Assessment = "No extreme cases",
+      Details = "No multivariate outliers (3+ extreme values)"
+    ))
+  } else {
+    cat("⚠ Too many extreme cases to remove (", n_extreme, ",", 
+        round(100 * n_extreme / nrow(baseline_data), 1), "%)\n")
+    cat("  This suggests wide but plausible data range rather than true outliers\n")
+    cat("  Skipping outlier removal test\n\n")
+    all_auc_results <- bind_rows(all_auc_results, data.frame(
+      Analysis = "Without Extreme Cases",
+      AUC = NA,
+      Difference = NA,
+      Assessment = "Data range appropriate",
+      Details = paste0(n_extreme, " cases with 3+ outliers (", 
+                      round(100 * n_extreme / nrow(baseline_data), 1), "%)")
     ))
   }
 } else {
@@ -8879,55 +9138,62 @@ if(length(interaction_terms) > 0) {
 }
 
 #==============================================================================
-# 8. DIMENSIONAL VS INDIVIDUAL SUBSCALES
+# 8. SUBSCALE GROUPINGS
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("TEST 8: DIMENSIONAL VS INDIVIDUAL SUBSCALES\n")
+cat("TEST 8: PERSONALITY ASSESSMENT GROUPINGS\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-if(length(personality_dims) > 0) {
-  
-  cat("Comparing dimensional composites vs individual subscales\n\n")
-  
-  # Model with dimensional composites only
-  predictors_dims <- c(personality_dims, confounders)
-  dims_result <- fit_rf(baseline_data, predictors_dims, outcome_var)
-  
-  cat("RESULTS:\n")
-  cat("  Individual subscales AUC:", round(baseline_auc, 3), 
-      "(", length(personality_subscales), "subscales)\n")
-  cat("  Dimensional composites AUC:", round(dims_result$auc, 3), 
-      "(", length(personality_dims), "dimensions)\n")
-  cat("  Difference:", round(baseline_auc - dims_result$auc, 3), "\n\n")
-  
-  assessment <- ifelse(abs(baseline_auc - dims_result$auc) < 0.03, 
-                      "Dimensions sufficient",
-                      ifelse(baseline_auc > dims_result$auc, 
-                             "Subscales add value", 
-                             "Dimensions preferred"))
-  
-  all_auc_results <- bind_rows(all_auc_results, data.frame(
-    Analysis = "Dimensional Composites",
-    AUC = dims_result$auc,
-    Difference = dims_result$auc - baseline_auc,
-    Assessment = assessment,
-    Details = paste0(length(personality_dims), " dimensions")
-  ))
-  
-  sensitivity_results$dimensional <- dims_result
-  
-  if(baseline_auc > dims_result$auc + 0.03) {
-    cat("✓ GRANULARITY MATTERS: Individual subscales improve prediction\n\n")
-  } else if(dims_result$auc > baseline_auc + 0.03) {
-    cat("✓ PARSIMONY WINS: Dimensional composites perform better\n\n")
-  } else {
-    cat("✓ EQUIVALENT: Both approaches yield similar results\n\n")
-  }
-  
+cat("Comparing predictive value of different personality assessment groups\n\n")
+
+# Big Five only
+predictors_bf <- c(big_five, confounders)
+bf_result <- fit_rf(baseline_data, predictors_bf, outcome_var)
+
+# DBAS + SURPS + CISS only (excluding Big Five)
+subscale_groups <- c(
+  grep("^DBAS_", personality_subscales, value = TRUE),
+  grep("^SURPS_", personality_subscales, value = TRUE),
+  grep("^CISS_", personality_subscales, value = TRUE)
+)
+predictors_subscales <- c(subscale_groups, confounders)
+subscales_result <- fit_rf(baseline_data, predictors_subscales, outcome_var)
+
+cat("RESULTS:\n")
+cat("  All 16 subscales AUC:", round(baseline_auc, 3), "\n")
+cat("  Big Five only AUC:", round(bf_result$auc, 3), "(n=", bf_result$n, ")\n")
+cat("  DBAS+SURPS+CISS only AUC:", round(subscales_result$auc, 3), "(n=", subscales_result$n, ")\n\n")
+
+all_auc_results <- bind_rows(all_auc_results, data.frame(
+  Analysis = "Big Five Only",
+  AUC = bf_result$auc,
+  Difference = bf_result$auc - baseline_auc,
+  Assessment = ifelse(abs(bf_result$auc - baseline_auc) < 0.05, "Sufficient", "Subscales add value"),
+  Details = paste0("n=", bf_result$n)
+))
+
+all_auc_results <- bind_rows(all_auc_results, data.frame(
+  Analysis = "DBAS+SURPS+CISS Only",
+  AUC = subscales_result$auc,
+  Difference = subscales_result$auc - baseline_auc,
+  Assessment = ifelse(abs(subscales_result$auc - baseline_auc) < 0.05, "Sufficient", "Big Five adds value"),
+  Details = paste0("n=", subscales_result$n)
+))
+
+sensitivity_results$subscale_groups <- list(
+  big_five_only = bf_result,
+  subscales_only = subscales_result
+)
+
+if(baseline_auc > max(bf_result$auc, subscales_result$auc) + 0.03) {
+  cat("✓ COMPLEMENTARY VALUE: Both assessment types improve prediction\n\n")
+} else if(bf_result$auc > subscales_result$auc + 0.05) {
+  cat("✓ BIG FIVE DOMINANT: Big Five traits are primary predictors\n\n")
+} else if(subscales_result$auc > bf_result$auc + 0.05) {
+  cat("✓ SUBSCALES DOMINANT: DBAS+SURPS+CISS are primary predictors\n\n")
 } else {
-  cat("Dimensional composites not available\n\n")
-  cat("Skipping this test\n\n")
+  cat("✓ EQUIVALENT: Both groups provide similar predictive value\n\n")
 }
 
 #==============================================================================
@@ -8965,7 +9231,7 @@ valid_tests <- all_auc_results %>% filter(!is.na(AUC))
 n_total_tests <- nrow(valid_tests)
 
 robust_tests <- valid_tests %>% 
-  filter(abs(Difference) < 0.05 | grepl("Robust|Consistent|sufficient", Assessment, ignore.case = TRUE))
+  filter(abs(Difference) < 0.05 | grepl("Robust|Consistent|Sufficient", Assessment, ignore.case = TRUE))
 n_robust <- nrow(robust_tests)
 
 concerning_tests <- valid_tests %>%
@@ -9075,7 +9341,7 @@ cat("═════════════════════════
 cat("ANALYSIS COMPLETE\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("Total runtime:", round(as.numeric(Sys.time() - start_time, units = "mins"), 1), "minutes\n\n"════
+cat("Total runtime:", round(as.numeric(Sys.time() - start_time, units = "mins"), 1), "minutes\n\n")
 ```
 
 
