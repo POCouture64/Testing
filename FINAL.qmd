@@ -16,12 +16,54 @@ The section I will use to load the dataset that I will use for the analysis.
 ```{r}
 #| label: Loading the SIMOA and Libraries
 ######
-# Loading the SIMOA
+# Loading all required libraries
 ######
 
+# Data manipulation
 library(readr)
+library(dplyr)
+library(tidyverse)
+library(broom)
+library(psych)
+library(VIM)
+
+# Multiple imputation
+library(mice)
+library(miceadds)
+
+# Variable selection
+library(VSURF)
+
+# Statistical analysis
+library(pROC)
+library(car)
+library(ResourceSelection)
+
+# Tables and descriptives
+library(tableone)
+library(naniar)
+
+# Visualization
+library(ggplot2)
+library(pheatmap)
+library(corrplot)
+library(ggeffects)
+
+# Model pooling and analysis
+library(broom)
+library(lme4)
+
+# Optional/utility
+library(writexl)
+
+######
+# Loading the SIMOA dataset
+######
 SIMOA <- read_csv("SIMOA Report.csv")
-#View(SIMOA)
+
+# Check initial sample size
+cat("Initial sample size:", nrow(SIMOA), "\n")
+cat("Number of variables:", ncol(SIMOA), "\n")
 ```
 
 ## Eligible Participants
@@ -31,17 +73,14 @@ The section where I have set out the inclusion criteria to remove people from th
 ```{r}
 #| label: Eligible Participants
 ######
-# In this section I will filter out those who have indicated they are <65 or that have not answered   
-# yes to the question about age category or not answered either question. I will also filter out those 
-# who did not select one of the 14 BZRAs listed because we do not want the results to be affected by 
-# other sedating medications such as antihistamines or SSRI's.
-# Additionally, filter to include only those who answered the scrn_stopped_bzra question.
-# Finally, remove participants who indicated code 14 for prov_terr.
+# Participant Inclusion/Exclusion Criteria
+# 1. Age ≥65 years (age_cat == 1, or age_cat == 0 with age >= 65)
+# 2. Selected at least one of 14 specified BZRAs
+# 3. Answered discontinuation outcome (scrn_stopped_bzra)
+# 4. Canadian resident (prov_terr != 14)
 ######
 
-library(dplyr)
-
-# Ensure dplyr functions take priority
+# Ensure dplyr functions take priority (safety check)
 select <- dplyr::select
 filter <- dplyr::filter
 mutate <- dplyr::mutate
@@ -49,7 +88,7 @@ mutate <- dplyr::mutate
 # Original count
 n_original <- nrow(SIMOA)
 
-# After age filtering
+# After age filtering (age_cat == 1 means 65+)
 SIMOA_age_filtered <- SIMOA %>%
   filter(age_cat == 1 | (age_cat == 0 & age >= 65))
 n_after_age <- nrow(SIMOA_age_filtered)
@@ -68,52 +107,111 @@ SIMOA_scrn_filtered <- SIMOA_c_sp_filtered %>%
   filter(!is.na(scrn_stopped_bzra))
 n_after_scrn <- nrow(SIMOA_scrn_filtered)
 
-# Remove participants who indicated 14 for prov_terr
+# Remove non-Canadian participants (prov_terr == 14)
 n_before_prov <- n_after_scrn
 SIMOA <- SIMOA_scrn_filtered %>%
   filter(prov_terr != 14)
 n_after_prov <- nrow(SIMOA)
 
-# Calculate how many were removed because of prov_terr == 14
+# Calculate how many were removed
 n_removed_prov <- n_before_prov - n_after_prov
 
-# Summary
+# Summary output
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("SAMPLE INCLUSION/EXCLUSION SUMMARY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
 cat("Original sample size:", n_original, "\n")
-cat("After age filtering:", n_after_age, " (", round(n_after_age / n_original * 100, 1), "% retained)\n")
-cat("After BZRA filtering:", n_after_c_sp, " (", round(n_after_c_sp / n_after_age * 100, 1), "% retained)\n")
-cat("After scrn_stopped_bzra filtering:", n_after_scrn, " (", round(n_after_scrn / n_after_c_sp * 100, 1), "% retained)\n")
-cat("After prov_terr == 14 removal:", n_after_prov, " (", round(n_after_prov / n_after_scrn * 100, 1), "% retained)\n")
-cat("Participants removed because they do not live in Canada:", n_removed_prov, "\n")
+cat("After age filtering (≥65 years):", n_after_age, " (", round(n_after_age / n_original * 100, 1), "% retained)\n")
+cat("After BZRA confirmation:", n_after_c_sp, " (", round(n_after_c_sp / n_after_age * 100, 1), "% retained)\n")
+cat("After outcome availability:", n_after_scrn, " (", round(n_after_scrn / n_after_c_sp * 100, 1), "% retained)\n")
+cat("After Canadian residency filter:", n_after_prov, " (", round(n_after_prov / n_after_scrn * 100, 1), "% retained)\n")
+cat("Non-Canadian participants removed:", n_removed_prov, "\n\n")
+
+# Participant flow (CONSORT-style)
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PARTICIPANT FLOW\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("Initial sample:                    ", n_original, "\n")
+cat("  ↓ Excluded (age <65):            ", n_original - n_after_age, "\n")
+cat("Eligible by age:                   ", n_after_age, "\n")
+cat("  ↓ Excluded (no BZRA use):        ", n_after_age - n_after_c_sp, "\n")
+cat("Confirmed BZRA users:              ", n_after_c_sp, "\n")
+cat("  ↓ Excluded (missing outcome):    ", n_after_c_sp - n_after_scrn, "\n")
+cat("With outcome data:                 ", n_after_scrn, "\n")
+cat("  ↓ Excluded (non-Canadian):       ", n_removed_prov, "\n")
+cat("FINAL ANALYTIC SAMPLE:             ", n_after_prov, "\n\n")
+
+# Total exclusion rate
+pct_excluded_total <- 100 * (1 - n_after_prov / n_original)
+cat("Total exclusion rate:", round(pct_excluded_total, 1), "%\n\n")
+
+if(pct_excluded_total > 50) {
+  cat("⚠️  More than 50% of sample excluded - verify inclusion criteria\n\n")
+}
+
+# Save exclusion summary for manuscript
+exclusion_summary <- data.frame(
+  Step = c(
+    "1. Initial sample",
+    "2. Age ≥65 years",
+    "3. BZRA use confirmed",
+    "4. Outcome available",
+    "5. Canadian resident",
+    "FINAL SAMPLE"
+  ),
+  N = c(n_original, n_after_age, n_after_c_sp, n_after_scrn, n_after_prov, n_after_prov),
+  N_Excluded = c(
+    NA,
+    n_original - n_after_age,
+    n_after_age - n_after_c_sp,
+    n_after_c_sp - n_after_scrn,
+    n_removed_prov,
+    NA
+  ),
+  Pct_Retained = c(
+    100,
+    round(100 * n_after_age / n_original, 1),
+    round(100 * n_after_c_sp / n_original, 1),
+    round(100 * n_after_scrn / n_original, 1),
+    round(100 * n_after_prov / n_original, 1),
+    round(100 * n_after_prov / n_original, 1)
+  )
+)
+
+write.csv(exclusion_summary, "sample_exclusion_flowchart.csv", row.names = FALSE)
+cat("✓ Saved: sample_exclusion_flowchart.csv\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("✓ Eligibility filtering complete\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
 ```
+
 
 ## Missing CISS Investigation
 
 ```{r}
 #==============================================================================
-# CHUNK 1: MANDATORY CISS INVESTIGATION (CORRECTED)
+# CHUNK 3: CISS MISSINGNESS INVESTIGATION
 #==============================================================================
-# Purpose: Investigate why 64 people have missing data at CISS item 10
-# Fixed to properly identify sequential dropouts vs sporadic missing
+# Purpose: Investigate missing data pattern in CISS scale
+# Key question: Is there systematic dropout at item 10?
 #==============================================================================
-
-library(tidyverse)
-library(tableone)
-library(naniar)
 
 cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("STEP 0: CISS ITEM 10 INVESTIGATION (MANDATORY)\n")
+cat("CISS MISSINGNESS INVESTIGATION\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 # -----------------------------------------------------------------------------
-# A. Identify stopping pattern (CORRECTED LOGIC)
+# A. Identify stopping pattern
 # -----------------------------------------------------------------------------
 
 cat("PART A: Identifying where people stopped in CISS\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
 # Create variable showing last CISS item BEFORE FIRST MISSING
-# This identifies true sequential dropouts
 SIMOA <- SIMOA %>%
   mutate(
     CISS_last_item_before_dropout = apply(select(., ciss1:ciss21), 1, function(x) {
@@ -132,7 +230,7 @@ cat("Distribution of last CISS item completed BEFORE DROPOUT:\n")
 print(table(SIMOA$CISS_last_item_before_dropout, useNA = "ifany"))
 cat("\n")
 
-# Also show how many people have ANY missing after each item
+# Show missing by item
 cat("Number of people with missing data at each CISS item:\n")
 missing_by_item <- sapply(paste0("ciss", 1:21), function(var) {
   sum(is.na(SIMOA[[var]]))
@@ -159,18 +257,18 @@ cat("  People who completed all 21 items:", n_completed,
 cat("  People who stopped EXACTLY at item 10:", n_stopped_10, 
     "(", round(100 * n_stopped_10 / n_started, 1), "% of starters)\n\n")
 
-# Check for the "extra missing" at item 10
-extra_missing_10 <- missing_by_item[10] - missing_by_item[10]
-if(extra_missing_10 > 0) {
-  cat("⚠ ALERT:", extra_missing_10, "additional person(s) missing at item 10 vs item 9\n\n")
+# Check for extra missing at item 10 (FIXED)
+extra_missing_10 <- missing_by_item[10] - missing_by_item[9]  # Compare to previous item
+if(extra_missing_10 > 1) {
+  cat("⚠️  ALERT:", extra_missing_10, "additional person(s) missing at item 10 vs item 9\n\n")
 }
 
 if(n_stopped_10 > 0) {
-  cat("⚠ WARNING:", n_stopped_10, "people stopped at item 10 - investigate further!\n\n")
+  cat("⚠️  WARNING:", n_stopped_10, "people stopped at item 10 - investigate further!\n\n")
 }
 
 # -----------------------------------------------------------------------------
-# B. Compare stoppers vs completers on demographics and early survey items
+# B. Compare stoppers vs completers
 # -----------------------------------------------------------------------------
 
 cat("PART B: Comparing people who stopped at item 10 vs completers\n")
@@ -180,7 +278,7 @@ cat("─────────────────────────
 compare_vars <- c(
   "age", "sex", "gender", "education", "income", "employment",
   "phq2_score", "osss_3_score", "med_quant",
-  "dbas1", "reserved", "surps1"  # Early items from other scales
+  "dbas1", "reserved", "surps1"
 )
 
 # Only include people who started CISS
@@ -196,7 +294,6 @@ comparison_data <- SIMOA %>%
 
 # Only run comparison if there are people who stopped at 10
 if(n_stopped_10 > 0) {
-  # Create comparison table
   tab_stopper <- CreateTableOne(
     vars = compare_vars,
     strata = "group",
@@ -213,13 +310,13 @@ if(n_stopped_10 > 0) {
 }
 
 # -----------------------------------------------------------------------------
-# C. Examine pattern of missingness across CISS items
+# C. Examine pattern of missingness across items
 # -----------------------------------------------------------------------------
 
 cat("PART C: Pattern of missingness across CISS items\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-# Check if there's a sharp drop after item 10
+# Response rates
 cat("Response rates by CISS item:\n")
 response_rates <- sapply(paste0("ciss", 1:21), function(var) {
   sum(!is.na(SIMOA[[var]])) / n_total * 100
@@ -228,21 +325,35 @@ names(response_rates) <- paste0("Item ", 1:21)
 print(round(response_rates, 1))
 cat("\n")
 
-# Calculate drops between consecutive items
+# Drops between consecutive items
 drops <- diff(response_rates)
 cat("Drop in response rate between consecutive items:\n")
 names(drops) <- paste0("Item ", 1:20, "→", 2:21)
 print(round(drops, 2))
 cat("\n")
 
-# Is there a sharp drop after item 10?
+# Sharp drop after item 10?
 drop_at_10 <- response_rates[10] - response_rates[11]
 if(abs(drop_at_10) > 1) {
-  cat("⚠ DROP of", round(drop_at_10, 2), "% between items 10 and 11\n\n")
+  cat("⚠️  DROP of", round(drop_at_10, 2), "% between items 10 and 11\n\n")
 }
 
+# Visualize missing pattern
+cat("Creating missing data visualization...\n")
+ciss_data <- SIMOA %>% select(ciss1:ciss21)
+
+png("CISS_missing_pattern.png", width = 1000, height = 600, res = 120)
+vis_miss(ciss_data, sort_miss = FALSE) +
+  labs(
+    title = "CISS Missing Data Pattern",
+    subtitle = paste0("n = ", n_total, " participants")
+  ) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+dev.off()
+cat("✓ Saved: CISS_missing_pattern.png\n\n")
+
 # -----------------------------------------------------------------------------
-# D. Identify different missing data patterns
+# D. Identify missing data patterns
 # -----------------------------------------------------------------------------
 
 cat("PART D: Types of missing data patterns\n")
@@ -274,18 +385,18 @@ if(sum(SIMOA$missing_pattern == "Sequential dropout", na.rm = TRUE) > 0) {
 }
 
 # -----------------------------------------------------------------------------
-# E. Your documented findings and decision
+# E. Findings and recommendation
 # -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("YOUR FINDINGS AND DECISION\n")
+cat("FINDINGS AND RECOMMENDATION\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 cat("FINDINGS:\n")
 cat("1. Missing data at CISS item 10:\n")
 cat("   - Total missing at item 10:", missing_by_item[10], "people\n")
 cat("   - Sequential dropouts AT item 10:", n_stopped_10, "people\n")
-cat("   - Extra missing compared to item 10:", extra_missing_10, "people\n\n")
+cat("   - Extra missing vs item 9:", extra_missing_10, "people\n\n")
 
 cat("2. Pattern identified:\n")
 if(n_stopped_10 == 0 & extra_missing_10 <= 1) {
@@ -293,7 +404,7 @@ if(n_stopped_10 == 0 & extra_missing_10 <= 1) {
   cat("   ✓ Missing data appears sporadic/random\n")
   cat("   ✓ High completion rate (", round(100 * n_completed / n_started, 1), "%)\n")
 } else if(n_stopped_10 > 5) {
-  cat("   ⚠ CONCERNING: ", n_stopped_10, " people stopped at item 10\n")
+  cat("   ⚠️  CONCERNING: ", n_stopped_10, " people stopped at item 10\n")
   cat("   - Investigate survey design at this point\n")
 } else {
   cat("   → Small number of dropouts at item 10\n")
@@ -321,6 +432,54 @@ if(n_stopped_10 == 0 & extra_missing_10 <= 1) {
   cat("systematic issue. Review survey flow and consider MNAR.\n\n")
 }
 
+# -----------------------------------------------------------------------------
+# F. Imputation readiness check
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("IMPUTATION READINESS CHECK\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Check percentage missing
+pct_missing <- 100 * missing_by_item / n_total
+names(pct_missing) <- paste0("ciss", 1:21)
+
+cat("Percentage missing by item:\n")
+print(round(pct_missing, 1))
+cat("\n")
+
+# Flag high missing
+high_missing <- pct_missing[pct_missing > 40]
+if(length(high_missing) > 0) {
+  cat("⚠️  Items with >40% missing (imputation less reliable):\n")
+  print(round(high_missing, 1))
+  cat("\n")
+} else {
+  cat("✓ All items have <40% missing - suitable for imputation\n\n")
+}
+
+# Test if outcome is associated with missingness (MNAR test)
+cat("Testing if discontinuation is associated with CISS missingness:\n")
+SIMOA <- SIMOA %>%
+  mutate(any_CISS_missing = ifelse(CISS_last_item_before_dropout < 21, 1, 0))
+
+if(sum(!is.na(SIMOA$scrn_stopped_bzra) & !is.na(SIMOA$any_CISS_missing)) > 0) {
+  discont_by_missing <- table(
+    Discontinued = SIMOA$scrn_stopped_bzra,
+    CISS_Missing = SIMOA$any_CISS_missing
+  )
+  print(discont_by_missing)
+  
+  chi_test <- chisq.test(discont_by_missing)
+  cat("\nChi-square test: p =", round(chi_test$p.value, 4), "\n")
+  
+  if(chi_test$p.value < 0.05) {
+    cat("⚠️  Discontinuation is associated with missingness - consider MNAR\n\n")
+  } else {
+    cat("✓ No association - supports MAR assumption\n\n")
+  }
+}
+
 # Save results
 saveRDS(list(
   decision = recommendation,
@@ -330,30 +489,30 @@ saveRDS(list(
   extra_missing_10 = extra_missing_10,
   comparison_table = tab_stopper,
   response_rates = response_rates,
-  missing_by_item = missing_by_item
+  missing_by_item = missing_by_item,
+  pct_missing = pct_missing
 ), "CISS_investigation_results.rds")
 
-cat("✓ Investigation complete. Results saved to CISS_investigation_results.rds\n\n")
+cat("✓ Saved: CISS_investigation_results.rds\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("✓ CISS investigation complete\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
 ```
 
 ## Personality Missingness
 
 ```{r}
 #==============================================================================
-# CHUNK 2: COMPREHENSIVE MISSINGNESS DIAGNOSTICS
+# CHUNK 4: COMPREHENSIVE MISSINGNESS DIAGNOSTICS
 #==============================================================================
 # Purpose: Test MAR vs MNAR assumptions for all personality scales
-# This determines which variables to include in imputation and whether
-# you need sensitivity analyses for MNAR
+# Determines which variables to include in imputation
 #==============================================================================
-
-library(tidyverse)
-library(naniar)
-library(mice)
 
 cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("STEP 2: MISSINGNESS PATTERN ANALYSIS\n")
+cat("MISSINGNESS PATTERN ANALYSIS\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 # -----------------------------------------------------------------------------
@@ -363,7 +522,7 @@ cat("═════════════════════════
 cat("PART A: Visualizing missingness patterns\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-# Select personality scales for visualization
+# Select personality scales
 personality_items <- SIMOA %>%
   select(dbas1:dbas_16, reserved:imagination, surps1:surps23, ciss1:ciss21)
 
@@ -395,7 +554,7 @@ print(miss_summary)
 cat("\n")
 
 # -----------------------------------------------------------------------------
-# B. Create missingness indicators for each scale
+# B. Create missingness indicators
 # -----------------------------------------------------------------------------
 
 cat("PART B: Creating missingness indicators\n")
@@ -425,17 +584,19 @@ cat("People with complete personality data:", sum(SIMOA$miss_ANY_personality == 
 cat("PART C: Testing predictors of missingness (MAR assessment)\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-cat("GOAL: If missingness is predicted by observed variables, MAR is plausible.\n")
-cat("      If not, MNAR is more likely and sensitivity analyses are needed.\n\n")
+cat("GOAL: If missingness is predicted by observed variables, MAR is plausible.\n\n")
 
-# Define predictors of missingness
-demographic_vars <- c(
+# Define potential predictors (check which exist)
+demographic_vars_all <- c(
   "age", "sex", "gender", "prov_terr",
   "education", "income", "employment", "driving_freq", "med_quant", 
   "osss_3_score", "phq2_score"
 )
 
-cat("Testing the following predictors of missingness:\n")
+# Only keep variables that exist in dataset
+demographic_vars <- demographic_vars_all[demographic_vars_all %in% names(SIMOA)]
+
+cat("Available demographic predictors (", length(demographic_vars), "):\n")
 cat(paste("  •", demographic_vars, collapse = "\n"), "\n\n")
 
 # Function to test predictors
@@ -444,7 +605,7 @@ test_missingness_predictors <- function(miss_var, data, predictors) {
   # Remove predictors that don't exist
   available_preds <- predictors[predictors %in% names(data)]
   
-  cat("  Available predictors:", length(available_preds), "of", length(predictors), "\n")
+  cat("  Testing with", length(available_preds), "predictors\n")
   
   # Formula
   formula_str <- paste(miss_var, "~", paste(available_preds, collapse = " + "))
@@ -453,8 +614,16 @@ test_missingness_predictors <- function(miss_var, data, predictors) {
   model <- tryCatch({
     glm(as.formula(formula_str), data = data, family = binomial())
   }, error = function(e) {
-    cat("  ⚠ Model failed to converge. Trying with fewer predictors...\n")
-    return(NULL)
+    cat("  ⚠️ Model failed:", e$message, "\n")
+    cat("  → Trying simpler model (age + sex + education)...\n")
+    
+    simple_formula <- paste(miss_var, "~ age + sex + education")
+    tryCatch({
+      glm(as.formula(simple_formula), data = data, family = binomial())
+    }, error = function(e2) {
+      cat("  ⚠️ Even simple model failed. Skipping.\n")
+      return(NULL)
+    })
   })
   
   if(is.null(model)) return(list(model = NULL, results = NULL, significant = NULL))
@@ -519,7 +688,7 @@ if(!is.null(miss_CISS_test$results)) {
 }
 cat("\n")
 
-# Compile all significant predictors
+# Compile significant predictors
 all_sig_predictors <- unique(c(
   miss_DBAS_test$significant,
   miss_BFI_test$significant,
@@ -528,520 +697,654 @@ all_sig_predictors <- unique(c(
 ))
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("SIGNIFICANT PREDICTORS OF MISSINGNESS (to include in imputation):\n")
+cat("SIGNIFICANT PREDICTORS OF MISSINGNESS:\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 if(length(all_sig_predictors) > 0) {
-  cat("The following variables predict who has missing personality data:\n")
+  cat("Variables that predict missing personality data:\n")
   for(pred in all_sig_predictors) {
     cat("  •", pred, "\n")
   }
   cat("\n")
-  cat("INTERPRETATION: Missingness is related to observed variables.\n")
+  cat("INTERPRETATION:\n")
+  cat("→ Missingness is related to observed variables\n")
   cat("→ MAR assumption is plausible (conditional on these predictors)\n")
-  cat("→ Include these variables in imputation model\n")
-  cat("→ Still recommend sensitivity analysis for robustness\n\n")
+  cat("→ Include these in imputation model\n\n")
   
   missingness_mechanism <- "MAR"
   
 } else {
-  cat("⚠ NO significant predictors of missingness found.\n\n")
-  cat("INTERPRETATION: Missingness appears random or related to unobserved factors.\n")
-  cat("→ Either MCAR (completely random) or MNAR (related to unmeasured factors)\n")
-  cat("→ Sensitivity analyses are CRITICAL\n\n")
+  cat("No significant predictors found.\n\n")
+  cat("INTERPRETATION:\n")
+  cat("→ Either MCAR or MNAR\n")
+  cat("→ Sensitivity analyses are critical\n\n")
   
   missingness_mechanism <- "MCAR_or_MNAR"
 }
 
-# -----------------------------------------------------------------------------
-# D. Advanced MNAR check: Compare completers vs non-completers on early scales
-# -----------------------------------------------------------------------------
+# Visuali
+```
 
-cat("PART D: Advanced MNAR diagnostic\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
 
-cat("LOGIC: If people who skip late scales differ on EARLY scales in ways\n")
-cat("       not explained by demographics/health, MNAR is more plausible.\n\n")
 
-# Do completers vs non-completers differ on early survey items?
-early_scales <- c("phq2_score", "osss_3_score", "med_quant")
 
-for(scale in early_scales) {
-  if(scale %in% names(SIMOA)) {
-    
-    cat("Comparing", scale, "by personality completion status:\n")
-    
-    # Crude comparison
-    crude_test <- t.test(
-      SIMOA[[scale]][SIMOA$miss_ANY_personality == 0],
-      SIMOA[[scale]][SIMOA$miss_ANY_personality == 1]
-    )
-    
-    cat("  Completers mean:", round(mean(SIMOA[[scale]][SIMOA$miss_ANY_personality == 0], na.rm = TRUE), 2), "\n")
-    cat("  Non-completers mean:", round(mean(SIMOA[[scale]][SIMOA$miss_ANY_personality == 1], na.rm = TRUE), 2), "\n")
-    cat("  Difference:", round(mean(SIMOA[[scale]][SIMOA$miss_ANY_personality == 0], na.rm = TRUE) - 
-                                mean(SIMOA[[scale]][SIMOA$miss_ANY_personality == 1], na.rm = TRUE), 2), "\n")
-    cat("  p-value:", format.pval(crude_test$p.value, digits = 3), "\n")
-    
-    if(crude_test$p.value < 0.05) {
-      cat("  ⚠ Significant difference suggests possible MNAR component\n")
-    } else {
-      cat("  ✓ No significant difference\n")
-    }
-    cat("\n")
-  }
-}
+## Variable Combining
+
+```{r}
+#==============================================================================
+# CHUNK 5: VARIABLE COMBINING & COALESCING
+#==============================================================================
+# Purpose: Merge current user and former user versions of variables
+# Variables affected:
+#   - Adverse effects: side_effects, safety, dependence, adls
+#   - Withdrawal: stop_wdl_exp (base) + stop_wdl_exp_2 (v2)
+#   - COM-B: motivation, desires, capability
+#==============================================================================
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("VARIABLE COMBINING & COALESCING\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("BACKGROUND:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("Survey branching logic created two versions of same questions:\n")
+cat("  • freq_dich = 2 (stopped): base versions (e.g., side_effects_1)\n")
+cat("  • freq_dich = 0 or 1 (current users): v2 versions (e.g., side_effects_1_v2)\n")
+cat("  • Withdrawal uses different naming: stop_wdl_exp vs stop_wdl_exp_2\n")
+cat("These need to be merged into single variables.\n\n")
 
 # -----------------------------------------------------------------------------
-# E. Summary and recommendations
+# PART A: ADVERSE EFFECTS VARIABLES
 # -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("MISSINGNESS DIAGNOSTIC SUMMARY\n")
+cat("PART A: COALESCING ADVERSE EFFECTS VARIABLES\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("1. MECHANISM ASSESSMENT:\n")
-cat("   Most likely mechanism:", missingness_mechanism, "\n\n")
+# Define variable sets
+side_effects_base <- paste0("side_effects_", 1:4)
+side_effects_v2 <- paste0("side_effects_", 1:4, "_v2")
 
-cat("2. VARIABLES TO INCLUDE IN IMPUTATION MODEL:\n")
-if(length(all_sig_predictors) > 0) {
-  cat("   Mandatory (predict missingness):\n")
-  for(pred in all_sig_predictors) {
-    cat("     •", pred, "\n")
+safety_base <- paste0("safety_", 1:4)
+safety_v2 <- paste0("safety_", 1:4, "_v2")
+
+adl_base <- paste0("adls_", 1:2)
+adl_v2 <- paste0("adls_", 1:2, "_v2")
+
+dependence_base <- paste0("dependence_", 1:3)
+dependence_v2 <- paste0("dependence_", 1:3, "_v2")
+
+# Function to coalesce and report
+coalesce_variables <- function(data, base_vars, v2_vars, var_name) {
+  
+  cat("Coalescing", var_name, "variables...\n")
+  cat("─────────────────────────────────────────────────────────────\n")
+  
+  n_merged <- 0
+  n_base_only <- 0
+  n_v2_only <- 0
+  n_both <- 0
+  n_neither <- 0
+  
+  for(i in seq_along(base_vars)) {
+    base_var <- base_vars[i]
+    v2_var <- v2_vars[i]
+    
+    # Check if variables exist
+    has_base <- base_var %in% names(data)
+    has_v2 <- v2_var %in% names(data)
+    
+    if(has_base && has_v2) {
+      # Count patterns before merging
+      n_base_only <- n_base_only + sum(!is.na(data[[base_var]]) & is.na(data[[v2_var]]))
+      n_v2_only <- n_v2_only + sum(is.na(data[[base_var]]) & !is.na(data[[v2_var]]))
+      n_both <- n_both + sum(!is.na(data[[base_var]]) & !is.na(data[[v2_var]]))
+      n_neither <- n_neither + sum(is.na(data[[base_var]]) & is.na(data[[v2_var]]))
+      
+      # Coalesce: take base if available, otherwise v2
+      data[[base_var]] <- coalesce(data[[base_var]], data[[v2_var]])
+      
+      # Remove v2 version
+      data[[v2_var]] <- NULL
+      
+      n_merged <- n_merged + 1
+      
+    } else if(!has_base && has_v2) {
+      # Only v2 exists - rename to base
+      data[[base_var]] <- data[[v2_var]]
+      data[[v2_var]] <- NULL
+      n_merged <- n_merged + 1
+      
+    } else if(has_base && !has_v2) {
+      # Only base exists - keep as is
+      n_merged <- n_merged + 1
+    }
   }
-  cat("\n   Additional auxiliary variables to consider:\n")
-  other_vars <- setdiff(demographic_vars, all_sig_predictors)
-  for(var in other_vars) {
-    cat("     •", var, "\n")
+  
+  cat("  Variables merged:", n_merged, "/", length(base_vars), "\n")
+  cat("  Responses from base only:", n_base_only, "\n")
+  cat("  Responses from v2 only:", n_v2_only, "\n")
+  cat("  Responses in both (conflict):", n_both, "\n")
+  cat("  Missing in both:", n_neither, "\n")
+  
+  if(n_both > 0) {
+    cat("  ⚠️  Note:", n_both, "cases had both versions answered\n")
+    cat("     → Kept base version (stopped users' response)\n")
   }
-} else {
-  cat("   No strong predictors identified.\n")
-  cat("   Use standard auxiliary variables:\n")
-  for(var in demographic_vars) {
-    cat("     •", var, "\n")
-  }
+  
+  cat("  ✓ Merged into:", paste(base_vars, collapse = ", "), "\n\n")
+  
+  return(data)
 }
-cat("\n")
 
-cat("3. RECOMMENDATION:\n")
-if(missingness_mechanism == "MAR") {
-  cat("   ✓ Proceed with multiple imputation\n")
-  cat("   ✓ Include all significant predictors\n")
-  cat("   ⚠ Still run sensitivity analyses for robustness\n\n")
+# Coalesce each set
+SIMOA <- coalesce_variables(SIMOA, side_effects_base, side_effects_v2, "Side Effects")
+SIMOA <- coalesce_variables(SIMOA, safety_base, safety_v2, "Safety")
+SIMOA <- coalesce_variables(SIMOA, adl_base, adl_v2, "ADL Impact")
+SIMOA <- coalesce_variables(SIMOA, dependence_base, dependence_v2, "Dependence")
+
+# -----------------------------------------------------------------------------
+# PART B: WITHDRAWAL VARIABLES (SPECIAL HANDLING)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART B: COALESCING WITHDRAWAL VARIABLES\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("NOTE: Withdrawal uses different naming pattern:\n")
+cat("  • Stopped users (freq_dich=2): stop_wdl_exp___0 through stop_wdl_exp___4\n")
+cat("  • Current users (freq_dich=0,1): stop_wdl_exp_2___0 through stop_wdl_exp_2___4\n\n")
+
+# Define withdrawal checkbox variables
+withdrawal_base <- paste0("stop_wdl_exp___", 0:4)
+withdrawal_v2 <- paste0("stop_wdl_exp_2___", 0:4)
+
+# Check which exist
+withdrawal_base_exist <- withdrawal_base %in% names(SIMOA)
+withdrawal_v2_exist <- withdrawal_v2 %in% names(SIMOA)
+
+cat("Variables found:\n")
+cat("  Base (stop_wdl_exp):", sum(withdrawal_base_exist), "/5\n")
+cat("  V2 (stop_wdl_exp_2):", sum(withdrawal_v2_exist), "/5\n\n")
+
+# Coalesce withdrawal checkboxes
+if(any(withdrawal_base_exist) || any(withdrawal_v2_exist)) {
+  
+  cat("Coalescing withdrawal checkboxes...\n")
+  cat("─────────────────────────────────────────────────────────────\n")
+  
+  n_base_only <- 0
+  n_v2_only <- 0
+  n_both <- 0
+  
+  for(i in seq_along(withdrawal_base)) {
+    base_var <- withdrawal_base[i]
+    v2_var <- withdrawal_v2[i]
+    
+    has_base <- base_var %in% names(SIMOA)
+    has_v2 <- v2_var %in% names(SIMOA)
+    
+    if(has_base && has_v2) {
+      # Count patterns
+      n_base_only <- n_base_only + sum(!is.na(SIMOA[[base_var]]) & is.na(SIMOA[[v2_var]]))
+      n_v2_only <- n_v2_only + sum(is.na(SIMOA[[base_var]]) & !is.na(SIMOA[[v2_var]]))
+      n_both <- n_both + sum(!is.na(SIMOA[[base_var]]) & !is.na(SIMOA[[v2_var]]))
+      
+      # Coalesce
+      SIMOA[[base_var]] <- coalesce(SIMOA[[base_var]], SIMOA[[v2_var]])
+      SIMOA[[v2_var]] <- NULL
+      
+    } else if(!has_base && has_v2) {
+      SIMOA[[base_var]] <- SIMOA[[v2_var]]
+      SIMOA[[v2_var]] <- NULL
+    }
+  }
+  
+  cat("  Responses from stop_wdl_exp only:", n_base_only, "\n")
+  cat("  Responses from stop_wdl_exp_2 only:", n_v2_only, "\n")
+  cat("  Responses in both (conflict):", n_both, "\n")
+  
+  if(n_both > 0) {
+    cat("  ⚠️  Note:", n_both, "cases had both versions\n")
+    cat("     → Kept stop_wdl_exp (stopped users' response)\n")
+  }
+  
+  cat("  ✓ Merged into: stop_wdl_exp___0 through stop_wdl_exp___4\n\n")
+  
 } else {
-  cat("   ⚠ MNAR is plausible\n")
-  cat("   ✓ Proceed with imputation BUT...\n")
-  cat("   ✓ Sensitivity analyses are MANDATORY:\n")
-  cat("      - Complete-case analysis\n")
-  cat("      - Exclude late scales\n")
-  cat("      - Pattern-mixture models or delta-adjustment\n\n")
+  cat("⚠️  No withdrawal variables found\n\n")
 }
 
-# Save results
-saveRDS(list(
-  mechanism = missingness_mechanism,
-  demographic_predictors_tested = demographic_vars,
-  significant_predictors = all_sig_predictors,
-  DBAS_model = miss_DBAS_test,
-  BFI_model = miss_BFI_test,
-  SURPS_model = miss_SURPS_test,
-  CISS_model = miss_CISS_test,
-  miss_summary = miss_summary
-), "missingness_diagnostics.rds")
+# -----------------------------------------------------------------------------
+# PART C: CREATE WITHDRAWAL COMBINED VARIABLE
+# -----------------------------------------------------------------------------
 
-cat("✓ Missingness diagnostics complete. Results saved.\n\n")
-```
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART C: CREATING WITHDRAWAL COMBINED VARIABLE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
 
-## Combining Variables
-```{r}
-# ==============================================================================
-# IMPROVED WITHDRAWAL VARIABLE CODING
-# ==============================================================================
-# Update to PART 3 of your variable combination script
-# Provides more granular coding for withdrawal experiences
-# ==============================================================================
-
-cat("PART 3: Creating combined withdrawal experience variable (IMPROVED)\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Define the checkbox indicators
+# Define merged variables
 wdl_vars <- c(
-  none = "stop_wdl_exp___0",      # No withdrawal
-  insomnia = "stop_wdl_exp___1",   # Insomnia
-  anxiety = "stop_wdl_exp___2",    # Anxiety
-  mh_other = "stop_wdl_exp___3",   # Other mental health
-  physical = "stop_wdl_exp___4"    # Physical effects
+  none = "stop_wdl_exp___0",
+  insomnia = "stop_wdl_exp___1",
+  anxiety = "stop_wdl_exp___2",
+  mh_other = "stop_wdl_exp___3",
+  physical = "stop_wdl_exp___4"
 )
 
-# Check which variables exist
-existing_vars <- wdl_vars[wdl_vars %in% names(SIMOA)]
-missing_vars <- wdl_vars[!(wdl_vars %in% names(SIMOA))]
+# Check if all exist
+wdl_vars_exist <- all(wdl_vars %in% names(SIMOA))
 
-if(length(missing_vars) > 0) {
-  cat("⚠ WARNING: Missing withdrawal variables:\n")
-  for(v in missing_vars) {
-    cat("  •", v, "\n")
-  }
-  cat("\n")
-}
-
-if(length(existing_vars) >= 1) {
+if(wdl_vars_exist) {
   
-  # Replace NA with 0 for all withdrawal indicators
-  for(var in existing_vars) {
+  # Replace NA with 0 (unchecked boxes)
+  cat("Replacing NA with 0 for unchecked boxes...\n")
+  for(var in wdl_vars) {
     SIMOA[[var]][is.na(SIMOA[[var]])] <- 0
   }
   
-  # Create symptom count variable (excluding "none")
+  # Create symptom count (excluding "none")
   SIMOA <- SIMOA %>%
     mutate(
       wdl_symptom_count = 
-        get(wdl_vars["insomnia"]) + 
-        get(wdl_vars["anxiety"]) + 
-        get(wdl_vars["mh_other"]) + 
-        get(wdl_vars["physical"])
+        .data[[wdl_vars["insomnia"]]] + 
+        .data[[wdl_vars["anxiety"]]] + 
+        .data[[wdl_vars["mh_other"]]] + 
+        .data[[wdl_vars["physical"]]]
     )
   
-  # Create the combined ordinal variable with more granularity
+  # Create combined ordinal variable
   SIMOA <- SIMOA %>%
     mutate(
       stop_wdl_exp_combined = case_when(
-        # Priority 1: If "no withdrawal" is checked (even with contradictions)
-        get(wdl_vars["none"]) == 1 ~ 0,
-        
-        # No symptoms checked at all
+        # Priority: "no withdrawal" takes precedence
+        .data[[wdl_vars["none"]]] == 1 ~ 0,
+        # No symptoms checked
         wdl_symptom_count == 0 ~ 0,
-        
-        # Single symptoms (1-4)
-        wdl_symptom_count == 1 & get(wdl_vars["insomnia"]) == 1 ~ 1,
-        wdl_symptom_count == 1 & get(wdl_vars["anxiety"]) == 1 ~ 2,
-        wdl_symptom_count == 1 & get(wdl_vars["mh_other"]) == 1 ~ 3,
-        wdl_symptom_count == 1 & get(wdl_vars["physical"]) == 1 ~ 4,
-        
-        # Multiple symptoms (5+)
+        # Single symptoms
+        wdl_symptom_count == 1 & .data[[wdl_vars["insomnia"]]] == 1 ~ 1,
+        wdl_symptom_count == 1 & .data[[wdl_vars["anxiety"]]] == 1 ~ 2,
+        wdl_symptom_count == 1 & .data[[wdl_vars["mh_other"]]] == 1 ~ 3,
+        wdl_symptom_count == 1 & .data[[wdl_vars["physical"]]] == 1 ~ 4,
+        # Multiple symptoms
         wdl_symptom_count >= 2 ~ 5,
-        
-        # Default fallback
         TRUE ~ 0
+      ),
+      stop_wdl_exp_combined_factor = factor(
+        stop_wdl_exp_combined,
+        levels = 0:5,
+        labels = c(
+          "No withdrawal",
+          "Insomnia only",
+          "Anxiety only",
+          "Other mental health only",
+          "Physical effects only",
+          "Multiple symptoms (2+)"
+        ),
+        ordered = TRUE
       )
     )
   
-  # Add value labels as factor
-  SIMOA$stop_wdl_exp_combined_factor <- factor(
-    SIMOA$stop_wdl_exp_combined,
-    levels = 0:5,
-    labels = c(
-      "No withdrawal",
-      "Insomnia only",
-      "Anxiety only", 
-      "Other mental health only",
-      "Physical effects only",
-      "Multiple symptoms (2+)"
-    ),
-    ordered = TRUE
+  cat("✓ Created wdl_symptom_count (0-4)\n")
+  cat("✓ Created stop_wdl_exp_combined (0-5)\n")
+  cat("✓ Created stop_wdl_exp_combined_factor (labeled)\n\n")
+  
+  # Show distribution
+  cat("WITHDRAWAL DISTRIBUTION:\n")
+  cat("─────────────────────────────────────────────────────────────\n")
+  
+  wdl_table <- table(SIMOA$stop_wdl_exp_combined, useNA = "ifany")
+  wdl_labels <- c(
+    "0 (No withdrawal)",
+    "1 (Insomnia only)",
+    "2 (Anxiety only)",
+    "3 (Other MH only)",
+    "4 (Physical only)",
+    "5 (Multiple symptoms)"
   )
   
-  # Summary statistics
-  cat("✓ Created stop_wdl_exp_combined variable\n\n")
-  
-  cat("Distribution of combined withdrawal variable:\n")
-  withdrawal_table <- table(SIMOA$stop_wdl_exp_combined, useNA = "ifany")
-  print(withdrawal_table)
-  cat("\n")
-  
-  cat("Distribution with labels:\n")
-  withdrawal_table_labeled <- table(SIMOA$stop_wdl_exp_combined_factor, useNA = "ifany")
-  print(withdrawal_table_labeled)
-  cat("\n")
-  
-  # Enhanced breakdown for multiple symptoms
-  cat("DETAILED BREAKDOWN BY SYMPTOM COUNT:\n")
-  symptom_count_table <- SIMOA %>%
-    count(wdl_symptom_count) %>%
-    mutate(
-      percentage = round(100 * n / sum(n), 1),
-      label = case_when(
-        wdl_symptom_count == 0 ~ "0 symptoms (no withdrawal)",
-        wdl_symptom_count == 1 ~ "1 symptom",
-        wdl_symptom_count == 2 ~ "2 symptoms",
-        wdl_symptom_count == 3 ~ "3 symptoms",
-        wdl_symptom_count == 4 ~ "4 symptoms (all types)",
-        TRUE ~ paste(wdl_symptom_count, "symptoms")
-      )
-    )
-  
-  for(i in 1:nrow(symptom_count_table)) {
-    cat(sprintf("  %-30s: n=%4d (%5.1f%%)\n", 
-                symptom_count_table$label[i],
-                symptom_count_table$n[i],
-                symptom_count_table$percentage[i]))
-  }
-  cat("\n")
-  
-  # Check for contradictions (no withdrawal + symptoms)
-  contradictions <- SIMOA %>%
-    filter(
-      get(wdl_vars["none"]) == 1 & wdl_symptom_count > 0
-    ) %>%
-    nrow()
-  
-  if(contradictions > 0) {
-    cat(sprintf("ℹ Found %d cases where 'no withdrawal' was checked with symptoms\n", 
-                contradictions))
-    cat("  These were coded as 0 (No withdrawal) per priority rule\n\n")
-  } else {
-    cat("✓ No contradictions found (no withdrawal + symptoms)\n\n")
-  }
-  
-  # Detailed breakdown of multiple symptom combinations
-  multiple_cases <- SIMOA %>%
-    filter(wdl_symptom_count >= 2)
-  
-  if(nrow(multiple_cases) > 0) {
-    cat(sprintf("MULTIPLE SYMPTOM CASES (n=%d) - Pattern Breakdown:\n", nrow(multiple_cases)))
-    
-    # Show specific combinations
-    combo_patterns <- multiple_cases %>%
-      mutate(
-        pattern = paste0(
-          ifelse(get(wdl_vars["insomnia"]) == 1, "I", "."),
-          ifelse(get(wdl_vars["anxiety"]) == 1, "A", "."),
-          ifelse(get(wdl_vars["mh_other"]) == 1, "M", "."),
-          ifelse(get(wdl_vars["physical"]) == 1, "P", ".")
-        )
-      ) %>%
-      count(pattern, wdl_symptom_count) %>%
-      arrange(desc(n))
-    
-    cat("  Pattern key: I=Insomnia, A=Anxiety, M=Mental health, P=Physical\n\n")
-    
-    for(i in 1:min(10, nrow(combo_patterns))) {
-      cat(sprintf("  %-10s (%d symptoms): n=%3d\n", 
-                  combo_patterns$pattern[i],
-                  combo_patterns$wdl_symptom_count[i],
-                  combo_patterns$n[i]))
+  for(i in 0:5) {
+    if(as.character(i) %in% names(wdl_table)) {
+      n <- wdl_table[as.character(i)]
+      pct <- round(100 * n / sum(wdl_table[!is.na(names(wdl_table))]), 1)
+      cat(sprintf("  %-30s: n=%4d (%5.1f%%)\n", wdl_labels[i+1], n, pct))
     }
-    
-    if(nrow(combo_patterns) > 10) {
-      cat(sprintf("  ... and %d more patterns\n", nrow(combo_patterns) - 10))
-    }
-    cat("\n")
-    
-    # Summary by symptom type in multiple cases
-    cat("  Symptom frequency in multiple-symptom cases:\n")
-    cat(sprintf("    Insomnia:           %3d (%5.1f%%)\n", 
-                sum(multiple_cases[[wdl_vars["insomnia"]]] == 1),
-                100 * mean(multiple_cases[[wdl_vars["insomnia"]]] == 1)))
-    cat(sprintf("    Anxiety:            %3d (%5.1f%%)\n", 
-                sum(multiple_cases[[wdl_vars["anxiety"]]] == 1),
-                100 * mean(multiple_cases[[wdl_vars["anxiety"]]] == 1)))
-    cat(sprintf("    Other mental:       %3d (%5.1f%%)\n", 
-                sum(multiple_cases[[wdl_vars["mh_other"]]] == 1),
-                100 * mean(multiple_cases[[wdl_vars["mh_other"]]] == 1)))
-    cat(sprintf("    Physical effects:   %3d (%5.1f%%)\n", 
-                sum(multiple_cases[[wdl_vars["physical"]]] == 1),
-                100 * mean(multiple_cases[[wdl_vars["physical"]]] == 1)))
-    cat("\n")
   }
   
-  cat("FINAL CODING SCHEME:\n")
+  if("NA" %in% names(wdl_table)) {
+    cat(sprintf("  %-30s: n=%4d\n", "Missing", wdl_table["NA"]))
+  }
+  cat("\n")
+  
+  # Symptom count distribution
+  cat("SYMPTOM COUNT DISTRIBUTION:\n")
+  cat("─────────────────────────────────────────────────────────────\n")
+  count_table <- table(SIMOA$wdl_symptom_count, useNA = "ifany")
+  for(i in 0:4) {
+    if(as.character(i) %in% names(count_table)) {
+      n <- count_table[as.character(i)]
+      pct <- round(100 * n / sum(count_table[!is.na(names(count_table))]), 1)
+      cat(sprintf("  %d symptoms: n=%4d (%5.1f%%)\n", i, n, pct))
+    }
+  }
+  cat("\n")
+  
+  cat("CODING SCHEME:\n")
   cat("  0 = No withdrawal effects\n")
   cat("  1 = Insomnia only\n")
   cat("  2 = Anxiety only\n")
   cat("  3 = Other mental health only\n")
   cat("  4 = Physical effects only\n")
-  cat("  5 = Multiple symptoms (2 or more types)\n\n")
-  
-  cat("INTERPRETATION NOTES:\n")
-  cat("  • Category 5 includes all cases with 2+ symptom types\n")
-  cat("  • This creates a severity gradient: 0 < single symptoms < multiple\n")
-  cat("  • 'No withdrawal' checkbox takes precedence over symptom checkboxes\n")
-  cat("  • Symptom count variable (wdl_symptom_count) retained for sensitivity analyses\n\n")
+  cat("  5 = Multiple symptoms (2+ types)\n\n")
   
 } else {
-  cat("✗ Cannot create combined variable - no withdrawal indicators found\n\n")
+  cat("⚠️  Cannot create combined variable - withdrawal checkboxes missing\n\n")
 }
-```
-
-## Variable Reduction
-
-```{r}
-#==============================================================================
-# CHUNK 3: VARIABLE REDUCTION, COMPOSITE VALIDATION, AND MISSINGNESS ANALYSIS
-#==============================================================================
-# UPDATED: Now includes combined variables from variable combination script
-# MAJOR UPDATE: Sleep aid frequency variables recoded (NA = never uses → 0)
-# UPDATED: Keep individual items for imputation, composites created post-imputation
-# VERIFIED: Uses properly combined adverse effects and withdrawal variables
-#==============================================================================
-
-library(tidyverse)
-library(psych)
-library(naniar)
-library(VIM)
-
-cat("\n═══════════════════════════════════════════════════════════════\n")
-cat("STEP 3: THEORY-DRIVEN VARIABLE REDUCTION\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-# Load the combined dataset from variable combination script
-if(file.exists("SIMOA_combined.rds")) {
-  SIMOA <- readRDS("SIMOA_combined.rds")
-  cat("✓ Loaded SIMOA_combined.rds\n\n")
-} else {
-  stop("ERROR: SIMOA_combined.rds not found. Please run variable combination script first.")
-}
-
-cat("STARTING POINT:\n")
-cat("  Total variables in dataset:", ncol(SIMOA), "\n")
-cat("  Total observations:", nrow(SIMOA), "\n")
-cat("  Goal: Reduce to manageable set of predictors for modeling\n\n")
 
 # -----------------------------------------------------------------------------
-# A. DEFINE VARIABLES AND CREATE INITIAL DATASET
+# PART D: COM-B VARIABLES (Motivation, Desires, Capability)
 # -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART A: DEFINING VARIABLE LISTS\n")
+cat("PART D: COALESCING COM-B VARIABLES\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Core variable lists
-core_demographics <- c("age", "sex", "gender", "prov_terr", "education", 
-                       "employment", "driving_freq", "income")
-social_support <- c("osss_3_score")
-mental_health <- c("phq2_score")
-physical_health <- c("gen_health")
-medication <- c("med_quant", "med_burden_1", "med_burden2", "medburden_3", "med_burden_4")
+cat("NOTE: These variables measure separate constructs within COM-B framework:\n")
+cat("  • Motivation: psychological drivers to stop\n")
+cat("  • Desires: personal and social pressure to stop\n")
+cat("  • Capability: perceived ability to stop\n")
+cat("They will be kept as separate items (no composite scores).\n\n")
 
-# Sleep aids (WILL BE RECODED)
+# Motivation (3 items)
+motivation_base <- paste0("motivation_", 1:3)
+motivation_v2 <- paste0("motivation_", 1:3, "_v2")
+
+# Desires (3 items)
+desires_base <- paste0("desires_", 1:3)
+desires_v2 <- paste0("desires_", 1:3, "_v2")
+
+# Capability (2 items - note unusual naming)
+capability_base <- c("capability_1", "capability")
+capability_v2 <- c("capability_1_v2", "capability_v2")
+
+# Coalesce motivation
+SIMOA <- coalesce_variables(SIMOA, motivation_base, motivation_v2, "Motivation")
+
+# Coalesce desires
+SIMOA <- coalesce_variables(SIMOA, desires_base, desires_v2, "Desires")
+
+# Coalesce capability (manual due to naming)
+cat("Coalescing Capability variables...\n")
+cat("─────────────────────────────────────────────────────────────\n")
+
+n_merged <- 0
+for(i in seq_along(capability_base)) {
+  base_var <- capability_base[i]
+  v2_var <- capability_v2[i]
+  
+  has_base <- base_var %in% names(SIMOA)
+  has_v2 <- v2_var %in% names(SIMOA)
+  
+  if(has_base && has_v2) {
+    SIMOA[[base_var]] <- coalesce(SIMOA[[base_var]], SIMOA[[v2_var]])
+    SIMOA[[v2_var]] <- NULL
+    n_merged <- n_merged + 1
+    cat("  ✓ Merged", v2_var, "→", base_var, "\n")
+  } else if(!has_base && has_v2) {
+    SIMOA[[base_var]] <- SIMOA[[v2_var]]
+    SIMOA[[v2_var]] <- NULL
+    n_merged <- n_merged + 1
+    cat("  ✓ Renamed", v2_var, "→", base_var, "\n")
+  } else if(has_base && !has_v2) {
+    n_merged <- n_merged + 1
+    cat("  ✓ Kept", base_var, "(no v2 version)\n")
+  } else {
+    cat("  ⚠️  Neither", base_var, "nor", v2_var, "found\n")
+  }
+}
+
+cat("  Variables merged:", n_merged, "/", length(capability_base), "\n\n")
+
+# Check which items exist
+motivation_exists <- motivation_base %in% names(SIMOA)
+desires_exists <- desires_base %in% names(SIMOA)
+capability_exists <- capability_base %in% names(SIMOA)
+
+cat("COM-B items successfully merged:\n")
+cat("  Motivation:", sum(motivation_exists), "/", length(motivation_base), "\n")
+cat("  Desires:", sum(desires_exists), "/", length(desires_base), "\n")
+cat("  Capability:", sum(capability_exists), "/", length(capability_base), "\n\n")
+
+# -----------------------------------------------------------------------------
+# PART E: VERIFICATION & CLEANUP
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART E: VERIFICATION & CLEANUP\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Check for remaining v2 or _2 variables
+remaining_v2 <- grep("_v2$|_2___[0-9]$", names(SIMOA), value = TRUE)
+
+if(length(remaining_v2) > 0) {
+  cat("⚠️  WARNING: Found remaining v2/_2 variables:\n")
+  for(v in remaining_v2) {
+    cat("  •", v, "\n")
+  }
+  cat("\nThese may need manual review.\n\n")
+} else {
+  cat("✓ No v2 or _2 variables remaining\n")
+  cat("✓ All current/former user versions successfully merged\n\n")
+}
+
+# Summary of created variables
+cat("VARIABLES CREATED/MERGED:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+
+cat("\nAdverse Effects (merged):\n")
+cat("  • Side effects:", paste(side_effects_base, collapse = ", "), "\n")
+cat("  • Safety:", paste(safety_base, collapse = ", "), "\n")
+cat("  • ADL impact:", paste(adl_base, collapse = ", "), "\n")
+cat("  • Dependence:", paste(dependence_base, collapse = ", "), "\n")
+
+cat("\nWithdrawal (merged + combined):\n")
+cat("  • Checkboxes:", paste(withdrawal_base, collapse = ", "), "\n")
+if("stop_wdl_exp_combined" %in% names(SIMOA)) {
+  cat("  • stop_wdl_exp_combined (ordinal 0-5)\n")
+  cat("  • wdl_symptom_count (count 0-4)\n")
+  cat("  • stop_wdl_exp_combined_factor (labeled)\n")
+}
+
+cat("\nCOM-B (merged, kept separate):\n")
+if(sum(motivation_exists) > 0) {
+  cat("  • Motivation:", paste(motivation_base[motivation_exists], collapse = ", "), "\n")
+}
+if(sum(desires_exists) > 0) {
+  cat("  • Desires:", paste(desires_base[desires_exists], collapse = ", "), "\n")
+}
+if(sum(capability_exists) > 0) {
+  cat("  • Capability:", paste(capability_base[capability_exists], collapse = ", "), "\n")
+}
+
+cat("\n")
+
+# -----------------------------------------------------------------------------
+# PART F: SAVE COMBINED DATASET
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART F: SAVING COMBINED DATASET\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Save combined dataset
+saveRDS(SIMOA, "SIMOA_combined.rds")
+cat("✓ Saved: SIMOA_combined.rds\n\n")
+
+# Create summary
+combining_summary <- list(
+  adverse_effects = list(
+    side_effects = side_effects_base,
+    safety = safety_base,
+    adl = adl_base,
+    dependence = dependence_base
+  ),
+  withdrawal = list(
+    checkboxes = withdrawal_base,
+    combined = if("stop_wdl_exp_combined" %in% names(SIMOA)) "stop_wdl_exp_combined" else NULL,
+    count = if("wdl_symptom_count" %in% names(SIMOA)) "wdl_symptom_count" else NULL
+  ),
+  comb = list(
+    motivation = motivation_base[motivation_exists],
+    desires = desires_base[desires_exists],
+    capability = capability_base[capability_exists]
+  ),
+  n_observations = nrow(SIMOA),
+  n_variables = ncol(SIMOA),
+  remaining_v2 = remaining_v2
+)
+
+saveRDS(combining_summary, "variable_combining_summary.rds")
+cat("✓ Saved: variable_combining_summary.rds\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("✓ VARIABLE COMBINING COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("SUMMARY:\n")
+cat("  • Adverse effects: merged from stopped/current user versions\n")
+cat("  • Withdrawal: merged stop_wdl_exp + stop_wdl_exp_2, created combined variable\n")
+cat("  • COM-B: merged as separate items (no composites)\n")
+cat("  • Dataset saved: SIMOA_combined.rds\n")
+cat("  • Ready for variable reduction (next chunk)\n\n")
+```
+
+## Variable Selection and Preperation
+
+```{r}
+#==============================================================================
+# CHUNK 6: VARIABLE SELECTION & PREPARATION
+#==============================================================================
+# Purpose: Select and prepare variables for analysis
+# Includes:
+#   - Demographics
+#   - Health variables (PHQ-2, OSSS-3, general health, medication burden)
+#   - Health condition counts
+#   - Sleep aid frequency variables
+#   - Combined adverse effects, withdrawal, COM-B variables
+#   - Personality scales (DBAS, BFI, SURPS, CISS)
+#   - Reverse coding of personality items
+#==============================================================================
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("VARIABLE SELECTION & PREPARATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load combined dataset from Chunk 5
+if(file.exists("SIMOA_combined.rds")) {
+  SIMOA <- readRDS("SIMOA_combined.rds")
+  cat("✓ Loaded SIMOA_combined.rds from Chunk 5\n")
+  cat("  Dimensions:", nrow(SIMOA), "rows ×", ncol(SIMOA), "columns\n\n")
+} else {
+  cat("⚠️  SIMOA_combined.rds not found - using SIMOA from memory\n")
+  cat("  (Make sure Chunk 5 has been run)\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# PART A: DEFINE CORE VARIABLE LISTS
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART A: DEFINING CORE VARIABLE LISTS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Outcome
+outcome <- "scrn_stopped_bzra"
+
+# Core demographics
+core_demographics <- c("age", "sex", "education", "income", "employment", "driving_freq")
+
+# Health/clinical variables
+health_vars <- c("phq2_score", "osss_3_score", "gen_health", "med_quant")
+
+# Sleep aids (will be recoded)
 sleep_aids <- c("alc_sleep", "can_sleep", "melatonin_use", "op_sleep")
 
-# Clinical conditions - only keep definition items, not all checkboxes
-insomnia_definition <- paste0("def_insomnia___", 1:3)
-
-# ============================================================================
-# CRITICAL: ADVERSE EFFECTS ITEMS - NOW USING COMBINED VERSIONS
-# ============================================================================
+# Combined adverse effects variables (from Chunk 5)
 side_effects_items <- paste0("side_effects_", 1:4)
 safety_items <- paste0("safety_", 1:4)
 adl_items <- paste0("adls_", 1:2)
 dependence_items <- paste0("dependence_", 1:3)
 
-# ============================================================================
-# CRITICAL: WITHDRAWAL VARIABLES - NOW USING COMBINED VERSIONS
-# ============================================================================
-withdrawal_indicators <- c(
-  "stop_wdl_exp___1",     # Insomnia
-  "stop_wdl_exp___2",     # Anxiety
-  "stop_wdl_exp___3",     # Other mental health
-  "stop_wdl_exp___4",     # Physical effects
-  "stop_wdl_exp___0"      # No withdrawal effects
-)
-
-# Combined ordinal withdrawal variable (0-5)
+# Withdrawal (combined variable from Chunk 5)
 withdrawal_combined <- "stop_wdl_exp_combined"
-
-# Helper variable for validation
 withdrawal_count <- "wdl_symptom_count"
 
-# Personality items
+# COM-B variables (from Chunk 5)
+comb_vars <- c(
+  paste0("motivation_", 1:3),
+  paste0("desires_", 1:3),
+  c("capability_1", "capability")
+)
+
+# Personality scales
 dbas_items <- c("dbas1", paste0("dbas_", 2:16))
 bfi_items <- c("reserved", "trusting", "lazy", "relaxed", "few_interests",
                "outgoing", "find_fault", "thorough", "nervous", "imagination")
 surps_items <- paste0("surps", 1:23)
 ciss_items <- paste0("ciss", 1:21)
 
-# Outcome
-outcome <- "scrn_stopped_bzra"
+cat("✓ Core variable lists defined\n\n")
 
-# Compile and create dataset
-vars_to_keep <- unique(c(outcome, core_demographics, social_support, mental_health,
-                         physical_health, medication, sleep_aids,
-                         insomnia_definition, side_effects_items, safety_items, 
-                         adl_items, dependence_items, 
-                         withdrawal_indicators, withdrawal_combined, withdrawal_count,
-                         dbas_items, bfi_items, surps_items, ciss_items))
+# -----------------------------------------------------------------------------
+# PART B: RECODE SLEEP AID FREQUENCY VARIABLES (NA → 0)
+# -----------------------------------------------------------------------------
 
-vars_available <- vars_to_keep[vars_to_keep %in% names(SIMOA)]
-SIMOA_analysis <- SIMOA %>% select(all_of(vars_available))
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART B: RECODING SLEEP AID FREQUENCY VARIABLES\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("✓ Loaded", length(vars_available), "variables into analysis dataset\n\n")
+cat("CODING: 0=Never, 1=<1day/wk, 2=1-3days/wk, 3=4-6days/wk, 4=7days/wk\n")
+cat("LOGIC: NA (not asked) = Never uses (0)\n\n")
 
-# Report on combined variables status
-cat("COMBINED VARIABLES STATUS:\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
+existing_freq_vars <- sleep_aids[sleep_aids %in% names(SIMOA)]
 
-# Check adverse effects items
-cat("Adverse Effects Items (combined from v2 versions):\n")
-adverse_all <- c(side_effects_items, safety_items, adl_items, dependence_items)
-n_adverse_present <- sum(adverse_all %in% names(SIMOA_analysis))
-cat("  Side effects (4 items):", sum(side_effects_items %in% names(SIMOA_analysis)), "/4\n")
-cat("  Safety (4 items):", sum(safety_items %in% names(SIMOA_analysis)), "/4\n")
-cat("  ADL impact (2 items):", sum(adl_items %in% names(SIMOA_analysis)), "/2\n")
-cat("  Dependence (3 items):", sum(dependence_items %in% names(SIMOA_analysis)), "/3\n")
-cat("  TOTAL:", n_adverse_present, "/", length(adverse_all), "\n\n")
-
-# Check withdrawal variables
-cat("Withdrawal Variables (combined from _2 versions):\n")
-n_wdl_indicators <- sum(withdrawal_indicators %in% names(SIMOA_analysis))
-has_wdl_combined <- withdrawal_combined %in% names(SIMOA_analysis)
-has_wdl_count <- withdrawal_count %in% names(SIMOA_analysis)
-cat("  Withdrawal indicators:", n_wdl_indicators, "/", length(withdrawal_indicators), "\n")
-cat("  Combined ordinal (0-5):", ifelse(has_wdl_combined, "✓ Present", "✗ Missing"), "\n")
-cat("  Symptom count (0-4):", ifelse(has_wdl_count, "✓ Present", "✗ Missing"), "\n\n")
-
-# Verify NO v2 or _2 versions remain
-remaining_v2 <- grep("_v2$|_2___", names(SIMOA_analysis), value = TRUE)
-if(length(remaining_v2) > 0) {
-  cat("⚠️  WARNING: Found v2/_2 versions that should have been merged:\n")
-  for(v in remaining_v2) {
-    cat("  •", v, "\n")
+if(length(existing_freq_vars) > 0) {
+  cat("Before recoding - Missingness summary:\n")
+  for(var in existing_freq_vars) {
+    n_na <- sum(is.na(SIMOA[[var]]))
+    pct_na <- round(100 * n_na / nrow(SIMOA), 1)
+    cat(sprintf("  %-20s: %3d NAs (%5.1f%%)\n", var, n_na, pct_na))
   }
-  cat("\n")
+  cat("\nRecoding NA → 0 (never uses)...\n\n")
+  
+  for(var in existing_freq_vars) {
+    SIMOA[[var]][is.na(SIMOA[[var]])] <- 0
+  }
+  
+  cat("After recoding - Distribution:\n")
+  for(var in existing_freq_vars) {
+    n_0 <- sum(SIMOA[[var]] == 0)
+    n_use <- sum(SIMOA[[var]] > 0)
+    pct_use <- round(100 * n_use / nrow(SIMOA), 1)
+    cat(sprintf("  %-20s: Never=%3d, Uses=%3d (%5.1f%%)\n", 
+                var, n_0, n_use, pct_use))
+  }
+  cat("\n✓ Sleep aid variables recoded to ordinal (0-4)\n\n")
 } else {
-  cat("✓ No v2 or _2 versions found (proper merging confirmed)\n\n")
+  cat("⚠️  No sleep aid frequency variables found\n\n")
 }
 
 # -----------------------------------------------------------------------------
-# A1. RECODE SLEEP AID FREQUENCY VARIABLES (NA = Never Uses → 0)
+# PART C: CREATE HEALTH CONDITION COUNT VARIABLES
 # -----------------------------------------------------------------------------
 
-cat("PART A1: Recoding sleep aid frequency variables\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-cat("CODING: 0=Never, 1=<1day/wk, 2=1-3days/wk, 3=4-6days/wk, 4=7days/wk\n\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART C: CREATING HEALTH CONDITION COUNT VARIABLES\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
 
-existing_freq_vars <- sleep_aids[sleep_aids %in% names(SIMOA_analysis)]
-
-cat("Before recoding - Missingness summary:\n")
-for(var in existing_freq_vars) {
-  n_na <- sum(is.na(SIMOA_analysis[[var]]))
-  pct_na <- round(100 * n_na / nrow(SIMOA_analysis), 1)
-  cat(sprintf("  %-20s: %3d NAs (%5.1f%%)\n", var, n_na, pct_na))
-}
-cat("\nRecoding NA → 0 (never uses)...\n\n")
-
-for(var in existing_freq_vars) {
-  SIMOA_analysis[[var]][is.na(SIMOA_analysis[[var]])] <- 0
-}
-
-cat("After recoding - Distribution:\n")
-for(var in existing_freq_vars) {
-  n_0 <- sum(SIMOA_analysis[[var]] == 0)
-  n_use <- sum(SIMOA_analysis[[var]] > 0)
-  pct_use <- round(100 * n_use / nrow(SIMOA_analysis), 1)
-  cat(sprintf("  %-20s: Never=%3d, Uses=%3d (%5.1f%%)\n", 
-              var, n_0, n_use, pct_use))
-}
-cat("\n✓ Sleep aid variables recoded to ordinal (0-4)\n\n")
-
-# -----------------------------------------------------------------------------
-# A2. CREATE HEALTH CONDITION COUNT VARIABLES
-# -----------------------------------------------------------------------------
-
-cat("PART A2: Creating health condition count variables\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Check if checkbox variables exist in original SIMOA data
+# Check if checkbox variables exist
 sleep_conditions_exist <- any(grepl("^sleep_health_con___", names(SIMOA)))
 physical_conditions_exist <- any(grepl("^phys_health_con___", names(SIMOA)))
 mental_conditions_exist <- any(grepl("^ment_health_con___", names(SIMOA)))
@@ -1052,10 +1355,10 @@ if(sleep_conditions_exist || physical_conditions_exist || mental_conditions_exis
   if(physical_conditions_exist) {
     phys_cols <- grep("^phys_health_con___", names(SIMOA), value = TRUE)
     phys_cols <- phys_cols[!phys_cols %in% "phys_health_con___0"]
-    SIMOA_analysis$n_physical_conditions <- rowSums(SIMOA[, phys_cols] == 1, na.rm = TRUE)
+    SIMOA$n_physical_conditions <- rowSums(SIMOA[, phys_cols] == 1, na.rm = TRUE)
     cat("✓ Created n_physical_conditions from", length(phys_cols), "checkboxes\n")
   } else {
-    SIMOA_analysis$n_physical_conditions <- 0
+    SIMOA$n_physical_conditions <- 0
     cat("  n_physical_conditions: No checkboxes found, set to 0\n")
   }
   
@@ -1063,10 +1366,10 @@ if(sleep_conditions_exist || physical_conditions_exist || mental_conditions_exis
   if(mental_conditions_exist) {
     ment_cols <- grep("^ment_health_con___", names(SIMOA), value = TRUE)
     ment_cols <- ment_cols[!ment_cols %in% "ment_health_con___0"]
-    SIMOA_analysis$n_ment_conditions <- rowSums(SIMOA[, ment_cols] == 1, na.rm = TRUE)
+    SIMOA$n_ment_conditions <- rowSums(SIMOA[, ment_cols] == 1, na.rm = TRUE)
     cat("✓ Created n_ment_conditions from", length(ment_cols), "checkboxes\n")
   } else {
-    SIMOA_analysis$n_ment_conditions <- 0
+    SIMOA$n_ment_conditions <- 0
     cat("  n_ment_conditions: No checkboxes found, set to 0\n")
   }
   
@@ -1074,228 +1377,96 @@ if(sleep_conditions_exist || physical_conditions_exist || mental_conditions_exis
   if(sleep_conditions_exist) {
     sleep_cols <- grep("^sleep_health_con___", names(SIMOA), value = TRUE)
     sleep_cols <- sleep_cols[!sleep_cols %in% "sleep_health_con___0"]
-    SIMOA_analysis$n_sleep_conditions <- rowSums(SIMOA[, sleep_cols] == 1, na.rm = TRUE)
+    SIMOA$n_sleep_conditions <- rowSums(SIMOA[, sleep_cols] == 1, na.rm = TRUE)
     cat("✓ Created n_sleep_conditions from", length(sleep_cols), "checkboxes\n")
   } else {
-    SIMOA_analysis$n_sleep_conditions <- 0
+    SIMOA$n_sleep_conditions <- 0
     cat("  n_sleep_conditions: No checkboxes found, set to 0\n")
   }
   
   # Total health conditions
-  SIMOA_analysis$n_health_conditions <- SIMOA_analysis$n_physical_conditions + 
-                                         SIMOA_analysis$n_ment_conditions + 
-                                         SIMOA_analysis$n_sleep_conditions
+  SIMOA$n_health_conditions <- SIMOA$n_physical_conditions + 
+                                SIMOA$n_ment_conditions + 
+                                SIMOA$n_sleep_conditions
   cat("✓ Created n_health_conditions (total)\n\n")
   
   # Summary statistics
   cat("Count variable summary:\n")
-  cat("  n_physical_conditions: Mean =", round(mean(SIMOA_analysis$n_physical_conditions, na.rm = TRUE), 2),
-      ", Range = [", min(SIMOA_analysis$n_physical_conditions, na.rm = TRUE), "-",
-      max(SIMOA_analysis$n_physical_conditions, na.rm = TRUE), "]\n", sep = "")
-  cat("  n_ment_conditions: Mean =", round(mean(SIMOA_analysis$n_ment_conditions, na.rm = TRUE), 2),
-      ", Range = [", min(SIMOA_analysis$n_ment_conditions, na.rm = TRUE), "-",
-      max(SIMOA_analysis$n_ment_conditions, na.rm = TRUE), "]\n", sep = "")
-  cat("  n_sleep_conditions: Mean =", round(mean(SIMOA_analysis$n_sleep_conditions, na.rm = TRUE), 2),
-      ", Range = [", min(SIMOA_analysis$n_sleep_conditions, na.rm = TRUE), "-",
-      max(SIMOA_analysis$n_sleep_conditions, na.rm = TRUE), "]\n", sep = "")
-  cat("  n_health_conditions: Mean =", round(mean(SIMOA_analysis$n_health_conditions, na.rm = TRUE), 2),
-      ", Range = [", min(SIMOA_analysis$n_health_conditions, na.rm = TRUE), "-",
-      max(SIMOA_analysis$n_health_conditions, na.rm = TRUE), "]\n\n", sep = "")
+  cat("  n_physical_conditions: Mean =", round(mean(SIMOA$n_physical_conditions, na.rm = TRUE), 2),
+      ", Range = [", min(SIMOA$n_physical_conditions, na.rm = TRUE), "-",
+      max(SIMOA$n_physical_conditions, na.rm = TRUE), "]\n", sep = "")
+  cat("  n_ment_conditions: Mean =", round(mean(SIMOA$n_ment_conditions, na.rm = TRUE), 2),
+      ", Range = [", min(SIMOA$n_ment_conditions, na.rm = TRUE), "-",
+      max(SIMOA$n_ment_conditions, na.rm = TRUE), "]\n", sep = "")
+  cat("  n_sleep_conditions: Mean =", round(mean(SIMOA$n_sleep_conditions, na.rm = TRUE), 2),
+      ", Range = [", min(SIMOA$n_sleep_conditions, na.rm = TRUE), "-",
+      max(SIMOA$n_sleep_conditions, na.rm = TRUE), "]\n", sep = "")
+  cat("  n_health_conditions: Mean =", round(mean(SIMOA$n_health_conditions, na.rm = TRUE), 2),
+      ", Range = [", min(SIMOA$n_health_conditions, na.rm = TRUE), "-",
+      max(SIMOA$n_health_conditions, na.rm = TRUE), "]\n\n", sep = "")
   
 } else {
   cat("⚠️  No checkbox variables found in data\n")
   cat("   Setting all count variables to 0\n\n")
-  SIMOA_analysis$n_physical_conditions <- 0
-  SIMOA_analysis$n_ment_conditions <- 0
-  SIMOA_analysis$n_sleep_conditions <- 0
-  SIMOA_analysis$n_health_conditions <- 0
+  SIMOA$n_physical_conditions <- 0
+  SIMOA$n_ment_conditions <- 0
+  SIMOA$n_sleep_conditions <- 0
+  SIMOA$n_health_conditions <- 0
 }
 
 condition_counts <- c("n_health_conditions", "n_physical_conditions", 
                       "n_ment_conditions", "n_sleep_conditions")
 
 # -----------------------------------------------------------------------------
-# A3. CLEAN WITHDRAWAL DATA - FIX LOGICAL INCONSISTENCIES
+# PART D: HANDLE GEN_HEALTH VARIABLE
 # -----------------------------------------------------------------------------
 
-cat("PART A3: Cleaning withdrawal data for logical consistency\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
-
-# Check if withdrawal variables exist in original SIMOA data
-if(all(withdrawal_indicators %in% names(SIMOA))) {
-  
-  cat("Issue: Respondents may have checked 'No withdrawal' AND specific symptoms\n")
-  cat("Solution: If ___0 (no withdrawal) is checked, set all other symptoms to 0\n\n")
-  
-  # Count inconsistencies before cleaning
-  symptom_vars <- c("stop_wdl_exp___1", "stop_wdl_exp___2", 
-                    "stop_wdl_exp___3", "stop_wdl_exp___4")
-  no_symptom_var <- "stop_wdl_exp___0"
-  
-  # Identify rows where both "no symptoms" and symptoms are checked
-  has_no_symptoms <- SIMOA[[no_symptom_var]] == 1
-  has_symptoms <- rowSums(SIMOA[, symptom_vars], na.rm = TRUE) > 0
-  inconsistent <- has_no_symptoms & has_symptoms
-  n_inconsistent <- sum(inconsistent, na.rm = TRUE)
-  
-  cat("Before cleaning:\n")
-  cat(sprintf("  Cases with 'no withdrawal' checked: %d\n", sum(has_no_symptoms, na.rm = TRUE)))
-  cat(sprintf("  Cases with symptoms checked: %d\n", sum(has_symptoms, na.rm = TRUE)))
-  cat(sprintf("  Cases with BOTH (inconsistent): %d ⚠️\n\n", n_inconsistent))
-  
-  if(n_inconsistent > 0) {
-    # Clean: If "no withdrawal" is checked, set all symptoms to 0
-    for(i in which(inconsistent)) {
-      SIMOA[i, symptom_vars] <- 0
-    }
-    
-    cat("Cleaning applied: Set symptom checkboxes to 0 when 'no withdrawal' was checked\n\n")
-    
-    # Recalculate after cleaning
-    has_symptoms_clean <- rowSums(SIMOA[, symptom_vars], na.rm = TRUE) > 0
-    inconsistent_clean <- has_no_symptoms & has_symptoms_clean
-    
-    cat("After cleaning:\n")
-    cat(sprintf("  Cases with BOTH (inconsistent): %d ✓\n\n", sum(inconsistent_clean, na.rm = TRUE)))
-  } else {
-    cat("✓ No inconsistencies found - data already clean\n\n")
-  }
-  
-  # Now recreate the combined withdrawal variable with clean data
-  if("stop_wdl_exp_combined" %in% names(SIMOA)) {
-    cat("Recreating withdrawal combined variable with clean data...\n")
-    
-    # Count symptoms (excluding the "no symptoms" option)
-    symptom_count <- rowSums(SIMOA[, symptom_vars] == 1, na.rm = TRUE)
-    
-    SIMOA$stop_wdl_exp_combined <- case_when(
-      SIMOA[[no_symptom_var]] == 1 ~ 0,  # No withdrawal
-      symptom_count == 1 & SIMOA$stop_wdl_exp___1 == 1 ~ 1,  # Insomnia only
-      symptom_count == 1 & SIMOA$stop_wdl_exp___2 == 1 ~ 2,  # Anxiety only
-      symptom_count == 1 & SIMOA$stop_wdl_exp___3 == 1 ~ 3,  # Other MH only
-      symptom_count == 1 & SIMOA$stop_wdl_exp___4 == 1 ~ 4,  # Physical only
-      symptom_count >= 2 ~ 5,  # Multiple symptoms
-      TRUE ~ NA_real_
-    )
-    
-    # Also update symptom count
-    SIMOA$wdl_symptom_count <- symptom_count
-    
-    cat("✓ Withdrawal variables recreated\n\n")
-    
-    # Show cleaned distribution
-    cat("CLEANED WITHDRAWAL DISTRIBUTION:\n")
-    cat("─────────────────────────────────────────────────────────────\n")
-    wdl_table <- table(SIMOA$stop_wdl_exp_combined, useNA = "ifany")
-    wdl_labels <- c("0 (No withdrawal)", "1 (Insomnia only)", 
-                    "2 (Anxiety only)", "3 (Other MH only)",
-                    "4 (Physical only)", "5 (Multiple symptoms)")
-    
-    for(i in 0:5) {
-      if(as.character(i) %in% names(wdl_table)) {
-        n <- wdl_table[as.character(i)]
-        pct <- round(100 * n / sum(wdl_table[!is.na(names(wdl_table))]), 1)
-        cat(sprintf("  %-30s: n=%4d (%5.1f%%)\n", wdl_labels[i+1], n, pct))
-      }
-    }
-    if("NA" %in% names(wdl_table)) {
-      cat(sprintf("  %-30s: n=%4d\n", "Missing", wdl_table["NA"]))
-    }
-    cat("\n")
-    
-    cat("SYMPTOM COUNT DISTRIBUTION:\n")
-    cat("─────────────────────────────────────────────────────────────\n")
-    count_table <- table(SIMOA$wdl_symptom_count, useNA = "ifany")
-    for(i in 0:4) {
-      if(as.character(i) %in% names(count_table)) {
-        n <- count_table[as.character(i)]
-        pct <- round(100 * n / sum(count_table[!is.na(names(count_table))]), 1)
-        cat(sprintf("  %d symptoms: n=%4d (%5.1f%%)\n", i, n, pct))
-      }
-    }
-    cat("\n")
-  }
-  
-  # Update SIMOA_analysis with cleaned data
-  if("stop_wdl_exp_combined" %in% names(SIMOA_analysis)) {
-    SIMOA_analysis$stop_wdl_exp_combined <- SIMOA$stop_wdl_exp_combined
-  }
-  if("wdl_symptom_count" %in% names(SIMOA_analysis)) {
-    SIMOA_analysis$wdl_symptom_count <- SIMOA$wdl_symptom_count
-  }
-  
-  # If wdl_symptom_count wasn't in original SIMOA_analysis, add it now
-  if(!"wdl_symptom_count" %in% names(SIMOA_analysis) && "wdl_symptom_count" %in% names(SIMOA)) {
-    SIMOA_analysis$wdl_symptom_count <- SIMOA$wdl_symptom_count
-    cat("✓ Added wdl_symptom_count to analysis dataset\n\n")
-  }
-  
-} else {
-  cat("⚠️  Withdrawal variables not found in original data\n\n")
-}
-
-# Verify withdrawal count variable status after cleaning
-if("wdl_symptom_count" %in% names(SIMOA_analysis)) {
-  cat("✓ wdl_symptom_count successfully added to analysis dataset\n")
-  cat(sprintf("  Range: %d to %d\n", 
-              min(SIMOA_analysis$wdl_symptom_count, na.rm = TRUE),
-              max(SIMOA_analysis$wdl_symptom_count, na.rm = TRUE)))
-  cat(sprintf("  Missing: %d (%.1f%%)\n\n", 
-              sum(is.na(SIMOA_analysis$wdl_symptom_count)),
-              100*sum(is.na(SIMOA_analysis$wdl_symptom_count))/nrow(SIMOA_analysis)))
-} else {
-  cat("⚠️  wdl_symptom_count not available in analysis dataset\n\n")
-}
-
-# -----------------------------------------------------------------------------
-# A4. HANDLE gen_health VARIABLE
-# -----------------------------------------------------------------------------
-
-cat("PART A4: Processing gen_health variable\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART D: PROCESSING GEN_HEALTH VARIABLE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
 
 # Check if gen_health exists in different formats
-if("gen_health" %in% names(SIMOA_analysis)) {
+if("gen_health" %in% names(SIMOA)) {
   cat("✓ gen_health variable exists in dataset\n")
-  cat("  Current class:", class(SIMOA_analysis$gen_health)[1], "\n")
+  cat("  Current class:", class(SIMOA$gen_health)[1], "\n")
   
   # Ensure it's an ordered factor with correct levels
-  if(!is.ordered(SIMOA_analysis$gen_health)) {
+  if(!is.ordered(SIMOA$gen_health)) {
     cat("  Converting to ordered factor...\n")
-    SIMOA_analysis$gen_health <- factor(SIMOA_analysis$gen_health,
-                                       levels = c(1, 2, 3, 4, 5),
-                                       labels = c("Poor", "Fair", "Good", "Very good", "Excellent"),
-                                       ordered = TRUE)
+    SIMOA$gen_health <- factor(SIMOA$gen_health,
+                                levels = c(1, 2, 3, 4, 5),
+                                labels = c("Poor", "Fair", "Good", "Very good", "Excellent"),
+                                ordered = TRUE)
   }
   
   cat("\ngen_health distribution:\n")
-  print(table(SIMOA_analysis$gen_health, useNA = "ifany"))
+  print(table(SIMOA$gen_health, useNA = "ifany"))
   cat("\n")
   
 } else if(any(grepl("^gen_health___", names(SIMOA)))) {
-  cat("⚠️  gen_health not in analysis dataset\n")
-  cat("   Found checkbox format in original data - converting...\n")
+  cat("⚠️  gen_health not found as single variable\n")
+  cat("   Found checkbox format - converting...\n")
   
-  # Create from checkboxes in original SIMOA
+  # Create from checkboxes
   gh_cols <- paste0("gen_health___", 1:5)
   gh_cols <- gh_cols[gh_cols %in% names(SIMOA)]
   
   if(length(gh_cols) > 0) {
-    # Find which checkbox is selected (should be only one per person)
-    SIMOA_analysis$gen_health <- apply(SIMOA[, gh_cols], 1, function(x) {
+    # Find which checkbox is selected
+    SIMOA$gen_health <- apply(SIMOA[, gh_cols], 1, function(x) {
       which_checked <- which(x == 1)
       if(length(which_checked) == 1) return(which_checked)
       return(NA)
     })
     
-    SIMOA_analysis$gen_health <- factor(SIMOA_analysis$gen_health,
-                                       levels = 1:5,
-                                       labels = c("Poor", "Fair", "Good", "Very good", "Excellent"),
-                                       ordered = TRUE)
+    SIMOA$gen_health <- factor(SIMOA$gen_health,
+                                levels = 1:5,
+                                labels = c("Poor", "Fair", "Good", "Very good", "Excellent"),
+                                ordered = TRUE)
     
     cat("✓ Created gen_health from", length(gh_cols), "checkboxes\n")
     cat("\ngen_health distribution:\n")
-    print(table(SIMOA_analysis$gen_health, useNA = "ifany"))
+    print(table(SIMOA$gen_health, useNA = "ifany"))
     cat("\n")
   }
   
@@ -1305,292 +1476,246 @@ if("gen_health" %in% names(SIMOA_analysis)) {
 }
 
 # -----------------------------------------------------------------------------
-# E. DEFINE PREDICTOR SETS (ITEMS ONLY, NOT COMPOSITES)
+# PART E: REVERSE CODE PERSONALITY ITEMS
 # -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART E: DEFINING PREDICTOR SETS\n")
+cat("PART E: REVERSE CODING PERSONALITY ITEMS\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-final_demographics <- core_demographics
-final_clinical <- c("phq2_score", "osss_3_score", "med_quant","gen_health", condition_counts)
-
-# Keep only insomnia definition items
-final_conditions <- insomnia_definition
-
-final_personality <- c(dbas_items, bfi_items, surps_items, ciss_items)
-
-# CRITICAL: Keep individual ITEMS for imputation (not composites)
-final_adverse_effects <- c(
-  side_effects_items,    # Combined from v2
-  safety_items,          # Combined from v2
-  adl_items,            # Combined from v2
-  dependence_items      # Combined from v2
-)
-
-# Withdrawal variables - using combined ordinal variable for modeling
-final_withdrawal <- withdrawal_combined
-
-sleep_aids <- sleep_aids[sleep_aids %in% names(SIMOA_analysis)]
-
-all_predictor_vars <- c(final_demographics, final_clinical, final_conditions,
-                        final_adverse_effects, final_withdrawal,
-                        sleep_aids, final_personality)
-all_predictor_vars <- all_predictor_vars[all_predictor_vars %in% names(SIMOA_analysis)]
-
-cat("PREDICTOR COUNT (ITEM-LEVEL FOR IMPUTATION):\n")
-cat("  Demographics:", sum(final_demographics %in% names(SIMOA_analysis)), "\n")
-cat("  Clinical/Health (includes 4 condition counts):", 
-    sum(final_clinical %in% names(SIMOA_analysis)), "\n")
-cat("  Conditions (insomnia definition only):", 
-    sum(final_conditions %in% names(SIMOA_analysis)), "\n")
-cat("  Adverse Effects (ITEMS - combined from v2):", 
-    sum(final_adverse_effects %in% names(SIMOA_analysis)), "\n")
-cat("  Withdrawal (combined ordinal 0-5):", 
-    sum(final_withdrawal %in% names(SIMOA_analysis)), "\n")
-cat("  Sleep Aids:", length(sleep_aids), "\n")
-cat("  Personality:", sum(final_personality %in% names(SIMOA_analysis)), "\n")
-cat("  ─────────────────────\n")
-cat("  TOTAL:", length(all_predictor_vars), "\n\n")
-
-cat("📝 METHODOLOGY NOTE:\n")
-cat("   • Individual items retained for imputation\n")
-cat("   • Adverse effects items are COMBINED versions (v2 merged via coalesce)\n")
-cat("   • Withdrawal uses COMBINED ordinal variable (0-5, merged from _2 version)\n")
-cat("   • Composites will be validated and created in separate script\n")
-cat("   • This ensures internal consistency and better convergence\n")
-cat("   • Individual condition checkboxes excluded (using counts instead)\n\n")
-
 # -----------------------------------------------------------------------------
-# F. MISSINGNESS ANALYSIS
+# E1. BFI Reverse Coding
 # -----------------------------------------------------------------------------
 
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART F: MISSINGNESS ANALYSIS\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
+cat("BFI Reverse Coding:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("Based on BFI-10 scoring:\n")
+cat("  Extraversion: reserved (R), outgoing\n")
+cat("  Agreeableness: trusting, find_fault (R)\n")
+cat("  Conscientiousness: lazy (R), thorough\n")
+cat("  Neuroticism: relaxed (R), nervous\n")
+cat("  Openness: few_interests (R), imagination\n\n")
 
-# Show missingness for initial predictor set
-cat("MISSINGNESS IN INITIAL PREDICTOR SET\n")
-cat("─────────────────────────────────────────────────────────────\n\n")
+# BFI items to reverse (5 items)
+bfi_reverse <- c("reserved", "lazy", "relaxed", "few_interests", "find_fault")
 
-n_total <- nrow(SIMOA_analysis)
-
-# Calculate missingness for all predictors
-initial_miss <- SIMOA_analysis %>%
-  select(all_of(all_predictor_vars)) %>%
-  summarise(across(everything(), ~sum(is.na(.)))) %>%
-  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") %>%
-  mutate(
-    n_complete = n_total - n_missing,
-    pct_missing = round(100 * n_missing / n_total, 1),
-    pct_complete = round(100 * n_complete / n_total, 1)
-  ) %>%
-  arrange(desc(pct_missing))
-
-# Summary by missingness level
-cat("Summary by missingness level:\n")
-miss_levels <- initial_miss %>%
-  mutate(level = case_when(
-    pct_missing == 0 ~ "Complete (0%)",
-    pct_missing < 5 ~ "Minimal (<5%)",
-    pct_missing < 10 ~ "Low (5-10%)",
-    pct_missing < 25 ~ "Moderate (10-25%)",
-    pct_missing < 40 ~ "High (25-40%)",
-    TRUE ~ "Very High (≥40%)"
-  )) %>%
-  count(level) %>%
-  arrange(match(level, c("Complete (0%)", "Minimal (<5%)", "Low (5-10%)", 
-                          "Moderate (10-25%)", "High (25-40%)", "Very High (≥40%)")))
-
-for(i in 1:nrow(miss_levels)) {
-  cat(sprintf("  %-20s: %3d variables\n", miss_levels$level[i], miss_levels$n[i]))
+cat("Items to reverse (5-point scale: 1↔5, 2↔4, 3↔3):\n")
+for(item in bfi_reverse) {
+  if(item %in% names(SIMOA)) {
+    cat("  •", item, "\n")
+  }
 }
 cat("\n")
 
-# Show detailed table
-cat("Detailed missingness by variable:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat(sprintf("%-30s %8s %8s %8s %8s\n", 
-            "Variable", "Complete", "Missing", "% Comp", "% Miss"))
-cat("─────────────────────────────────────────────────────────────\n")
-
-for(i in 1:nrow(initial_miss)) {
-  cat(sprintf("%-30s %8d %8d %7.1f%% %7.1f%%\n",
-              initial_miss$variable[i],
-              initial_miss$n_complete[i],
-              initial_miss$n_missing[i],
-              initial_miss$pct_complete[i],
-              initial_miss$pct_missing[i]))
+# Reverse code BFI items
+if(any(bfi_reverse %in% names(SIMOA))) {
+  for(item in bfi_reverse) {
+    if(item %in% names(SIMOA)) {
+      SIMOA[[item]] <- 6 - SIMOA[[item]]
+    }
+  }
+  cat("✓ Reverse coded", sum(bfi_reverse %in% names(SIMOA)), "BFI items\n\n")
+} else {
+  cat("⚠️  No BFI items found to reverse code\n\n")
 }
-cat("─────────────────────────────────────────────────────────────\n\n")
 
-# Save to CSV
-write.csv(initial_miss, "initial_predictor_missingness.csv", row.names = FALSE)
-cat("✓ Saved: initial_predictor_missingness.csv\n\n")
+# -----------------------------------------------------------------------------
+# E2. SURPS Reverse Coding
+# -----------------------------------------------------------------------------
 
-# Full missingness analysis
-df_analysis <- SIMOA_analysis %>% select(all_of(c(all_predictor_vars, outcome)))
-n_obs <- nrow(df_analysis)
-n_complete <- sum(complete.cases(df_analysis))
+cat("SURPS Reverse Coding:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("Hopelessness subscale items (reversed):\n")
+cat("  surps1:  'I am content'\n")
+cat("  surps4:  'I am happy'\n")
+cat("  surps7:  'I have faith that my future holds great promise'\n")
+cat("  surps13: 'I feel proud of my accomplishments'\n")
+cat("  surps20: 'I feel pleasant'\n")
+cat("  surps23: 'I am very enthusiastic about my future'\n")
+cat("  NOTE: surps17 ('I feel that I'm a failure') is NOT reversed\n\n")
 
-miss_summary <- df_analysis %>%
-  summarise(across(everything(), ~sum(is.na(.)))) %>%
-  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") %>%
-  mutate(pct_missing = round(100 * n_missing / n_obs, 1),
-         category = case_when(pct_missing == 0 ~ "Complete",
-                              pct_missing < 5 ~ "Minimal (<5%)",
-                              pct_missing < 10 ~ "Low (5-10%)",
-                              pct_missing < 20 ~ "Moderate (10-20%)",
-                              pct_missing < 25 ~ "High (20-25%)",
-                              TRUE ~ "Very High (≥25%)")) %>%
-  arrange(desc(pct_missing))
+# SURPS items to reverse (6 items - NOT surps17)
+surps_reverse <- c("surps1", "surps4", "surps7", "surps13", "surps20", "surps23")
 
-cat("Dataset: ", n_obs, " obs, ", ncol(df_analysis), " vars\n", sep = "")
-cat("Complete cases:", n_complete, "(", round(100*n_complete/n_obs, 1), "%)\n\n")
+cat("Items to reverse (4-point scale: 1↔4, 2↔3):\n")
+for(item in surps_reverse) {
+  if(item %in% names(SIMOA)) {
+    cat("  •", item, "\n")
+  }
+}
+cat("\n")
 
-high_miss <- miss_summary %>% filter(pct_missing >= 25)
-if(nrow(high_miss) > 0) {
-  cat("⚠ HIGH MISSINGNESS (≥25%):\n")
-  for(i in 1:nrow(high_miss)) {
-    cat(sprintf("  %-30s: %5.1f%%\n", high_miss$variable[i], high_miss$pct_missing[i]))
+# Reverse code SURPS items
+if(any(surps_reverse %in% names(SIMOA))) {
+  for(item in surps_reverse) {
+    if(item %in% names(SIMOA)) {
+      SIMOA[[item]] <- 5 - SIMOA[[item]]
+    }
+  }
+  cat("✓ Reverse coded", sum(surps_reverse %in% names(SIMOA)), "SURPS items\n\n")
+} else {
+  cat("⚠️  No SURPS items found to reverse code\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# E3. DBAS - No Reverse Coding
+# -----------------------------------------------------------------------------
+
+cat("DBAS Coding:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("DBAS-16 does NOT require reverse coding.\n")
+cat("All items scored in same direction (higher = more dysfunctional beliefs).\n")
+cat("✓ No DBAS reverse coding needed\n\n")
+
+# -----------------------------------------------------------------------------
+# E4. CISS - No Reverse Coding
+# -----------------------------------------------------------------------------
+
+cat("CISS Coding:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("CISS-21 does NOT require reverse coding.\n")
+cat("All items scored in same direction within subscales.\n")
+cat("✓ No CISS reverse coding needed\n\n")
+
+# -----------------------------------------------------------------------------
+# Summary
+# -----------------------------------------------------------------------------
+
+cat("REVERSE CODING SUMMARY:\n")
+cat("  BFI:", sum(bfi_reverse %in% names(SIMOA)), "items reverse coded\n")
+cat("  SURPS:", sum(surps_reverse %in% names(SIMOA)), "items reverse coded\n")
+cat("  DBAS: 0 items (not needed)\n")
+cat("  CISS: 0 items (not needed)\n\n")
+
+# -----------------------------------------------------------------------------
+# PART F: SELECT FINAL VARIABLES
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART F: SELECTING FINAL VARIABLES FOR ANALYSIS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Compile all variables
+all_vars_to_keep <- c(
+  outcome,
+  core_demographics,
+  health_vars,
+  condition_counts,
+  sleep_aids,
+  side_effects_items,
+  safety_items,
+  adl_items,
+  dependence_items,
+  withdrawal_combined,
+  withdrawal_count,
+  comb_vars,
+  dbas_items,
+  bfi_items,
+  surps_items,
+  ciss_items
+)
+
+# Check which exist
+vars_available <- all_vars_to_keep[all_vars_to_keep %in% names(SIMOA)]
+vars_missing <- all_vars_to_keep[!all_vars_to_keep %in% names(SIMOA)]
+
+# Create analysis dataset
+SIMOA_analysis <- SIMOA %>% select(all_of(vars_available))
+
+cat("VARIABLE SELECTION SUMMARY:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("  Requested:", length(all_vars_to_keep), "variables\n")
+cat("  Available:", length(vars_available), "variables\n")
+cat("  Missing:", length(vars_missing), "variables\n\n")
+
+if(length(vars_missing) > 0 && length(vars_missing) <= 20) {
+  cat("Missing variables:\n")
+  for(v in vars_missing) {
+    cat("  •", v, "\n")
   }
   cat("\n")
-} else {
-  cat("✓ No variables with ≥25% missingness\n\n")
+} else if(length(vars_missing) > 20) {
+  cat("Missing variables (showing first 20):\n")
+  for(v in head(vars_missing, 20)) {
+    cat("  •", v, "\n")
+  }
+  cat("  ... and", length(vars_missing) - 20, "more\n\n")
 }
 
-write.csv(miss_summary, "missingness_by_variable.csv", row.names = FALSE)
+cat("VARIABLE BREAKDOWN:\n")
+cat("  Outcome:", sum(outcome %in% names(SIMOA_analysis)), "/1\n")
+cat("  Demographics:", sum(core_demographics %in% names(SIMOA_analysis)), "/", 
+    length(core_demographics), "\n")
+cat("  Health variables:", sum(health_vars %in% names(SIMOA_analysis)), "/", 
+    length(health_vars), "\n")
+cat("  Condition counts:", sum(condition_counts %in% names(SIMOA_analysis)), "/", 
+    length(condition_counts), "\n")
+cat("  Sleep aids:", sum(sleep_aids %in% names(SIMOA_analysis)), "/", 
+    length(sleep_aids), "\n")
+cat("  Adverse effects:", 
+    sum(c(side_effects_items, safety_items, adl_items, dependence_items) %in% names(SIMOA_analysis)), 
+    "/13\n")
+cat("  Withdrawal:", sum(c(withdrawal_combined, withdrawal_count) %in% names(SIMOA_analysis)), "/2\n")
+cat("  COM-B:", sum(comb_vars %in% names(SIMOA_analysis)), "/", length(comb_vars), "\n")
+cat("  DBAS:", sum(dbas_items %in% names(SIMOA_analysis)), "/16\n")
+cat("  BFI:", sum(bfi_items %in% names(SIMOA_analysis)), "/10\n")
+cat("  SURPS:", sum(surps_items %in% names(SIMOA_analysis)), "/23\n")
+cat("  CISS:", sum(ciss_items %in% names(SIMOA_analysis)), "/21\n\n")
 
-# Visualization
-p1 <- ggplot(miss_summary, aes(x = reorder(variable, pct_missing), y = pct_missing)) +
-  geom_col(aes(fill = category)) +
-  geom_hline(yintercept = 25, linetype = "dashed", color = "red") +
-  scale_fill_manual(values = c("Complete" = "darkgreen", "Minimal (<5%)" = "lightgreen",
-                               "Low (5-10%)" = "yellow", "Moderate (10-20%)" = "orange",
-                               "High (20-25%)" = "darkorange", "Very High (≥25%)" = "red")) +
-  coord_flip() + labs(title = "Missingness by Variable", x = NULL, y = "% Missing") +
-  theme_minimal() + theme(axis.text.y = element_text(size = 6))
-ggsave("missingness_barplot.png", p1, width = 10, height = max(8, ncol(df_analysis)*0.15), dpi = 150)
-
-cat("✓ Saved: missingness_by_variable.csv\n")
-cat("✓ Saved: missingness_barplot.png\n\n")
-
-# -----------------------------------------------------------------------------
-# G. MISSINGNESS-BASED EXCLUSIONS
-# -----------------------------------------------------------------------------
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART G: MISSINGNESS-BASED EXCLUSIONS\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-cat("Decision: Retaining all variables regardless of missingness\n")
-cat("Rationale: Missingness will be handled via item-level imputation\n\n")
-
-all_predictor_vars_reduced <- all_predictor_vars
-vars_to_exclude_missingness <- NULL
-
-cat("✓ All", length(all_predictor_vars), "predictors retained\n\n")
+cat("✓ Created SIMOA_analysis with", ncol(SIMOA_analysis), "variables\n\n")
 
 # -----------------------------------------------------------------------------
-# H. SAVE RESULTS
+# PART G: SAVE PREPARED DATASET
 # -----------------------------------------------------------------------------
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART H: SAVING RESULTS\n")
+cat("PART G: SAVING PREPARED DATASET\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Check which optional variables exist
-withdrawal_count_exists <- exists("withdrawal_count") && 
-                           !is.null(withdrawal_count) && 
-                           withdrawal_count %in% names(SIMOA_analysis)
+# Save analysis dataset
+saveRDS(SIMOA_analysis, "SIMOA_analysis.rds")
+cat("✓ Saved: SIMOA_analysis.rds\n\n")
 
-imputation_prep_full <- list(
-  outcome = outcome, 
-  predictors = all_predictor_vars,
-  demographics = final_demographics[final_demographics %in% names(SIMOA_analysis)],
-  clinical = final_clinical[final_clinical %in% names(SIMOA_analysis)],
-  conditions = final_conditions[final_conditions %in% names(SIMOA_analysis)],
-  adverse_effects = final_adverse_effects[final_adverse_effects %in% names(SIMOA_analysis)],
-  withdrawal = final_withdrawal[final_withdrawal %in% names(SIMOA_analysis)],
-  withdrawal_indicators = withdrawal_indicators[withdrawal_indicators %in% names(SIMOA_analysis)],
-  withdrawal_count = if(withdrawal_count_exists) withdrawal_count else NULL,
-  sleep_aids = sleep_aids, 
+# Save variable lists
+analysis_variables <- list(
+  outcome = outcome,
+  demographics = core_demographics[core_demographics %in% names(SIMOA_analysis)],
+  health = health_vars[health_vars %in% names(SIMOA_analysis)],
   condition_counts = condition_counts[condition_counts %in% names(SIMOA_analysis)],
-  personality = list(dbas = dbas_items[dbas_items %in% names(SIMOA_analysis)],
-                     bfi = bfi_items[bfi_items %in% names(SIMOA_analysis)],
-                     surps = surps_items[surps_items %in% names(SIMOA_analysis)],
-                     ciss = ciss_items[ciss_items %in% names(SIMOA_analysis)]),
-  analysis_data = SIMOA_analysis
+  sleep_aids = sleep_aids[sleep_aids %in% names(SIMOA_analysis)],
+  adverse_effects = c(side_effects_items, safety_items, adl_items, dependence_items)[
+    c(side_effects_items, safety_items, adl_items, dependence_items) %in% names(SIMOA_analysis)],
+  withdrawal = c(withdrawal_combined, withdrawal_count)[
+    c(withdrawal_combined, withdrawal_count) %in% names(SIMOA_analysis)],
+  comb = comb_vars[comb_vars %in% names(SIMOA_analysis)],
+  dbas = dbas_items[dbas_items %in% names(SIMOA_analysis)],
+  bfi = bfi_items[bfi_items %in% names(SIMOA_analysis)],
+  surps = surps_items[surps_items %in% names(SIMOA_analysis)],
+  ciss = ciss_items[ciss_items %in% names(SIMOA_analysis)],
+  bfi_reversed = bfi_reverse[bfi_reverse %in% names(SIMOA_analysis)],
+  surps_reversed = surps_reverse[surps_reverse %in% names(SIMOA_analysis)],
+  n_observations = nrow(SIMOA_analysis),
+  n_variables = ncol(SIMOA_analysis)
 )
-saveRDS(imputation_prep_full, "imputation_preparation.rds")
-cat("✓ Saved: imputation_preparation.rds\n")
 
-imputation_prep_reduced <- c(imputation_prep_full, 
-                              list(predictors = all_predictor_vars_reduced,
-                                   excluded_high_missingness = vars_to_exclude_missingness))
-saveRDS(imputation_prep_reduced, "imputation_preparation_reduced.rds")
-cat("✓ Saved: imputation_preparation_reduced.rds\n\n")
-
-missingness_diagnostics <- list(summary = miss_summary, 
-                                 high_missingness = high_miss,
-                                 n_complete_cases = n_complete,
-                                 pct_complete_cases = round(100*n_complete/n_obs, 1),
-                                 excluded_variables = vars_to_exclude_missingness)
-saveRDS(missingness_diagnostics, "missingness_diagnostics.rds")
-cat("✓ Saved: missingness_diagnostics.rds\n\n")
-
-# -----------------------------------------------------------------------------
-# I. FINAL VERIFICATION AND SUMMARY
-# -----------------------------------------------------------------------------
+saveRDS(analysis_variables, "analysis_variable_lists.rds")
+cat("✓ Saved: analysis_variable_lists.rds\n\n")
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("VERIFICATION SUMMARY\n")
+cat("✓ VARIABLE SELECTION & PREPARATION COMPLETE\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat("COMBINED VARIABLES CONFIRMED:\n")
-cat("  ✓ Adverse effects items merged from v2 versions\n")
-cat("  ✓ Withdrawal indicators merged from _2 versions\n")
-cat("  ✓ Combined ordinal withdrawal variable (0-5) created\n")
-cat("  ✓ No v2 or _2 duplicates remaining\n\n")
+cat("SUMMARY:\n")
+cat("  • Sleep aids recoded (NA → 0)\n")
+cat("  • Health condition counts created\n")
+cat("  • gen_health processed\n")
+cat("  • BFI items reverse coded (5 items)\n")
+cat("  • SURPS items reverse coded (6 items)\n")
+cat("  • Final dataset:", nrow(SIMOA_analysis), "obs ×", ncol(SIMOA_analysis), "vars\n")
+cat("  • Ready for diagnostics (Chunk 7)\n\n")
 
-cat("VARIABLE COUNTS:\n")
-cat(sprintf("  Total predictors retained: %d\n", length(all_predictor_vars_reduced)))
-cat(sprintf("  Demographics: %d\n", sum(final_demographics %in% names(SIMOA_analysis))))
-cat(sprintf("  Clinical/Health: %d\n", sum(final_clinical %in% names(SIMOA_analysis))))
-cat(sprintf("  Conditions: %d\n", sum(final_conditions %in% names(SIMOA_analysis))))
-cat(sprintf("  Adverse Effects (items): %d\n", sum(final_adverse_effects %in% names(SIMOA_analysis))))
-cat(sprintf("  Withdrawal: %d\n", sum(final_withdrawal %in% names(SIMOA_analysis))))
-cat(sprintf("  Sleep Aids: %d\n", length(sleep_aids)))
-cat(sprintf("  Personality: %d\n", sum(final_personality %in% names(SIMOA_analysis))))
-cat("\n")
-
-cat("DATA QUALITY:\n")
-cat(sprintf("  Total observations: %d\n", n_obs))
-cat(sprintf("  Complete cases: %d (%.1f%%)\n", n_complete, 100*n_complete/n_obs))
-cat(sprintf("  Variables with <5%% missing: %d\n", 
-            sum(miss_summary$pct_missing < 5)))
-cat(sprintf("  Variables with ≥25%% missing: %d\n", 
-            sum(miss_summary$pct_missing >= 25)))
-cat("\n")
-
-cat("READY FOR NEXT STEPS:\n")
-cat("  → Run composite validation script separately\n")
-cat("  → Proceed to imputation with properly combined variables\n")
-cat("  → All item-level data preserved for imputation\n")
-cat("  → Composites will be created post-imputation\n")
-cat("  → Use 'imputation_preparation.rds' for next steps\n\n")
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("SCRIPT COMPLETED SUCCESSFULLY\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-# End of script
-cat("✓ Variable reduction and missingness analysis complete\n")
-cat("✓ All outputs saved to working directory\n")
-cat("✓ Ready for composite validation (separate script)\n")
-cat("✓ Ready for imputation step\n\n")
+cat("NEXT STEP: Proceed to diagnostics and validation (Chunk 7)\n\n")
 ```
-
 
 
 ## Multiple Imputation
@@ -2593,11 +2718,6 @@ cat("END OF STEP 4: MULTIPLE IMPUTATION\n")
 cat("═══════════════════════════════════════════════════════════════\n")
 ```
 
-
-
-
-
-
 ## Subscale Creation
 
 ```{r}
@@ -3474,7 +3594,338 @@ cat("Completed:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n\n")
 ```
 
 
-## VSURF SELECTION 
+## Descriptive
+
+```{r}
+#==============================================================================
+# CHUNK B: TABLE 1 - SAMPLE CHARACTERISTICS
+#==============================================================================
+# Purpose: Descriptive statistics for the entire sample and by discontinuation
+# Insert after: Multiple imputation is complete (around line 4500)
+#==============================================================================
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("TABLE 1: SAMPLE CHARACTERISTICS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+library(tableone)
+library(dplyr)
+
+# Use first imputation for Table 1 (standard practice)
+data_complete <- complete(mids_data, 1)
+
+# Define variables for Table 1
+vars_table1 <- c(
+  # Demographics
+  "age", "sex", "education", "income", "employment", "driving_freq",
+  # Personality - VSURF selected
+  "DBAS_Medications", "DBAS_Consequences", 
+  "CISS_Emotion",
+  "SURPS_Hopelessness", "SURPS_Anxiety_Sensitivity",
+  "BFI_Openness", "BFI_Extraversion", "BFI_Neuroticism",
+  # Clinical
+  "dependence_2", "side_effects_1", "n_sleep_conditions",
+  # Additional health/screening
+  "phq2_score", "osss_3_score", "med_quant"
+)
+
+# Define categorical variables
+cat_vars <- c("sex", "education", "income", "employment", "driving_freq",
+              "dependence_2", "side_effects_1")
+
+# -----------------------------------------------------------------------------
+# TABLE 1a: OVERALL SAMPLE CHARACTERISTICS (NO STRATIFICATION)
+# -----------------------------------------------------------------------------
+
+cat("TABLE 1a: Overall Sample Characteristics (N=397)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+table1_overall <- CreateTableOne(
+  vars = vars_table1,
+  data = data_complete,
+  factorVars = cat_vars
+)
+
+# Print to console with detailed statistics
+print(table1_overall, 
+      formatOptions = list(big.mark = ","),
+      nonnormal = c("age", "phq2_score", "osss_3_score", "med_quant"))
+
+# Save to CSV
+table1_overall_csv <- print(table1_overall, 
+                             printToggle = FALSE, 
+                             formatOptions = list(big.mark = ","),
+                             nonnormal = c("age", "phq2_score", "osss_3_score", "med_quant"))
+
+write.csv(table1_overall_csv, "TABLE1a_overall_characteristics.csv")
+cat("\n✓ Saved: TABLE1a_overall_characteristics.csv\n\n")
+
+# -----------------------------------------------------------------------------
+# Create publication-ready version with better formatting
+# -----------------------------------------------------------------------------
+
+cat("Creating publication-ready overall table...\n")
+
+# Manual extraction for cleaner formatting
+table1a_formatted <- data.frame(
+  Variable = character(),
+  `N (%)` = character(),
+  `Mean (SD)` = character(),
+  stringsAsFactors = FALSE
+)
+
+# Helper function to format means
+format_mean_sd <- function(var, data) {
+  if(is.numeric(data[[var]])) {
+    m <- mean(data[[var]], na.rm = TRUE)
+    s <- sd(data[[var]], na.rm = TRUE)
+    return(sprintf("%.1f (%.1f)", m, s))
+  }
+  return(NA)
+}
+
+# Helper function to format proportions
+format_n_pct <- function(var, data) {
+  if(is.factor(data[[var]]) | is.character(data[[var]])) {
+    counts <- table(data[[var]], useNA = "no")
+    total <- sum(counts)
+    result <- sapply(names(counts), function(level) {
+      sprintf("%s: %d (%.1f%%)", level, counts[level], 100 * counts[level] / total)
+    })
+    return(paste(result, collapse = "; "))
+  }
+  return(NA)
+}
+
+# Build formatted table
+for(var in vars_table1) {
+  if(var %in% cat_vars) {
+    table1a_formatted <- rbind(table1a_formatted, data.frame(
+      Variable = var,
+      Value = format_n_pct(var, data_complete),
+      stringsAsFactors = FALSE
+    ))
+  } else {
+    table1a_formatted <- rbind(table1a_formatted, data.frame(
+      Variable = var,
+      Value = format_mean_sd(var, data_complete),
+      stringsAsFactors = FALSE
+    ))
+  }
+}
+
+write.csv(table1a_formatted, "TABLE1a_formatted.csv", row.names = FALSE)
+cat("✓ Saved: TABLE1a_formatted.csv\n\n")
+
+# -----------------------------------------------------------------------------
+# TABLE 1b: CHARACTERISTICS BY DISCONTINUATION STATUS
+# -----------------------------------------------------------------------------
+
+cat("TABLE 1b: Characteristics by BZRA Discontinuation Status\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+# Create stratified table
+table1_stratified <- CreateTableOne(
+  vars = vars_table1,
+  strata = "scrn_stopped_bzra",
+  data = data_complete,
+  factorVars = cat_vars,
+  test = TRUE,
+  addOverall = TRUE
+)
+
+# Print with SMD (standardized mean differences)
+print(table1_stratified, 
+      smd = TRUE,
+      formatOptions = list(big.mark = ","),
+      nonnormal = c("age", "phq2_score", "osss_3_score", "med_quant"))
+
+# Save to CSV
+table1_stratified_csv <- print(table1_stratified, 
+                                smd = TRUE, 
+                                printToggle = FALSE, 
+                                formatOptions = list(big.mark = ","),
+                                nonnormal = c("age", "phq2_score", "osss_3_score", "med_quant"))
+
+write.csv(table1_stratified_csv, "TABLE1b_by_discontinuation.csv")
+cat("\n✓ Saved: TABLE1b_by_discontinuation.csv\n\n")
+
+# -----------------------------------------------------------------------------
+# Create manuscript-ready stratified table
+# -----------------------------------------------------------------------------
+
+cat("Creating publication-ready stratified table...\n")
+
+# Get sample sizes per group
+n_total <- nrow(data_complete)
+n_discontinued <- sum(data_complete$scrn_stopped_bzra == 1, na.rm = TRUE)
+n_continued <- sum(data_complete$scrn_stopped_bzra == 0, na.rm = TRUE)
+
+cat("Sample sizes:\n")
+cat("  Total:", n_total, "\n")
+cat("  Discontinued:", n_discontinued, "(", round(100 * n_discontinued / n_total, 1), "%)\n")
+cat("  Did not discontinue:", n_continued, "(", round(100 * n_continued / n_total, 1), "%)\n\n")
+
+# Extract key components
+table1b_matrix <- print(table1_stratified, 
+                        smd = TRUE, 
+                        printToggle = FALSE,
+                        nonnormal = c("age", "phq2_score", "osss_3_score", "med_quant"))
+
+# Convert to data frame with better column names
+table1b_formatted <- as.data.frame(table1b_matrix)
+table1b_formatted$Variable <- rownames(table1b_formatted)
+
+# Reorder and rename columns
+table1b_formatted <- table1b_formatted %>%
+  select(Variable, Overall, `0`, `1`, p, test, SMD) %>%
+  rename(
+    `Overall (N=${n_total})` = Overall,
+    `Continued BZRA (N=${n_continued})` = `0`,
+    `Discontinued BZRA (N=${n_discontinued})` = `1`,
+    `P-value` = p,
+    `Test Used` = test,
+    `Effect Size (SMD)` = SMD
+  )
+
+write.csv(table1b_formatted, "TABLE1b_manuscript_ready.csv", row.names = FALSE)
+cat("✓ Saved: TABLE1b_manuscript_ready.csv\n\n")
+
+# -----------------------------------------------------------------------------
+# Identify significant differences for Results section
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("SIGNIFICANT DIFFERENCES BY DISCONTINUATION STATUS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Extract p-values
+p_values <- table1b_formatted %>%
+  filter(Variable != "n") %>%
+  mutate(p_numeric = as.numeric(gsub("[^0-9.]", "", `P-value`))) %>%
+  arrange(p_numeric)
+
+# Show significant differences (p < .05)
+sig_diffs <- p_values %>%
+  filter(p_numeric < 0.05)
+
+if(nrow(sig_diffs) > 0) {
+  cat("Variables with significant differences (p < .05):\n\n")
+  print(sig_diffs %>% select(Variable, `P-value`, `Effect Size (SMD)`), row.names = FALSE)
+  cat("\n")
+} else {
+  cat("No significant differences between groups at p < .05\n\n")
+}
+
+# Show moderate-to-large effect sizes (|SMD| > 0.5)
+large_effects <- p_values %>%
+  mutate(SMD_numeric = as.numeric(gsub("[^0-9.-]", "", `Effect Size (SMD)`))) %>%
+  filter(abs(SMD_numeric) > 0.5) %>%
+  arrange(desc(abs(SMD_numeric)))
+
+if(nrow(large_effects) > 0) {
+  cat("Variables with moderate-to-large effect sizes (|SMD| > 0.5):\n\n")
+  print(large_effects %>% select(Variable, `Effect Size (SMD)`, `P-value`), row.names = FALSE)
+  cat("\n")
+} else {
+  cat("No variables with large effect sizes\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# Summary for manuscript
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("MANUSCRIPT TEXT SNIPPET\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("Sample Characteristics:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("The final sample comprised", n_total, "older adults (mean age =", 
+    round(mean(data_complete$age, na.rm = TRUE), 1), "years, SD =", 
+    round(sd(data_complete$age, na.rm = TRUE), 1), ").\n")
+
+# Get sex distribution
+sex_table <- table(data_complete$sex)
+if(length(sex_table) >= 2) {
+  pct_female <- 100 * sex_table["Female"] / sum(sex_table)
+  cat("The sample was", round(pct_female, 1), "% female.\n")
+}
+
+cat("Of the", n_total, "participants,", n_discontinued, "(", 
+    round(100 * n_discontinued / n_total, 1), 
+    "%) reported discontinuing their BZRA medication,\n")
+cat("while", n_continued, "(", round(100 * n_continued / n_total, 1), 
+    "%) continued using it.\n\n")
+
+if(nrow(sig_diffs) > 0) {
+  cat("Those who discontinued differed significantly from those who continued on:\n")
+  for(i in 1:min(3, nrow(sig_diffs))) {
+    cat("  •", sig_diffs$Variable[i], "(p", sig_diffs$`P-value`[i], ")\n")
+  }
+  cat("\n")
+} else {
+  cat("No significant baseline differences were observed between those who\n")
+  cat("discontinued and those who continued BZRA use.\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# Save summary statistics
+# -----------------------------------------------------------------------------
+
+summary_stats <- data.frame(
+  Statistic = c(
+    "Total sample size",
+    "Mean age (SD)",
+    "% Female",
+    "N discontinued",
+    "% discontinued",
+    "N continued",
+    "% continued",
+    "N variables tested",
+    "N significant differences (p<.05)",
+    "N large effect sizes (|SMD|>0.5)"
+  ),
+  Value = c(
+    n_total,
+    sprintf("%.1f (%.1f)", mean(data_complete$age, na.rm = TRUE), sd(data_complete$age, na.rm = TRUE)),
+    ifelse(exists("pct_female"), sprintf("%.1f%%", pct_female), "N/A"),
+    n_discontinued,
+    sprintf("%.1f%%", 100 * n_discontinued / n_total),
+    n_continued,
+    sprintf("%.1f%%", 100 * n_continued / n_total),
+    length(vars_table1),
+    nrow(sig_diffs),
+    nrow(large_effects)
+  )
+)
+
+write.csv(summary_stats, "TABLE1_summary_statistics.csv", row.names = FALSE)
+cat("✓ Saved: TABLE1_summary_statistics.csv\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("TABLE 1 CREATION COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("FILES CREATED:\n")
+cat("  1. TABLE1a_overall_characteristics.csv - Overall sample\n")
+cat("  2. TABLE1a_formatted.csv - Publication-ready overall table\n")
+cat("  3. TABLE1b_by_discontinuation.csv - Stratified by outcome\n")
+cat("  4. TABLE1b_manuscript_ready.csv - Publication-ready stratified table\n")
+cat("  5. TABLE1_summary_statistics.csv - Key numbers for text\n\n")
+
+cat("USE IN MANUSCRIPT:\n")
+cat("  • Table 1a for 'Sample Characteristics' section\n")
+cat("  • Table 1b for 'Bivariate Comparisons' section\n")
+cat("  • Summary statistics for Results narrative\n\n")
+```
+
+
+
+
+
+## VSURF SELECTION
 
 ## PERS ONLY
 
@@ -4069,10 +4520,6 @@ cat("     dimensionality while maintaining interpretability'\n\n")
 
 cat("✓ Ready for downstream analysis!\n\n")
 ```
-
-
-
-
 
 ## CLIN ONLY
 
@@ -4722,7 +5169,6 @@ cat("     (they occur DURING stopping, not before the decision)\n\n")
 
 cat("✓ Ready for downstream analysis!\n\n")
 ```
-
 
 ## CLIN + PERS
 
@@ -5508,7 +5954,6 @@ cat("  3. Decide on final variable set for modeling\n")
 cat("  4. Proceed to logistic regression with selected variables\n\n")
 ```
 
-
 ## Logistic Regression Validation
 
 ```{r}
@@ -5976,11 +6421,241 @@ ggsave("incremental_auc_improvement.png", plot = p_incremental,
        width = 10, height = 5, dpi = 300)
 cat("✓ Saved: incremental_auc_improvement.png\n\n")
 
+#==============================================================================
+# CHUNK A: MODEL DIAGNOSTICS (MANDATORY)
+#==============================================================================
+# Purpose: Check assumptions and model fit for logistic regression
+# Insert after: Final pooled model results (around line 5900)
+#==============================================================================
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("MODEL DIAGNOSTICS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+library(car)
+library(ResourceSelection)
+
+# Use first imputation for diagnostics (standard practice)
+data_complete <- complete(mids_data, 1)
+
+# Refit the final model
+final_model <- glm(
+  scrn_stopped_bzra ~ age + sex + income + driving_freq +
+    DBAS_Medications + CISS_Emotion + SURPS_Hopelessness +
+    SURPS_Anxiety_Sensitivity + BFI_Openness + BFI_Extraversion +
+    BFI_Neuroticism + DBAS_Consequences +
+    dependence_2 + side_effects_1 + n_sleep_conditions,
+  data = data_complete,
+  family = binomial
+)
+
+# -----------------------------------------------------------------------------
+# A. Check for multicollinearity (VIF)
+# -----------------------------------------------------------------------------
+
+cat("PART A: Multicollinearity (VIF)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+vif_values <- vif(final_model)
+
+# For ordinal/factor variables with multiple terms, get GVIF^(1/(2*Df))
+if(is.matrix(vif_values)) {
+  vif_summary <- as.data.frame(vif_values)
+  vif_summary$Variable <- rownames(vif_summary)
+  vif_summary <- vif_summary %>%
+    mutate(VIF_adjusted = `GVIF^(1/(2*Df))`) %>%
+    select(Variable, VIF = VIF_adjusted) %>%
+    arrange(desc(VIF))
+} else {
+  vif_summary <- data.frame(
+    Variable = names(vif_values),
+    VIF = vif_values
+  ) %>% arrange(desc(VIF))
+}
+
+print(vif_summary, row.names = FALSE, digits = 2)
+
+# Flag problematic VIF
+high_vif <- vif_summary %>% filter(VIF > 5)
+if(nrow(high_vif) > 0) {
+  cat("\n⚠️ HIGH MULTICOLLINEARITY DETECTED (VIF > 5):\n")
+  print(high_vif, row.names = FALSE)
+  cat("\n⚠️ Consider removing or combining these variables.\n\n")
+} else if(any(vif_summary$VIF > 3)) {
+  cat("\n⚠️ MODERATE MULTICOLLINEARITY (VIF > 3):\n")
+  print(vif_summary %>% filter(VIF > 3), row.names = FALSE)
+  cat("\n→ Monitor these variables but likely acceptable.\n\n")
+} else {
+  cat("\n✓ No multicollinearity concerns (all VIF < 3)\n\n")
+}
+
+# Save
+write.csv(vif_summary, "model_diagnostics_VIF.csv", row.names = FALSE)
+
+# -----------------------------------------------------------------------------
+# B. Check for influential cases (Cook's Distance)
+# -----------------------------------------------------------------------------
+
+cat("PART B: Influential Cases (Cook's Distance)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+cooksd <- cooks.distance(final_model)
+threshold <- 4 / nrow(data_complete)
+influential_cases <- which(cooksd > threshold)
+
+cat("Cook's Distance threshold (4/n):", round(threshold, 4), "\n")
+cat("Number of influential cases:", length(influential_cases), 
+    "(", round(100 * length(influential_cases) / nrow(data_complete), 1), "% of sample)\n")
+
+if(length(influential_cases) > 0) {
+  cat("\nInfluential case IDs:", head(influential_cases, 10), 
+      ifelse(length(influential_cases) > 10, "...", ""), "\n")
+  cat("Max Cook's D:", round(max(cooksd), 4), "\n\n")
+  
+  # Optional: Refit without influential cases to check robustness
+  data_no_influential <- data_complete[-influential_cases, ]
+  model_no_influential <- glm(
+    scrn_stopped_bzra ~ age + sex + income + driving_freq +
+      DBAS_Medications + CISS_Emotion + SURPS_Hopelessness +
+      SURPS_Anxiety_Sensitivity + BFI_Openness + BFI_Extraversion +
+      BFI_Neuroticism + DBAS_Consequences +
+      dependence_2 + side_effects_1 + n_sleep_conditions,
+    data = data_no_influential,
+    family = binomial
+  )
+  
+  # Compare key coefficients
+  coef_comparison <- data.frame(
+    Variable = names(coef(final_model)),
+    Full_Sample = coef(final_model),
+    Without_Influential = coef(model_no_influential)
+  ) %>%
+    mutate(Pct_Change = round(100 * (Without_Influential - Full_Sample) / Full_Sample, 1))
+  
+  cat("Coefficient stability check (% change when removing influential cases):\n")
+  print(coef_comparison %>% filter(abs(Pct_Change) > 10), row.names = FALSE)
+  
+  if(any(abs(coef_comparison$Pct_Change) > 20, na.rm = TRUE)) {
+    cat("\n⚠️ Some coefficients change >20% - results may be sensitive to outliers\n\n")
+  } else {
+    cat("\n✓ Coefficients stable - results robust to influential cases\n\n")
+  }
+  
+} else {
+  cat("\n✓ No influential cases detected\n\n")
+}
+
+# Create diagnostic plot
+png("model_diagnostics_cooks_distance.png", width = 800, height = 600, res = 120)
+plot(cooksd, type = "h", main = "Cook's Distance", 
+     ylab = "Cook's Distance", xlab = "Observation Number")
+abline(h = threshold, col = "red", lty = 2)
+text(length(cooksd) * 0.8, threshold * 1.2, 
+     paste("Threshold =", round(threshold, 4)), col = "red")
+dev.off()
+cat("✓ Saved: model_diagnostics_cooks_distance.png\n\n")
+
+# -----------------------------------------------------------------------------
+# C. Check model calibration (Hosmer-Lemeshow test)
+# -----------------------------------------------------------------------------
+
+cat("PART C: Model Calibration (Hosmer-Lemeshow Test)\n")
+cat("─────────────────────────────────────────────────────────────\n\n")
+
+hl_test <- hoslem.test(final_model$y, fitted(final_model), g = 10)
+
+cat("Hosmer-Lemeshow Test:\n")
+cat("  χ² =", round(hl_test$statistic, 3), "\n")
+cat("  df =", hl_test$parameter, "\n")
+cat("  p-value =", round(hl_test$p.value, 4), "\n\n")
+
+if(hl_test$p.value > 0.05) {
+  cat("✓ Good calibration (p > .05) - predicted probabilities match observed rates\n\n")
+} else {
+  cat("⚠️ Poor calibration (p < .05) - model may over/under-predict probabilities\n\n")
+}
+
+# Create calibration plot
+library(ggplot2)
+
+# Create deciles of predicted probability
+data_complete$pred_prob <- fitted(final_model)
+data_complete$decile <- cut(data_complete$pred_prob, 
+                             breaks = quantile(data_complete$pred_prob, probs = seq(0, 1, 0.1)),
+                             include.lowest = TRUE, labels = 1:10)
+
+# Calculate observed vs expected by decile
+calibration_data <- data_complete %>%
+  group_by(decile) %>%
+  summarise(
+    observed = mean(scrn_stopped_bzra, na.rm = TRUE),
+    expected = mean(pred_prob, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+# Plot
+p_calibration <- ggplot(calibration_data, aes(x = expected, y = observed)) +
+  geom_point(size = 3) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(
+    title = "Calibration Plot",
+    subtitle = paste0("Hosmer-Lemeshow p = ", round(hl_test$p.value, 3)),
+    x = "Predicted Probability",
+    y = "Observed Proportion"
+  ) +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1))
+
+ggsave("model_diagnostics_calibration.png", p_calibration, width = 8, height = 6, dpi = 300)
+cat("✓ Saved: model_diagnostics_calibration.png\n\n")
+
+# -----------------------------------------------------------------------------
+# D. Summary
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("DIAGNOSTIC SUMMARY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+diagnostic_summary <- data.frame(
+  Check = c("Multicollinearity (VIF)", "Influential Cases", "Calibration (HL test)"),
+  Result = c(
+    ifelse(max(vif_summary$VIF) < 5, "✓ PASS", "⚠️ WARNING"),
+    ifelse(length(influential_cases) < nrow(data_complete) * 0.05, "✓ PASS", "⚠️ WARNING"),
+    ifelse(hl_test$p.value > 0.05, "✓ PASS", "⚠️ WARNING")
+  ),
+  Details = c(
+    paste("Max VIF =", round(max(vif_summary$VIF), 2)),
+    paste(length(influential_cases), "cases (", round(100 * length(influential_cases) / nrow(data_complete), 1), "%)"),
+    paste("p =", round(hl_test$p.value, 3))
+  )
+)
+
+print(diagnostic_summary, row.names = FALSE)
+
+cat("\n")
+if(all(grepl("PASS", diagnostic_summary$Result))) {
+  cat("✓ All diagnostic checks passed - model assumptions satisfied\n\n")
+} else {
+  cat("⚠️ Some diagnostic concerns - see details above\n\n")
+}
+
+# Save summary
+write.csv(diagnostic_summary, "model_diagnostics_summary.csv", row.names = FALSE)
+cat("✓ Saved: model_diagnostics_summary.csv\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("MODEL DIAGNOSTICS COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
 # ==============================================================================
-# I. Save results
+# E. Save results
 # ==============================================================================
 
-cat("PART I: Saving results\n")
+cat("PART E: Saving results\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
 # Save all results
@@ -6053,7 +6728,7 @@ write.csv(all_summaries, "all_model_coefficients.csv", row.names = FALSE)
 cat("✓ Saved: all_model_coefficients.csv\n\n")
 
 # ==============================================================================
-# J. Summary and interpretation
+# F. Summary and interpretation
 # ==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
@@ -6557,8 +7232,6 @@ Report that DBAS_Medications is the robust, significant predictor that emerged f
 
 cat("═══════════════════════════════════════════════════════════════\n\n")
 ```
-
-
 
 ## FDR Comparison Descriptive Stats
 
@@ -7474,11 +8147,6 @@ cat("  • driving_freq: Labeled driving frequency\n\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 ```
 
-
-
-
-
-
 ## Hopkins Test
 
 Measures the clusterability of the data
@@ -7765,10 +8433,6 @@ cat("  2. hopkins_distance_distribution.png\n\n")
 
 cat("═══════════════════════════════════════════════════════════════\n\n")
 ```
-
-
-
-
 
 ## Dimensional Personality Regression Analysis
 
@@ -8183,8 +8847,6 @@ cat("  • dimensional_regression_results.rds\n")
 cat("  • dimensional_model3_odds_ratios.csv\n")
 cat("  • dimensional_interaction_results.csv\n\n")
 ```
-
-
 
 ## Sensitivity Analysis
 
@@ -9344,7 +10006,6 @@ cat("═════════════════════════
 cat("Total runtime:", round(as.numeric(Sys.time() - start_time, units = "mins"), 1), "minutes\n\n")
 ```
 
-
 ## Follow-up
 
 ```{r}
@@ -9904,9 +10565,6 @@ cat("  2. Consider age-stratified reporting\n")
 cat("  3. Decide on final model specification\n")
 cat("  4. Update manuscript with these findings\n\n")
 ```
-
-
-
 
 ## False Decision Rate Comparison
 
@@ -10505,5 +11163,3 @@ cat("  Proceed to Chunk 12 (Final Documentation and Reporting)\n\n")
 
 cat("✓ Ready for final documentation!\n\n")
 ```
-
-
