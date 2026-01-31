@@ -1718,7 +1718,828 @@ cat("NEXT STEP: Proceed to diagnostics and validation (Chunk 7)\n\n")
 ```
 
 
-## Multiple Imputation
+## Multiple Imputation Diagnostics
+
+```{r}
+#==============================================================================
+# CHUNK 7: PRE-IMPUTATION DIAGNOSTICS & OPTIMIZATION
+#==============================================================================
+# Purpose: Comprehensive diagnostics before multiple imputation
+# Outputs: Optimal m, maxit, predictor matrix, and imputation methods
+#==============================================================================
+
+cat("\n")
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PRE-IMPUTATION DIAGNOSTICS & OPTIMIZATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Load prepared dataset from Chunk 6
+if(file.exists("SIMOA_analysis.rds")) {
+  SIMOA_analysis <- readRDS("SIMOA_analysis.rds")
+  analysis_vars <- readRDS("analysis_variable_lists.rds")
+  cat("✓ Loaded SIMOA_analysis.rds from Chunk 6\n")
+  cat("  Dimensions:", nrow(SIMOA_analysis), "rows ×", ncol(SIMOA_analysis), "columns\n\n")
+} else {
+  stop("ERROR: SIMOA_analysis.rds not found. Please run Chunk 6 first.")
+}
+
+# Verify reverse coding was done
+cat("VERIFICATION: Checking reverse coding from Chunk 6\n")
+cat("─────────────────────────────────────────────────────────────\n")
+if(!is.null(analysis_vars$bfi_reversed) && length(analysis_vars$bfi_reversed) > 0) {
+  cat("✓ BFI items reversed in Chunk 6:", length(analysis_vars$bfi_reversed), "\n")
+  cat("  Items:", paste(analysis_vars$bfi_reversed, collapse = ", "), "\n")
+} else {
+  cat("⚠️  No BFI reverse coding detected\n")
+}
+
+if(!is.null(analysis_vars$surps_reversed) && length(analysis_vars$surps_reversed) > 0) {
+  cat("✓ SURPS items reversed in Chunk 6:", length(analysis_vars$surps_reversed), "\n")
+  cat("  Items:", paste(analysis_vars$surps_reversed, collapse = ", "), "\n")
+} else {
+  cat("⚠️  No SURPS reverse coding detected\n")
+}
+cat("\n")
+
+# Remove outcome from imputation dataset
+outcome <- analysis_vars$outcome
+if(outcome %in% names(SIMOA_analysis)) {
+  df_imp <- SIMOA_analysis %>% select(-all_of(outcome))
+  cat("✓ Removed outcome variable:", outcome, "\n")
+  cat("  Imputation dataset:", nrow(df_imp), "rows ×", ncol(df_imp), "columns\n\n")
+} else {
+  df_imp <- SIMOA_analysis
+  cat("⚠️  Outcome variable not found in dataset\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# PART A: COMPREHENSIVE MISSINGNESS DIAGNOSTICS
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART A: COMPREHENSIVE MISSINGNESS DIAGNOSTICS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Calculate missingness statistics
+n_total <- nrow(df_imp)
+n_vars <- ncol(df_imp)
+missing_counts <- colSums(is.na(df_imp))
+missing_pct <- 100 * missing_counts / n_total
+
+# Overall missingness
+total_cells <- n_total * n_vars
+total_missing <- sum(missing_counts)
+pct_missing_overall <- 100 * total_missing / total_cells
+
+cat("OVERALL MISSINGNESS:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("  Total observations:", n_total, "\n")
+cat("  Total variables:", n_vars, "\n")
+cat("  Total cells:", total_cells, "\n")
+cat("  Missing cells:", total_missing, "(", round(pct_missing_overall, 2), "%)\n")
+cat("  Complete cases:", sum(complete.cases(df_imp)), 
+    "(", round(100 * sum(complete.cases(df_imp)) / n_total, 1), "%)\n\n")
+
+# Variables with missing data
+vars_with_missing <- names(missing_counts[missing_counts > 0])
+vars_complete <- names(missing_counts[missing_counts == 0])
+
+cat("VARIABLE-LEVEL MISSINGNESS:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("  Variables with missing data:", length(vars_with_missing), "\n")
+cat("  Variables complete:", length(vars_complete), "\n\n")
+
+# Missingness categories
+cat("MISSINGNESS SEVERITY:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+miss_cats <- cut(missing_pct, 
+                 breaks = c(0, 5, 10, 25, 40, 100),
+                 labels = c("Minimal (<5%)", "Low (5-10%)", "Moderate (10-25%)", 
+                           "High (25-40%)", "Very High (>40%)"),
+                 include.lowest = TRUE)
+cat(sprintf("  Minimal (<5%%):      %3d variables\n", sum(miss_cats == "Minimal (<5%)", na.rm = TRUE)))
+cat(sprintf("  Low (5-10%%):        %3d variables\n", sum(miss_cats == "Low (5-10%)", na.rm = TRUE)))
+cat(sprintf("  Moderate (10-25%%):  %3d variables\n", sum(miss_cats == "Moderate (10-25%)", na.rm = TRUE)))
+cat(sprintf("  High (25-40%%):      %3d variables\n", sum(miss_cats == "High (25-40%)", na.rm = TRUE)))
+cat(sprintf("  Very High (>40%%):   %3d variables\n\n", sum(miss_cats == "Very High (>40%)", na.rm = TRUE)))
+
+# Top 20 variables by missingness
+cat("TOP 20 VARIABLES BY MISSINGNESS:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+top_missing <- head(sort(missing_pct[missing_pct > 0], decreasing = TRUE), 20)
+for(i in seq_along(top_missing)) {
+  cat(sprintf("  %2d. %-30s: %5.1f%% (%4d obs)\n", 
+              i, names(top_missing)[i], top_missing[i], 
+              round(top_missing[i] * n_total / 100)))
+}
+cat("\n")
+
+# Calculate optimal m based on highest missingness
+max_miss_pct <- max(missing_pct)
+max_miss_var <- names(missing_pct)[which.max(missing_pct)]
+
+cat("OPTIMAL M CALCULATION:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("  Highest missingness:", round(max_miss_pct, 1), "% (", max_miss_var, ")\n")
+cat("  Rule: m should be at least equal to % missing\n")
+
+optimal_m <- ceiling(max_miss_pct)
+if(optimal_m < 30) {
+  optimal_m <- 30
+  cat("  → Adjusted to minimum m = 30\n")
+}
+if(optimal_m > 50) {
+  optimal_m <- 50
+  cat("  → Capped at maximum m = 50\n")
+}
+
+cat("  ✓ RECOMMENDED m =", optimal_m, "\n\n")
+
+# Save missingness summary
+miss_summary <- data.frame(
+  variable = names(missing_pct),
+  n_missing = missing_counts,
+  pct_missing = missing_pct,
+  category = miss_cats
+) %>%
+  arrange(desc(pct_missing))
+
+write.csv(miss_summary, "pre_imputation_missingness_summary.csv", row.names = FALSE)
+cat("✓ Saved: pre_imputation_missingness_summary.csv\n\n")
+
+# -----------------------------------------------------------------------------
+# PART B: FLUX ANALYSIS (Fraction of Missing Information)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART B: FLUX ANALYSIS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("PURPOSE: Flux estimates how much information is lost due to missingness.\n")
+cat("  • Flux < 0.3: Low information loss (easy to impute)\n")
+cat("  • Flux 0.3-0.5: Moderate loss (acceptable)\n")
+cat("  • Flux > 0.5: High loss (imputation may be unreliable)\n\n")
+
+# Initialize MICE to get flux
+init_mice <- mice(df_imp, maxit = 0, print = FALSE)
+
+if(!is.null(init_mice$loggedEvents) && nrow(init_mice$loggedEvents) > 0) {
+  cat("⚠️  MICE initialization warnings:\n")
+  print(init_mice$loggedEvents)
+  cat("\n")
+}
+
+# Get flux values
+if(!is.null(init_mice$loggedEvents) && "flux" %in% names(init_mice$loggedEvents)) {
+  flux_df <- data.frame(
+    variable = names(init_mice$flux),
+    flux = init_mice$flux
+  ) %>%
+    filter(!is.na(flux)) %>%
+    arrange(desc(flux))
+  
+  if(nrow(flux_df) > 0) {
+    cat("FLUX SUMMARY:\n")
+    cat("─────────────────────────────────────────────────────────────\n")
+    
+    high_flux <- flux_df %>% filter(flux > 0.5)
+    mod_flux <- flux_df %>% filter(flux >= 0.3 & flux <= 0.5)
+    low_flux <- flux_df %>% filter(flux < 0.3)
+    
+    cat(sprintf("  Low flux (<0.3):        %3d variables\n", nrow(low_flux)))
+    cat(sprintf("  Moderate flux (0.3-0.5): %3d variables\n", nrow(mod_flux)))
+    cat(sprintf("  High flux (>0.5):       %3d variables\n\n", nrow(high_flux)))
+    
+    if(nrow(high_flux) > 0) {
+      cat("⚠️  VARIABLES WITH HIGH FLUX (>0.5):\n")
+      for(i in 1:min(10, nrow(high_flux))) {
+        cat(sprintf("  %2d. %-30s: flux = %.3f\n", 
+                    i, high_flux$variable[i], high_flux$variable[i]))
+      }
+      cat("\nThese variables may be difficult to impute reliably.\n")
+      cat("Consider: (1) Exclude if not essential, (2) Use auxiliary variables\n\n")
+    }
+    
+    write.csv(flux_df, "flux_analysis.csv", row.names = FALSE)
+    cat("✓ Saved: flux_analysis.csv\n\n")
+  }
+} else {
+  cat("ℹ️  Flux values not available from MICE initialization\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# PART C: VARIABLE VALIDATION
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART C: VARIABLE VALIDATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# C1. Constant and near-zero variance check
+cat("C1. Checking for constant/near-zero variance variables\n")
+cat("─────────────────────────────────────────────────────────────\n")
+
+constant_vars <- character()
+nzv_vars <- character()
+
+for(var in names(df_imp)) {
+  if(is.numeric(df_imp[[var]])) {
+    non_na <- na.omit(df_imp[[var]])
+    n_unique <- length(unique(non_na))
+    
+    if(n_unique <= 1) {
+      constant_vars <- c(constant_vars, var)
+      cat("  ⚠️  Constant:", var, "(", n_unique, "unique value)\n")
+    } else if(length(non_na) > 0) {
+      var_val <- var(non_na)
+      if(var_val < 1e-10) {
+        nzv_vars <- c(nzv_vars, var)
+        cat("  ⚠️  Near-zero variance:", var, "(SD =", round(sqrt(var_val), 6), ")\n")
+      }
+    }
+  } else if(is.factor(df_imp[[var]])) {
+    non_na <- na.omit(df_imp[[var]])
+    n_levels <- length(levels(df_imp[[var]]))
+    n_unique <- length(unique(non_na))
+    
+    if(n_unique <= 1) {
+      constant_vars <- c(constant_vars, var)
+      cat("  ⚠️  Single-level factor:", var, "\n")
+    }
+  }
+}
+
+if(length(constant_vars) == 0 && length(nzv_vars) == 0) {
+  cat("  ✓ No constant or near-zero variance variables detected\n")
+}
+cat("\n")
+
+# C2. Minimum sample size check
+cat("C2. Checking minimum sample size (non-missing observations)\n")
+cat("─────────────────────────────────────────────────────────────\n")
+
+low_n_vars <- character()
+for(var in names(df_imp)) {
+  n_obs <- sum(!is.na(df_imp[[var]]))
+  if(n_obs < 10 && n_obs < n_total) {  # Has missing AND < 10 obs
+    low_n_vars <- c(low_n_vars, var)
+    cat("  ⚠️  Low sample size:", var, "(n =", n_obs, ")\n")
+  }
+}
+
+if(length(low_n_vars) == 0) {
+  cat("  ✓ All variables have adequate sample size (n ≥ 10)\n")
+}
+cat("\n")
+
+# C3. Separation check for binary variables
+cat("C3. Checking for separation in binary/categorical variables\n")
+cat("─────────────────────────────────────────────────────────────\n")
+
+separation_vars <- character()
+for(var in names(df_imp)) {
+  if(is.factor(df_imp[[var]]) || (is.numeric(df_imp[[var]]) && 
+                                   length(unique(na.omit(df_imp[[var]]))) <= 5)) {
+    # Check if any level has < 5 observations
+    non_na <- na.omit(df_imp[[var]])
+    if(length(non_na) > 0) {
+      freq_table <- table(non_na)
+      if(any(freq_table < 5)) {
+        separation_vars <- c(separation_vars, var)
+        cat("  ⚠️  Sparse levels:", var, 
+            "(min count =", min(freq_table), ")\n")
+      }
+    }
+  }
+}
+
+if(length(separation_vars) == 0) {
+  cat("  ✓ No separation issues detected\n")
+}
+cat("\n")
+
+# Compile problematic variables
+problematic_vars <- unique(c(constant_vars, nzv_vars, low_n_vars))
+
+if(length(problematic_vars) > 0) {
+  cat("SUMMARY OF PROBLEMATIC VARIABLES:\n")
+  cat("─────────────────────────────────────────────────────────────\n")
+  cat("  Total problematic:", length(problematic_vars), "\n")
+  cat("  These will be excluded from imputation\n\n")
+  
+  # Remove from imputation dataset
+  df_imp <- df_imp %>% select(-all_of(problematic_vars))
+  cat("  ✓ Removed", length(problematic_vars), "problematic variables\n")
+  cat("  Remaining:", ncol(df_imp), "variables\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# PART D: MULTICOLLINEARITY CHECK (VIF)
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART D: MULTICOLLINEARITY CHECK (VIF)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("PURPOSE: High multicollinearity can cause imputation instability.\n")
+cat("  • VIF < 5: Acceptable\n")
+cat("  • VIF 5-10: Moderate concern\n")
+cat("  • VIF > 10: High multicollinearity (consider removing)\n\n")
+
+# Select numeric variables with complete data for VIF
+numeric_complete <- df_imp %>%
+  select(where(is.numeric)) %>%
+  select(where(~sum(!is.na(.)) == n_total))  # Only complete variables
+
+if(ncol(numeric_complete) >= 2) {
+  cat("Testing VIF on", ncol(numeric_complete), "complete numeric variables...\n\n")
+  
+  # Fit a simple linear model to get VIF
+  if(ncol(numeric_complete) <= 20) {
+    # Test all if ≤20 variables
+    vif_vars <- names(numeric_complete)
+  } else {
+    # Sample 20 if more
+    vif_vars <- sample(names(numeric_complete), 20)
+    cat("  (Testing sample of 20 variables due to computational limits)\n\n")
+  }
+  
+  # Create formula
+  vif_formula <- as.formula(paste(vif_vars[1], "~", paste(vif_vars[-1], collapse = " + ")))
+  
+  # Fit model and get VIF
+  tryCatch({
+    vif_model <- lm(vif_formula, data = numeric_complete)
+    vif_values <- car::vif(vif_model)
+    
+    vif_df <- data.frame(
+      variable = names(vif_values),
+      VIF = vif_values
+    ) %>%
+      arrange(desc(VIF))
+    
+    cat("VIF SUMMARY:\n")
+    cat("─────────────────────────────────────────────────────────────\n")
+    high_vif <- vif_df %>% filter(VIF > 10)
+    mod_vif <- vif_df %>% filter(VIF >= 5 & VIF <= 10)
+    low_vif <- vif_df %>% filter(VIF < 5)
+    
+    cat(sprintf("  Low VIF (<5):        %3d variables\n", nrow(low_vif)))
+    cat(sprintf("  Moderate VIF (5-10): %3d variables\n", nrow(mod_vif)))
+    cat(sprintf("  High VIF (>10):      %3d variables\n\n", nrow(high_vif)))
+    
+    if(nrow(high_vif) > 0) {
+      cat("⚠️  VARIABLES WITH HIGH VIF (>10):\n")
+      for(i in 1:nrow(high_vif)) {
+        cat(sprintf("  %2d. %-30s: VIF = %.2f\n", 
+                    i, high_vif$variable[i], high_vif$VIF[i]))
+      }
+      cat("\nConsider: Remove one from each correlated pair\n\n")
+    }
+    
+    write.csv(vif_df, "vif_analysis.csv", row.names = FALSE)
+    cat("✓ Saved: vif_analysis.csv\n\n")
+    
+  }, error = function(e) {
+    cat("⚠️  VIF calculation failed:", conditionMessage(e), "\n")
+    cat("   Proceeding without VIF analysis\n\n")
+  })
+  
+} else {
+  cat("ℹ️  Not enough complete numeric variables for VIF analysis\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# PART E: DEFINE VARIABLE TYPES FOR IMPUTATION
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART E: DEFINING VARIABLE TYPES FOR IMPUTATION\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Get variable lists from Chunk 6
+continuous_vars <- c(
+  # Demographics
+  "age",
+  
+  # Health
+  "med_quant", "phq2_score", "osss_3_score",
+  
+  # Condition counts
+  "n_health_conditions", "n_physical_conditions", "n_ment_conditions", "n_sleep_conditions",
+  
+  # Withdrawal count
+  "wdl_symptom_count",
+  
+  # Personality (all items are continuous)
+  if(!is.null(analysis_vars$dbas)) analysis_vars$dbas else character(),
+  if(!is.null(analysis_vars$bfi)) analysis_vars$bfi else character(),
+  if(!is.null(analysis_vars$surps)) analysis_vars$surps else character(),
+  if(!is.null(analysis_vars$ciss)) analysis_vars$ciss else character()
+)
+
+binary_vars <- c("sex")
+
+ordered_vars <- c(
+  # Demographics
+  "education", "income", "employment", "driving_freq",
+  
+  # Health
+  "gen_health",
+  
+  # Sleep aids
+  if(!is.null(analysis_vars$sleep_aids)) analysis_vars$sleep_aids else character(),
+  
+  # Adverse effects
+  if(!is.null(analysis_vars$adverse_effects)) analysis_vars$adverse_effects else character(),
+  
+  # Withdrawal combined
+  "stop_wdl_exp_combined"
+)
+
+# Withdrawal indicators (unordered binary)
+unordered_categorical <- c(
+  paste0("stop_wdl_exp___", 0:4)
+)
+
+# Filter to only variables in df_imp
+continuous_vars <- continuous_vars[continuous_vars %in% names(df_imp)]
+binary_vars <- binary_vars[binary_vars %in% names(df_imp)]
+ordered_vars <- ordered_vars[ordered_vars %in% names(df_imp)]
+unordered_categorical <- unordered_categorical[unordered_categorical %in% names(df_imp)]
+
+cat("VARIABLE TYPE ASSIGNMENT:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("  Continuous (PMM):", length(continuous_vars), "variables\n")
+cat("  Binary (logreg):", length(binary_vars), "variables\n")
+cat("  Ordered (polr):", length(ordered_vars), "variables\n")
+cat("  Unordered categorical (polyreg):", length(unordered_categorical), "variables\n")
+cat("  Total:", length(continuous_vars) + length(binary_vars) + 
+    length(ordered_vars) + length(unordered_categorical), "\n\n")
+
+# Convert to proper types
+cat("Converting variables to proper types...\n")
+
+# Continuous → numeric
+for(var in continuous_vars) {
+  if(!is.numeric(df_imp[[var]])) {
+    df_imp[[var]] <- as.numeric(as.character(df_imp[[var]]))
+  }
+}
+
+# Binary → numeric 0/1
+for(var in binary_vars) {
+  df_imp[[var]] <- as.numeric(df_imp[[var]])
+}
+
+# Ordered → ordered factor
+for(var in ordered_vars) {
+  if(!is.ordered(df_imp[[var]])) {
+    df_imp[[var]] <- factor(df_imp[[var]], ordered = TRUE)
+  }
+}
+
+# Unordered → factor
+for(var in unordered_categorical) {
+  if(!is.factor(df_imp[[var]]) || is.ordered(df_imp[[var]])) {
+    df_imp[[var]] <- factor(df_imp[[var]], ordered = FALSE)
+  }
+}
+
+cat("✓ Variable type conversion complete\n\n")
+
+# -----------------------------------------------------------------------------
+# PART F: CONVERGENCE TESTING
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART F: CONVERGENCE TESTING (R-HAT DIAGNOSTICS)\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("PURPOSE: Test different maxit values to find optimal convergence.\n")
+cat("  • R-hat < 1.05: Excellent convergence\n")
+cat("  • R-hat 1.05-1.1: Acceptable convergence\n")
+cat("  • R-hat > 1.1: Poor convergence (need more iterations)\n\n")
+
+# Initialize MICE
+cat("Initializing MICE for convergence testing...\n")
+init <- mice(df_imp, maxit = 0, print = FALSE)
+method <- init$method
+pred <- init$predictorMatrix
+
+# Set methods
+for(var in continuous_vars) {
+  if(var %in% names(method) && var %in% vars_with_missing) {
+    method[var] <- "pmm"
+  }
+}
+for(var in binary_vars) {
+  if(var %in% names(method) && var %in% vars_with_missing) {
+    method[var] <- "logreg"
+  }
+}
+for(var in ordered_vars) {
+  if(var %in% names(method) && var %in% vars_with_missing) {
+    method[var] <- "polr"
+  }
+}
+for(var in unordered_categorical) {
+  if(var %in% names(method) && var %in% vars_with_missing) {
+    method[var] <- "polyreg"
+  }
+}
+
+# Remove methods for problematic variables
+if(length(problematic_vars) > 0) {
+  for(var in problematic_vars) {
+    if(var %in% names(method)) {
+      method[var] <- ""
+    }
+  }
+}
+
+cat("✓ Imputation methods assigned\n\n")
+
+cat("METHOD SUMMARY:\n")
+cat("  PMM:", sum(method == "pmm"), "\n")
+cat("  Logreg:", sum(method == "logreg"), "\n")
+cat("  Polr:", sum(method == "polr"), "\n")
+cat("  Polyreg:", sum(method == "polyreg"), "\n")
+cat("  Not imputed:", sum(method == ""), "\n\n")
+
+# R-hat calculation function
+calculate_rhat <- function(chain_vals_list) {
+  numeric_chains <- lapply(chain_vals_list, function(x) {
+    if(is.factor(x)) as.numeric(x) else x
+  })
+  
+  numeric_chains <- lapply(numeric_chains, na.omit)
+  if(any(sapply(numeric_chains, length) == 0)) return(NA)
+  
+  n <- length(numeric_chains[[1]])
+  m <- length(numeric_chains)
+  
+  chain_means <- sapply(numeric_chains, mean)
+  overall_mean <- mean(unlist(numeric_chains))
+  
+  B <- (n / (m - 1)) * sum((chain_means - overall_mean)^2)
+  chain_vars <- sapply(numeric_chains, var)
+  W <- mean(chain_vars)
+  
+  var_plus <- ((n - 1) / n) * W + (1 / n) * B
+  
+  if(W > 1e-10 && is.finite(var_plus)) {
+    return(sqrt(var_plus / W))
+  } else {
+    return(NA)
+  }
+}
+
+# Test different maxit values
+maxit_test_values <- c(5, 10, 15, 20, 30)
+n_chains <- 4
+
+cat("Testing convergence with", n_chains, "sequential chains...\n")
+cat("(Note: Running sequentially to avoid parallelization issues)\n\n")
+
+convergence_results <- list()
+
+for(maxit_test in maxit_test_values) {
+  cat("Testing maxit =", maxit_test, "...\n")
+  
+  chain_results <- list()
+  failed_chains <- 0
+  
+  # CRITICAL FIX: Run chains sequentially, not in parallel
+  for(chain in 1:n_chains) {
+    seed_val <- 12345 + chain * 1000
+    
+    chain_imp <- tryCatch({
+      suppressWarnings(
+        mice(
+          df_imp,
+          m = 1,
+          method = method,
+          predictorMatrix = pred,
+          maxit = maxit_test,
+          seed = seed_val,
+          printFlag = FALSE
+        )
+      )
+    }, error = function(e) {
+      cat("  ⚠️  Chain", chain, "failed:", conditionMessage(e), "\n")
+      failed_chains <<- failed_chains + 1
+      return(NULL)
+    })
+    
+    if(!is.null(chain_imp)) {
+      chain_results[[chain]] <- complete(chain_imp, 1)
+      cat("  ✓ Chain", chain, "complete\n")
+    }
+  }
+  
+  if(length(chain_results) < 2) {
+    cat("  ✗ Too many failed chains - skipping\n\n")
+    convergence_results[[as.character(maxit_test)]] <- list(
+      maxit = maxit_test,
+      max_rhat = NA,
+      median_rhat = NA,
+      prop_converged = 0,
+      failed = TRUE
+    )
+    next
+  }
+  
+  if(failed_chains > 0) {
+    cat("  ⚠️", failed_chains, "chain(s) failed\n")
+  }
+  
+  # Calculate R-hat
+  vars_to_check <- names(method)[method != ""]
+  rhat_values <- numeric(length(vars_to_check))
+  names(rhat_values) <- vars_to_check
+  
+  # CRITICAL FIX: Safer variable extraction to avoid namespace conflicts
+  for(var in vars_to_check) {
+    # Use [[ ]] notation instead of $ to avoid function conflicts
+    chain_vals <- lapply(chain_results, function(df) {
+      df[[var]]  # Safer than df$var when var name conflicts with R functions
+    })
+    
+    # Wrap in tryCatch to handle any individual variable failures
+    rhat_values[var] <- tryCatch({
+      calculate_rhat(chain_vals)
+    }, error = function(e) {
+      # If calculation fails for this variable, return NA
+      NA
+    })
+  }
+  
+  rhat_clean <- rhat_values[!is.na(rhat_values)]
+  
+  if(length(rhat_clean) > 0) {
+    max_rhat <- max(rhat_clean)
+    median_rhat <- median(rhat_clean)
+    prop_converged <- mean(rhat_clean < 1.05)
+    
+    # Count how many variables failed
+    n_failed_rhat <- sum(is.na(rhat_values))
+    if(n_failed_rhat > 0) {
+      cat("  ℹ️", n_failed_rhat, "variables failed R-hat calculation\n")
+    }
+    
+    cat(sprintf("  Max R-hat: %.4f | Median: %.4f | Converged: %.1f%%\n\n",
+                max_rhat, median_rhat, prop_converged * 100))
+    
+    convergence_results[[as.character(maxit_test)]] <- list(
+      maxit = maxit_test,
+      rhat_values = rhat_values,
+      max_rhat = max_rhat,
+      median_rhat = median_rhat,
+      prop_converged = prop_converged,
+      n_failed_rhat = n_failed_rhat,
+      failed = FALSE
+    )
+  } else {
+    cat("  ⚠️  No valid R-hat values\n\n")
+    convergence_results[[as.character(maxit_test)]] <- list(
+      maxit = maxit_test,
+      max_rhat = NA,
+      median_rhat = NA,
+      prop_converged = 0,
+      failed = TRUE
+    )
+  }
+  
+# Analyze convergence results
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("CONVERGENCE SUMMARY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+convergence_df <- data.frame(
+  maxit = sapply(convergence_results, function(x) x$maxit),
+  max_rhat = sapply(convergence_results, function(x) x$max_rhat),
+  median_rhat = sapply(convergence_results, function(x) x$median_rhat),
+  pct_converged = sapply(convergence_results, function(x) x$prop_converged * 100),
+  failed = sapply(convergence_results, function(x) x$failed)
+)
+
+print(convergence_df)
+cat("\n")
+
+# Select optimal maxit
+valid_results <- convergence_df[!convergence_df$failed & !is.na(convergence_df$max_rhat), ]
+
+if(nrow(valid_results) > 0) {
+  converged_rows <- valid_results[valid_results$max_rhat < 1.05, ]
+  
+  if(nrow(converged_rows) > 0) {
+    optimal_maxit <- min(converged_rows$maxit)
+    cat("✓ EXCELLENT CONVERGENCE at maxit =", optimal_maxit, "\n")
+    cat("  Max R-hat:", round(converged_rows$max_rhat[converged_rows$maxit == optimal_maxit], 4), "\n\n")
+  } else {
+    optimal_maxit <- valid_results$maxit[which.min(valid_results$max_rhat)]
+    cat("⚠️  No maxit achieved R-hat < 1.05\n")
+    cat("  Using best available: maxit =", optimal_maxit, "\n")
+    cat("  Max R-hat:", round(valid_results$max_rhat[valid_results$maxit == optimal_maxit], 4), "\n\n")
+  }
+} else {
+  cat("✗ No valid convergence results - using default maxit = 20\n\n")
+  optimal_maxit <- 20
+}
+
+# -----------------------------------------------------------------------------
+# PART G: SAVE OPTIMIZATION RESULTS
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART G: SAVING OPTIMIZATION RESULTS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Save optimized imputation dataset
+saveRDS(df_imp, "df_imputation_ready.rds")
+cat("✓ Saved: df_imputation_ready.rds\n")
+
+# Save optimal parameters
+imputation_parameters <- list(
+  optimal_m = optimal_m,
+  optimal_maxit = optimal_maxit,
+  method = method,
+  predictor_matrix = pred,
+  variable_types = list(
+    continuous = continuous_vars,
+    binary = binary_vars,
+    ordered = ordered_vars,
+    unordered = unordered_categorical
+  ),
+  excluded_variables = c(outcome, problematic_vars),
+  convergence_results = convergence_results,
+  convergence_summary = convergence_df,
+  n_observations = nrow(df_imp),
+  n_variables = ncol(df_imp),
+  n_vars_to_impute = sum(method != ""),
+  reverse_coding_done = list(
+    bfi = analysis_vars$bfi_reversed,
+    surps = analysis_vars$surps_reversed
+  )
+)
+
+saveRDS(imputation_parameters, "imputation_parameters_optimized.rds")
+cat("✓ Saved: imputation_parameters_optimized.rds\n\n")
+
+# Save diagnostics summary
+write.csv(convergence_df, "convergence_summary.csv", row.names = FALSE)
+cat("✓ Saved: convergence_summary.csv\n\n")
+
+# -----------------------------------------------------------------------------
+# PART H: FINAL SUMMARY
+# -----------------------------------------------------------------------------
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("DIAGNOSTICS COMPLETE - SUMMARY\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+cat("OPTIMAL PARAMETERS FOR IMPUTATION:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat("  • m (number of imputations):", optimal_m, "\n")
+cat("  • maxit (iterations):", optimal_maxit, "\n")
+cat("  • Variables to impute:", sum(method != ""), "\n")
+cat("  • Observations:", nrow(df_imp), "\n\n")
+
+cat("VARIABLE BREAKDOWN:\n")
+cat("  • Continuous (PMM):", sum(method == "pmm"), "\n")
+cat("  • Binary (logreg):", sum(method == "logreg"), "\n")
+cat("  • Ordered (polr):", sum(method == "polr"), "\n")
+cat("  • Unordered (polyreg):", sum(method == "polyreg"), "\n")
+cat("  • Not imputed:", sum(method == ""), "\n\n")
+
+if(length(problematic_vars) > 0) {
+  cat("EXCLUDED VARIABLES:\n")
+  cat("  • Problematic variables:", length(problematic_vars), "\n")
+  cat("  • Outcome:", outcome, "\n\n")
+}
+
+cat("REVERSE CODING STATUS:\n")
+cat("  • BFI items already reversed in Chunk 6:", length(analysis_vars$bfi_reversed), "\n")
+cat("  • SURPS items already reversed in Chunk 6:", length(analysis_vars$surps_reversed), "\n")
+cat("  • NO additional reverse coding needed in Chunk 8\n\n")
+
+cat("FILES CREATED:\n")
+cat("  1. df_imputation_ready.rds - Dataset ready for imputation\n")
+cat("  2. imputation_parameters_optimized.rds - Optimal parameters\n")
+cat("  3. pre_imputation_missingness_summary.csv - Missingness details\n")
+cat("  4. convergence_summary.csv - Convergence test results\n")
+cat("  5. flux_analysis.csv - Flux values (if available)\n")
+cat("  6. vif_analysis.csv - VIF values (if available)\n\n")
+
+cat("NEXT STEP: Proceed to Chunk 8 (Multiple Imputation)\n\n")
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("✓ PRE-IMPUTATION DIAGNOSTICS COMPLETE\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+```
+
+
 
 ```{r}
 #==============================================================================
