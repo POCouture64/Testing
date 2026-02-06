@@ -10794,13 +10794,13 @@ cat("✓ Proceed to revised regression models using selected demographics\n\n")
 
 ```{r}
 #==============================================================================
-# FINAL REVISED REGRESSION: 3 OPTIMIZED MODELS
+# FINAL REVISED REGRESSION: 4 OPTIMIZED MODELS
 #==============================================================================
-# Purpose: Build parsimonious models with optimal EPV
+# Purpose: Build parsimonious models with optimal EPV using VSURF Prediction
 # Changes from previous version:
-#   - Uses VSURF-selected demographics only
-#   - 3 models instead of 4 (clearer progression)
-#   - Model 3 is "minimal robust" with best EPV
+#   - Model 3 now uses VSURF PREDICTION set (4 vars)
+#   - Model 4 is VSURF Prediction + Demographics
+#   - Clearer alignment with VSURF methodology
 #==============================================================================
 
 library(tidyverse)
@@ -10812,7 +10812,7 @@ library(ggplot2)
 
 cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("FINAL REVISED REGRESSION (3 OPTIMIZED MODELS)\n")
+cat("FINAL REVISED REGRESSION (4 OPTIMIZED MODELS)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 #==============================================================================
@@ -10831,7 +10831,8 @@ vsurf_pers <- readRDS("VSURF_personality_results.rds")
 vsurf_demo <- readRDS("VSURF_demographics_selected.rds")
 
 cat("\nVSURF-selected variables:\n")
-cat(sprintf("  Personality: %d variables\n", length(vsurf_pers$selected_vars)))
+cat(sprintf("  Interpretation: %d variables\n", length(vsurf_pers$selected_vars)))
+cat(sprintf("  Prediction: %d variables\n", length(vsurf_pers$varselect.pred)))
 cat(sprintf("  Demographics: %d variables\n", length(vsurf_demo$recommended)))
 
 # Define outcome
@@ -10847,73 +10848,87 @@ cat(sprintf("\nEvents: %d\n\n", n_events))
 cat("PART B: Defining variable sets\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-# VSURF-selected personality
-personality_vsurf <- vsurf_pers$selected_vars
+# VSURF-selected personality (Interpretation set)
+personality_interpretation <- vsurf_pers$selected_vars
+
+# VSURF-selected personality (Prediction set - Step 3)
+# These are the 4 variables VSURF identified for optimal prediction
+personality_prediction <- c("DBAS_Medications", "CISS_Emotion", 
+                           "BFI_Extraversion", "BFI_Conscientiousness")
 
 # VSURF-selected demographics
 demographics_vsurf <- vsurf_demo$recommended
 
-# Core robust predictors (from sensitivity analyses)
-# These showed consistent significance across multiple analyses
-core_personality <- c("BFI_Extraversion", "DBAS_Medications")
+cat("PERSONALITY - INTERPRETATION SET (8 variables):\n")
+for(v in personality_interpretation) cat(sprintf("  • %s\n", v))
+cat("\n")
 
-cat("PERSONALITY (VSURF-selected):\n")
-for(v in personality_vsurf) cat(sprintf("  • %s\n", v))
+cat("PERSONALITY - PREDICTION SET (4 variables) ← VSURF STEP 3:\n")
+for(v in personality_prediction) cat(sprintf("  • %s\n", v))
 cat("\n")
 
 cat("DEMOGRAPHICS (VSURF-selected):\n")
 for(v in demographics_vsurf) cat(sprintf("  • %s\n", v))
 cat("\n")
 
-cat("CORE PREDICTORS (robust across analyses):\n")
-for(v in core_personality) cat(sprintf("  • %s\n", v))
-cat("\n")
-
 #==============================================================================
-# PART C: DEFINE 3 MODELS
+# PART C: DEFINE 4 MODELS
 #==============================================================================
 
-cat("PART C: Defining 3 models\n")
+cat("PART C: Defining 4 models\n")
 cat("─────────────────────────────────────────────────────────────\n\n")
 
-# Model 1: VSURF Personality only (baseline personality effects)
-vars_m1 <- personality_vsurf
+# Model 1: VSURF Interpretation (all 8 selected personality variables)
+vars_m1 <- personality_interpretation
 formula_m1 <- as.formula(paste(outcome_var, "~", paste(vars_m1, collapse = " + ")))
 epv_m1 <- n_events / length(vars_m1)
 
-# Model 2: VSURF Personality + VSURF Demographics (fully adjusted)
-vars_m2 <- c(personality_vsurf, demographics_vsurf)
+# Model 2: VSURF Interpretation + Demographics (fully adjusted)
+vars_m2 <- c(personality_interpretation, demographics_vsurf)
 formula_m2 <- as.formula(paste(outcome_var, "~", paste(vars_m2, collapse = " + ")))
 epv_m2 <- n_events / length(vars_m2)
 
-# Model 3: Minimal Robust (core predictors + demographics) - BEST EPV
-vars_m3 <- c(core_personality, demographics_vsurf)
+# Model 3: VSURF Prediction (4 variables - optimal data-driven model)
+vars_m3 <- personality_prediction
 formula_m3 <- as.formula(paste(outcome_var, "~", paste(vars_m3, collapse = " + ")))
 epv_m3 <- n_events / length(vars_m3)
+
+# Model 4: VSURF Prediction + Demographics (adjusted optimal model)
+vars_m4 <- c(personality_prediction, demographics_vsurf)
+formula_m4 <- as.formula(paste(outcome_var, "~", paste(vars_m4, collapse = " + ")))
+epv_m4 <- n_events / length(vars_m4)
 
 cat("MODEL SPECIFICATIONS:\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-cat(sprintf("Model 1: VSURF Personality\n"))
+cat(sprintf("Model 1: VSURF Interpretation\n"))
 cat(sprintf("  Predictors: %d\n", length(vars_m1)))
+cat(sprintf("  Variables: %s\n", paste(vars_m1, collapse = ", ")))
 cat(sprintf("  EPV: %.1f\n", epv_m1))
-cat(sprintf("  Purpose: Data-driven personality effects\n\n"))
+cat(sprintf("  Purpose: Comprehensive personality model\n\n"))
 
-cat(sprintf("Model 2: VSURF Full (Personality + Demographics)\n"))
+cat(sprintf("Model 2: VSURF Interpretation + Demographics\n"))
 cat(sprintf("  Predictors: %d\n", length(vars_m2)))
 cat(sprintf("  EPV: %.1f\n", epv_m2))
-cat(sprintf("  Purpose: Fully adjusted model\n\n"))
+cat(sprintf("  Purpose: Fully adjusted comprehensive model\n\n"))
 
-cat(sprintf("Model 3: Minimal Robust (Core + Demographics)\n"))
+cat(sprintf("Model 3: VSURF Prediction ✓ PRIMARY (DATA-DRIVEN)\n"))
 cat(sprintf("  Predictors: %d\n", length(vars_m3)))
+cat(sprintf("  Variables: %s\n", paste(vars_m3, collapse = ", ")))
 cat(sprintf("  EPV: %.1f ✓ OPTIMAL\n", epv_m3))
-cat(sprintf("  Purpose: Parsimonious clinical model\n\n"))
+cat(sprintf("  Purpose: Data-driven optimal prediction\n\n"))
+
+cat(sprintf("Model 4: VSURF Prediction + Demographics\n"))
+cat(sprintf("  Predictors: %d\n", length(vars_m4)))
+cat(sprintf("  Variables: %s\n", paste(vars_m4, collapse = ", ")))
+cat(sprintf("  EPV: %.1f\n", epv_m4))
+cat(sprintf("  Purpose: Adjusted optimal prediction\n\n"))
 
 # Check EPV adequacy
 cat("EPV ASSESSMENT:\n")
 cat("─────────────────────────────────────────────────────────────\n")
-for(i in 1:3) {
-  epv <- c(epv_m1, epv_m2, epv_m3)[i]
+for(i in 1:4) {
+  epv <- c(epv_m1, epv_m2, epv_m3, epv_m4)[i]
   status <- ifelse(epv >= 10, "✓ Adequate (≥10)", 
                    ifelse(epv >= 5, "⚠️  Borderline (5-10)", 
                           "⚠️⚠️  Low (<5)"))
@@ -10951,6 +10966,7 @@ fit_pooled_model <- function(imputed_list, formula_obj, model_name) {
 model1 <- fit_pooled_model(imputed_list, formula_m1, "Model 1")
 model2 <- fit_pooled_model(imputed_list, formula_m2, "Model 2")
 model3 <- fit_pooled_model(imputed_list, formula_m3, "Model 3")
+model4 <- fit_pooled_model(imputed_list, formula_m4, "Model 4")
 
 cat("\n✓ All models fitted\n\n")
 
@@ -10968,6 +10984,7 @@ get_summary <- function(pooled_obj, model_name) {
       OR = exp(estimate),
       OR_lower = exp(estimate - 1.96 * std.error),
       OR_upper = exp(estimate + 1.96 * std.error),
+      OR_CI = sprintf("%.2f [%.2f, %.2f]", OR, OR_lower, OR_upper),
       sig = case_when(
         p.value < 0.001 ~ "***",
         p.value < 0.01 ~ "**",
@@ -10977,15 +10994,16 @@ get_summary <- function(pooled_obj, model_name) {
       ),
       model = model_name
     ) %>%
-    select(model, term, estimate, std.error, OR, OR_lower, OR_upper, 
+    select(model, term, estimate, std.error, OR, OR_lower, OR_upper, OR_CI,
            statistic, p.value, sig)
 }
 
 summary_m1 <- get_summary(model1$pooled, "Model 1")
 summary_m2 <- get_summary(model2$pooled, "Model 2")
 summary_m3 <- get_summary(model3$pooled, "Model 3")
+summary_m4 <- get_summary(model4$pooled, "Model 4")
 
-all_summaries <- bind_rows(summary_m1, summary_m2, summary_m3)
+all_summaries <- bind_rows(summary_m1, summary_m2, summary_m3, summary_m4)
 
 cat("✓ Summaries extracted\n\n")
 
@@ -11019,20 +11037,22 @@ calc_auc <- function(fit_mira, imputed_list) {
 auc_m1 <- calc_auc(model1$fit, imputed_list)
 auc_m2 <- calc_auc(model2$fit, imputed_list)
 auc_m3 <- calc_auc(model3$fit, imputed_list)
+auc_m4 <- calc_auc(model4$fit, imputed_list)
 
 cat("✓ AUC calculated\n\n")
 
 # Performance table
 performance <- data.frame(
-  Model = c("Model 1", "Model 2", "Model 3"),
-  Description = c("VSURF Personality", 
-                  "VSURF Full",
-                  "Minimal Robust"),
-  N_Predictors = c(length(vars_m1), length(vars_m2), length(vars_m3)),
-  EPV = c(epv_m1, epv_m2, epv_m3),
-  AUC = c(auc_m1$AUC_mean, auc_m2$AUC_mean, auc_m3$AUC_mean),
-  AUC_Lower = c(auc_m1$AUC_lower, auc_m2$AUC_lower, auc_m3$AUC_lower),
-  AUC_Upper = c(auc_m1$AUC_upper, auc_m2$AUC_upper, auc_m3$AUC_upper)
+  Model = c("Model 1", "Model 2", "Model 3", "Model 4"),
+  Description = c("VSURF Interpretation", 
+                  "VSURF Interpretation + Demo",
+                  "VSURF Prediction ✓",
+                  "VSURF Prediction + Demo"),
+  N_Predictors = c(length(vars_m1), length(vars_m2), length(vars_m3), length(vars_m4)),
+  EPV = c(epv_m1, epv_m2, epv_m3, epv_m4),
+  AUC = c(auc_m1$AUC_mean, auc_m2$AUC_mean, auc_m3$AUC_mean, auc_m4$AUC_mean),
+  AUC_Lower = c(auc_m1$AUC_lower, auc_m2$AUC_lower, auc_m3$AUC_lower, auc_m4$AUC_lower),
+  AUC_Upper = c(auc_m1$AUC_upper, auc_m2$AUC_upper, auc_m3$AUC_upper, auc_m4$AUC_upper)
 ) %>%
   mutate(
     AUC_formatted = sprintf("%.3f [%.3f, %.3f]", AUC, AUC_Lower, AUC_Upper),
@@ -11064,7 +11084,6 @@ print_results <- function(summary_df, model_name, desc, auc_stats) {
   
   sig <- summary_df %>%
     filter(term != "(Intercept)", p.value < 0.05) %>%
-    mutate(OR_CI = sprintf("%.2f [%.2f, %.2f]", OR, OR_lower, OR_upper)) %>%
     select(term, OR_CI, p.value, sig)
   
   if(nrow(sig) > 0) {
@@ -11076,59 +11095,56 @@ print_results <- function(summary_df, model_name, desc, auc_stats) {
   cat("\n")
 }
 
-print_results(summary_m1, "MODEL 1", "VSURF Personality", auc_m1)
-print_results(summary_m2, "MODEL 2", "VSURF Full", auc_m2)
-print_results(summary_m3, "MODEL 3", "Minimal Robust", auc_m3)
+print_results(summary_m1, "MODEL 1", "VSURF Interpretation", auc_m1)
+print_results(summary_m2, "MODEL 2", "VSURF Interpretation + Demo", auc_m2)
+print_results(summary_m3, "MODEL 3", "VSURF Prediction ✓ PRIMARY", auc_m3)
+print_results(summary_m4, "MODEL 4", "VSURF Prediction + Demo", auc_m4)
 
 #==============================================================================
-# PART H: KEY PREDICTOR CONSISTENCY
+# PART H: PREDICTION SET CONSISTENCY
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("KEY PREDICTOR CONSISTENCY ACROSS MODELS\n")
+cat("PREDICTION SET CONSISTENCY (MODELS 3 & 4)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Track core predictors
-consistency_check <- core_personality %>%
+# Track prediction set variables across Models 3 and 4
+consistency_check <- personality_prediction %>%
   map_df(function(pred) {
     
-    m1_row <- summary_m1 %>% filter(term == pred)
-    m2_row <- summary_m2 %>% filter(term == pred)
     m3_row <- summary_m3 %>% filter(term == pred)
+    m4_row <- summary_m4 %>% filter(term == pred)
     
     tibble(
       Predictor = pred,
-      M1_OR = if(nrow(m1_row) > 0) m1_row$OR else NA_real_,
-      M1_p = if(nrow(m1_row) > 0) m1_row$p.value else NA_real_,
-      M2_OR = if(nrow(m2_row) > 0) m2_row$OR else NA_real_,
-      M2_p = if(nrow(m2_row) > 0) m2_row$p.value else NA_real_,
       M3_OR = if(nrow(m3_row) > 0) m3_row$OR else NA_real_,
-      M3_p = if(nrow(m3_row) > 0) m3_row$p.value else NA_real_
+      M3_p = if(nrow(m3_row) > 0) m3_row$p.value else NA_real_,
+      M3_sig = if(nrow(m3_row) > 0) m3_row$sig else "",
+      M4_OR = if(nrow(m4_row) > 0) m4_row$OR else NA_real_,
+      M4_p = if(nrow(m4_row) > 0) m4_row$p.value else NA_real_,
+      M4_sig = if(nrow(m4_row) > 0) m4_row$sig else ""
     ) %>%
       mutate(
-        Consistent_sig = (M1_p < 0.05 | is.na(M1_p)) & 
-                         (M2_p < 0.05 | is.na(M2_p)) & 
-                         (M3_p < 0.05),
-        OR_range = max(c(M1_OR, M2_OR, M3_OR), na.rm = TRUE) - 
-                   min(c(M1_OR, M2_OR, M3_OR), na.rm = TRUE)
+        Consistent_sig = (M3_p < 0.05) & (M4_p < 0.05),
+        OR_change_pct = 100 * (M4_OR - M3_OR) / M3_OR
       )
   })
 
-cat("Core predictors across all models:\n")
+cat("Prediction set variables across Models 3 & 4:\n")
 cat("─────────────────────────────────────────────────────────────\n")
-print(consistency_check)
+print(consistency_check %>% select(Predictor, M3_OR, M3_p, M3_sig, M4_OR, M4_p, M4_sig, OR_change_pct))
 cat("\n")
 
 n_consistent <- sum(consistency_check$Consistent_sig, na.rm = TRUE)
-cat(sprintf("Consistently significant: %d/%d predictors ✓\n\n", 
+cat(sprintf("Consistently significant: %d/%d predictors\n\n", 
             n_consistent, nrow(consistency_check)))
 
 #==============================================================================
-# PART I: DIAGNOSTICS (MODEL 3 - BEST EPV)
+# PART I: DIAGNOSTICS (MODEL 3 - PRIMARY)
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("DIAGNOSTICS: MODEL 3 (MINIMAL ROBUST)\n")
+cat("DIAGNOSTICS: MODEL 3 (VSURF PREDICTION - PRIMARY)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 # Use first imputation for diagnostics
@@ -11177,19 +11193,22 @@ results <- list(
     model1 = vars_m1,
     model2 = vars_m2,
     model3 = vars_m3,
-    core_personality = core_personality,
-    vsurf_personality = personality_vsurf,
+    model4 = vars_m4,
+    personality_interpretation = personality_interpretation,
+    personality_prediction = personality_prediction,
     vsurf_demographics = demographics_vsurf
   ),
   models = list(
     model1 = model1,
     model2 = model2,
-    model3 = model3
+    model3 = model3,
+    model4 = model4
   ),
   summaries = list(
     model1 = summary_m1,
     model2 = summary_m2,
     model3 = summary_m3,
+    model4 = summary_m4,
     all = all_summaries
   ),
   performance = performance,
@@ -11201,15 +11220,15 @@ results <- list(
   )
 )
 
-saveRDS(results, "final_regression_results.rds")
-write_csv(performance, "final_model_performance.csv")
-write_csv(all_summaries, "final_all_coefficients.csv")
-write_csv(consistency_check, "final_core_predictor_consistency.csv")
+saveRDS(results, "final_regression_results_revised.rds")
+write_csv(performance, "final_model_performance_revised.csv")
+write_csv(all_summaries, "final_all_coefficients_revised.csv")
+write_csv(consistency_check, "final_prediction_set_consistency.csv")
 
-cat("✓ Saved: final_regression_results.rds\n")
-cat("✓ Saved: final_model_performance.csv\n")
-cat("✓ Saved: final_all_coefficients.csv\n")
-cat("✓ Saved: final_core_predictor_consistency.csv\n\n")
+cat("✓ Saved: final_regression_results_revised.rds\n")
+cat("✓ Saved: final_model_performance_revised.csv\n")
+cat("✓ Saved: final_all_coefficients_revised.csv\n")
+cat("✓ Saved: final_prediction_set_consistency.csv\n\n")
 
 #==============================================================================
 # SUMMARY
@@ -11220,31 +11239,38 @@ cat("FINAL REGRESSION COMPLETE\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 cat("SUMMARY:\n")
-cat("  • 3 models (down from 6)\n")
-cat("  • VSURF-selected demographics only\n")
+cat("  • 4 models following VSURF methodology\n")
+cat("  • Model 3 (VSURF Prediction) = PRIMARY ANALYSIS\n")
 cat(sprintf("  • EPV range: %.1f to %.1f\n", min(performance$EPV), max(performance$EPV)))
-cat(sprintf("  • Model 3 (recommended): EPV = %.1f\n", epv_m3))
-cat("  • Core predictors consistent across models\n\n")
+cat(sprintf("  • Model 3 EPV: %.1f (optimal)\n", epv_m3))
+cat(sprintf("  • Model 4 EPV: %.1f (adjusted)\n\n", epv_m4))
+
+cat("MODEL 3 (PRIMARY) VARIABLES:\n")
+for(v in personality_prediction) cat(sprintf("  • %s\n", v))
+cat("\n")
 
 cat("NEXT STEPS:\n")
-cat("  1. Run cross-validation on imputed data (Model 3)\n")
-cat("  2. Address influential cases (Firth regression)\n")
-cat("  3. Complete-case sensitivity (already done)\n\n")
+cat("  1. Run sensitivity analyses on Model 3\n")
+cat("  2. Cross-validation on Model 3\n")
+cat("  3. Influential cases analysis on Model 3\n")
+cat("  4. Firth regression on Model 3\n\n")
 
 cat("═══════════════════════════════════════════════════════════════\n")
 ```
+
 
 
 ## Cross-Validation
 
 ```{r}
 #==============================================================================
-# CROSS-VALIDATION ON IMPUTED DATA
+# CROSS-VALIDATION ON IMPUTED DATA (REVISED FOR NEW MODELS)
 #==============================================================================
 # Purpose: Internal validation using 10-fold CV across all imputations
 # Why imputed data: Complete cases (75.8%) may be biased; imputed data
 #                   reflects full sample and our actual analysis approach
 # Method: Perform CV on each imputation, then pool results
+# Updated: Now uses Model 3 (VSURF Prediction) as primary model
 #==============================================================================
 
 library(tidyverse)
@@ -11265,14 +11291,14 @@ cat("─────────────────────────
 # Load imputed data
 imputed_list <- readRDS("imputed_list_with_subscales.rds")
 
-# Load final regression results
-final_results <- readRDS("final_regression_results.rds")
+# Load final regression results (REVISED VERSION)
+final_results <- readRDS("final_regression_results_revised.rds")
 
-# Use Model 3 (minimal robust - best EPV)
+# Use Model 3 (VSURF Prediction - PRIMARY)
 model_vars <- final_results$variables$model3
 outcome_var <- "scrn_stopped_bzra"
 
-cat("Model: Model 3 (Minimal Robust)\n")
+cat("Model: Model 3 (VSURF Prediction - PRIMARY)\n")
 cat(sprintf("Predictors: %s\n", paste(model_vars, collapse = ", ")))
 cat(sprintf("Imputations: %d\n", length(imputed_list)))
 cat(sprintf("Sample size: %d per imputation\n\n", nrow(imputed_list[[1]])))
@@ -11492,18 +11518,6 @@ cat(detail, "\n\n")
 cat("Recommendation:\n")
 cat(recommendation, "\n\n")
 
-# Compare to complete-case CV
-cat("COMPARISON TO COMPLETE-CASE CV:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-cat("Imputed data CV (current):  %.3f\n", cv_auc_mean)
-cat("Complete-case CV (previous): 0.616\n")
-cat(sprintf("Improvement:                 +%.3f\n\n", cv_auc_mean - 0.616))
-
-cat("✓ Imputed data CV performs better (as expected)\n")
-cat("  - Larger effective sample (397 vs 301)\n")
-cat("  - More stable fold composition\n")
-cat("  - Reflects actual analysis strategy\n\n")
-
 #==============================================================================
 # PART G: SAVE RESULTS
 #==============================================================================
@@ -11528,11 +11542,11 @@ performance_summary <- data.frame(
   )
 )
 
-write_csv(performance_summary, "cv_imputed_performance_summary.csv")
-cat("✓ Saved: cv_imputed_performance_summary.csv\n")
+write_csv(performance_summary, "cv_imputed_performance_summary_revised.csv")
+cat("✓ Saved: cv_imputed_performance_summary_revised.csv\n")
 
-write_csv(fold_summary, "cv_imputed_fold_summary.csv")
-cat("✓ Saved: cv_imputed_fold_summary.csv\n")
+write_csv(fold_summary, "cv_imputed_fold_summary_revised.csv")
+cat("✓ Saved: cv_imputed_fold_summary_revised.csv\n")
 
 # Detailed results
 cv_details <- tibble(
@@ -11542,17 +11556,17 @@ cv_details <- tibble(
   Optimism = apparent_aucs - cv_aucs
 )
 
-write_csv(cv_details, "cv_imputed_by_imputation.csv")
-cat("✓ Saved: cv_imputed_by_imputation.csv\n")
+write_csv(cv_details, "cv_imputed_by_imputation_revised.csv")
+cat("✓ Saved: cv_imputed_by_imputation_revised.csv\n")
 
 # Summary report
 report <- c(
   "═══════════════════════════════════════════════════════════════",
-  "CROSS-VALIDATION ON IMPUTED DATA - SUMMARY",
+  "CROSS-VALIDATION ON IMPUTED DATA - SUMMARY (REVISED)",
   "═══════════════════════════════════════════════════════════════",
   "",
-  "MODEL: Model 3 (Minimal Robust)",
-  sprintf("Predictors: %d", length(model_vars)),
+  "MODEL: Model 3 (VSURF Prediction - PRIMARY)",
+  sprintf("Predictors: %d (%s)", length(model_vars), paste(model_vars, collapse = ", ")),
   sprintf("Sample size: %d", nrow(imputed_list[[1]])),
   sprintf("Imputations: %d", length(imputed_list)),
   "",
@@ -11569,11 +11583,6 @@ report <- c(
   "RECOMMENDATION:",
   recommendation,
   "",
-  "COMPARISON:",
-  sprintf("  Imputed CV:      %.3f", cv_auc_mean),
-  "  Complete-case CV: 0.616",
-  sprintf("  Improvement:     +%.3f", cv_auc_mean - 0.616),
-  "",
   "FOLD STABILITY:",
   sprintf("  Mean:  %.3f", mean(fold_summary$Mean_AUC)),
   sprintf("  SD:    %.3f", sd(fold_summary$Mean_AUC)),
@@ -11582,8 +11591,8 @@ report <- c(
   "═══════════════════════════════════════════════════════════════"
 )
 
-writeLines(report, "cv_imputed_summary_report.txt")
-cat("✓ Saved: cv_imputed_summary_report.txt\n\n")
+writeLines(report, "cv_imputed_summary_report_revised.txt")
+cat("✓ Saved: cv_imputed_summary_report_revised.txt\n\n")
 
 #==============================================================================
 # DISPLAY SUMMARY
@@ -11603,10 +11612,10 @@ cat("CROSS-VALIDATION ON IMPUTED DATA COMPLETE\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 cat("KEY FINDING:\n")
-cat(sprintf("  CV on imputed data (AUC = %.3f) substantially better than\n", cv_auc_mean))
-cat("  complete-case CV (AUC = 0.616), supporting use of multiple\n")
-cat("  imputation as the primary analysis strategy.\n\n")
+cat(sprintf("  Model 3 (VSURF Prediction) cross-validated AUC = %.3f\n", cv_auc_mean))
+cat("  This validates the data-driven variable selection approach.\n\n")
 ```
+
 
 
 
@@ -11614,12 +11623,13 @@ cat("  imputation as the primary analysis strategy.\n\n")
 
 ```{r}
 #==============================================================================
-# FIRTH PENALIZED LOGISTIC REGRESSION
+# FIRTH PENALIZED LOGISTIC REGRESSION - VSURF PREDICTION MODEL
 #==============================================================================
 # Purpose: Address influential cases and potential separation issues
-# Problem: 23 influential cases (7.6%) ALL discontinued = quasi-separation
+# Problem: Influential cases (all discontinued) = quasi-separation risk
 # Solution: Firth's penalized likelihood reduces bias in finite samples
 # Interpretation: Yields shrunken (conservative) estimates
+# Updated: Now tests all 4 VSURF Prediction variables
 #==============================================================================
 
 library(tidyverse)
@@ -11628,7 +11638,7 @@ library(pROC)
 
 cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("FIRTH PENALIZED LOGISTIC REGRESSION\n")
+cat("FIRTH PENALIZED LOGISTIC REGRESSION - VSURF PREDICTION\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 #==============================================================================
@@ -11641,18 +11651,18 @@ cat("─────────────────────────
 # Load imputed data
 imputed_list <- readRDS("imputed_list_with_subscales.rds")
 
-# Load final model specification
-final_results <- readRDS("final_regression_results.rds")
-model_vars <- final_results$variables$model3
+# Load final model specification (REVISED)
+final_results <- readRDS("final_regression_results_revised.rds")
+model_vars <- final_results$variables$model3  # VSURF Prediction
 outcome_var <- "scrn_stopped_bzra"
 
-cat("Model: Model 3 (Minimal Robust)\n")
+cat("Model: Model 3 (VSURF Prediction)\n")
 cat(sprintf("Predictors: %s\n\n", paste(model_vars, collapse = ", ")))
 
 cat("THE PROBLEM (from influential cases analysis):\n")
 cat("─────────────────────────────────────────────────────────────\n")
-cat("• 23 influential cases identified (Cook's D > threshold)\n")
-cat("• ALL 23 discontinued medication (100%)\n")
+cat("• Influential cases identified (Cook's D > threshold)\n")
+cat("• All influential cases discontinued medication (100%)\n")
 cat("• This creates quasi-separation:\n")
 cat("  - Some predictor combinations perfectly predict outcome = 1\n")
 cat("  - Standard ML estimates become unstable/biased\n")
@@ -11834,23 +11844,22 @@ cat(sprintf("Significance changes: %d predictor(s)\n\n",
             sum(str_detect(comparison$Sig_change, "⚠️"))))
 
 #==============================================================================
-# PART E: KEY PREDICTORS FOCUS
+# PART E: ALL 4 VSURF PREDICTORS FOCUS
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART E: KEY PREDICTORS (EXTRAVERSION & DBAS MEDICATIONS)\n")
+cat("PART E: ALL 4 VSURF PREDICTION VARIABLES\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-key_vars <- c("BFI_Extraversion", "DBAS_Medications")
-
-key_comparison <- comparison %>%
-  filter(term %in% key_vars)
-
-for(i in 1:nrow(key_comparison)) {
-  row <- key_comparison[i, ]
+for(i in 1:nrow(comparison)) {
+  row <- comparison[i, ]
   cat(sprintf("%s:\n", row$term))
-  cat(sprintf("  Standard:  OR = %.2f, p = %.4f\n", row$Standard_OR, row$Standard_p))
-  cat(sprintf("  Firth:     OR = %s, p = %.4f\n", row$Firth_OR_CI, row$Firth_p))
+  cat(sprintf("  Standard:  OR = %.2f, p = %.4f %s\n", 
+              row$Standard_OR, row$Standard_p,
+              ifelse(row$Standard_p < 0.05, "*", "")))
+  cat(sprintf("  Firth:     OR = %s, p = %.4f %s\n", 
+              row$Firth_OR_CI, row$Firth_p,
+              ifelse(row$Firth_p < 0.05, "*", "")))
   cat(sprintf("  Change:    %+.1f%% (%s)\n", row$OR_diff_pct, row$Direction))
   cat(sprintf("  Status:    %s\n\n", row$Sig_change))
 }
@@ -11902,19 +11911,24 @@ cat("═════════════════════════
 
 # Determine overall pattern
 mean_change <- mean(abs(comparison$OR_diff_pct), na.rm = TRUE)
+max_change <- max(abs(comparison$OR_diff_pct), na.rm = TRUE)
+n_sig_changes <- sum(str_detect(comparison$Sig_change, "⚠️"))
 
-if(mean_change < 10) {
+if(mean_change < 10 & n_sig_changes == 0) {
   interpretation <- "✓ MINIMAL DIFFERENCES"
   detail <- "Firth and standard logistic yield very similar estimates. The\npenalization has minimal impact, suggesting separation is not severe."
   recommendation <- "Report standard logistic as primary analysis. Mention Firth as\nsensitivity check showing robustness."
-} else if(mean_change < 20) {
+  flag <- "green"
+} else if(mean_change < 20 & n_sig_changes <= 1) {
   interpretation <- "⚠️  MODERATE SHRINKAGE"
   detail <- "Firth yields moderately different estimates. Some shrinkage toward\nnull, as expected with penalization."
   recommendation <- "Report both analyses. Firth estimates may be more conservative\nand appropriate given influential cases."
+  flag <- "yellow"
 } else {
-  interpretation <- "⚠️⚠️  SUBSTANTIAL SHRINKAGE"
-  detail <- "Firth substantially shrinks estimates compared to standard logistic.\nThis suggests standard ML may be unreliable due to separation."
+  interpretation <- "⚠️⚠️  SUBSTANTIAL DIFFERENCES"
+  detail <- "Firth substantially differs from standard logistic. This suggests\nstandard ML may be unreliable due to separation."
   recommendation <- "Prioritize Firth estimates. Standard logistic may be biased.\nDiscuss separation issue in methods/limitations."
+  flag <- "red"
 }
 
 cat(interpretation, "\n\n")
@@ -11926,20 +11940,22 @@ cat(recommendation, "\n\n")
 cat("FOR MANUSCRIPT:\n")
 cat("─────────────────────────────────────────────────────────────\n")
 cat("Suggested text for methods:\n\n")
-cat('  "Given the presence of influential cases (7.6% with Cook\'s D > 4/n),\n')
-cat('   all of whom discontinued medication, we performed sensitivity analysis\n')
-cat('   using Firth\'s penalized logistic regression to address potential\n')
-cat('   quasi-separation. Firth regression reduces bias in finite samples and\n')
-cat('   yields more conservative estimates when separation is present."\n\n')
+cat('  "Given the presence of influential cases (all discontinued medication),\n')
+cat('   we performed sensitivity analysis using Firth\'s penalized logistic\n')
+cat('   regression to address potential quasi-separation. Firth regression\n')
+cat('   reduces bias in finite samples and yields more conservative estimates\n')
+cat('   when separation is present."\n\n')
 
 cat("Suggested text for results:\n\n")
-cat(sprintf('  "Key findings were robust to Firth penalized regression\n'))
-if(sum(str_detect(comparison$Sig_change, "⚠️")) == 0) {
-  cat('   (all significant predictors remained significant; mean OR change: %.1f%%)."\n\n', 
-      mean_change)
+if(n_sig_changes == 0) {
+  cat(sprintf('  "All VSURF-selected predictors were robust to Firth penalized\n'))
+  cat(sprintf('   regression (mean OR change: %.1f%%, all significant predictors\n', mean_change))
+  cat('   remained significant)."\n\n')
 } else {
-  cat('   though some estimates showed moderate shrinkage (mean change: %.1f%%)."\n\n',
-      mean_change)
+  cat(sprintf('  "VSURF-selected predictors showed variable robustness to Firth\n'))
+  cat(sprintf('   penalization (mean OR change: %.1f%%, %d predictor(s) changed\n', 
+              mean_change, n_sig_changes))
+  cat('   significance status). [Detail which changed]"\n\n')
 }
 
 #==============================================================================
@@ -11951,39 +11967,41 @@ cat("PART H: SAVING RESULTS\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 # Save pooled estimates
-write_csv(pooled_firth, "firth_pooled_estimates.csv")
-cat("✓ Saved: firth_pooled_estimates.csv\n")
+write_csv(pooled_firth, "firth_pooled_estimates_vsurf.csv")
+cat("✓ Saved: firth_pooled_estimates_vsurf.csv\n")
 
 # Save comparison
-write_csv(comparison, "firth_vs_standard_comparison.csv")
-cat("✓ Saved: firth_vs_standard_comparison.csv\n")
+write_csv(comparison, "firth_vs_standard_comparison_vsurf.csv")
+cat("✓ Saved: firth_vs_standard_comparison_vsurf.csv\n")
 
 # Save models
-saveRDS(firth_models, "firth_models_all_imputations.rds")
-cat("✓ Saved: firth_models_all_imputations.rds\n")
+saveRDS(firth_models, "firth_models_all_imputations_vsurf.rds")
+cat("✓ Saved: firth_models_all_imputations_vsurf.rds\n")
 
 # Summary report
 report <- c(
   "═══════════════════════════════════════════════════════════════",
-  "FIRTH PENALIZED LOGISTIC REGRESSION - SUMMARY",
+  "FIRTH PENALIZED LOGISTIC REGRESSION - SUMMARY (VSURF)",
   "═══════════════════════════════════════════════════════════════",
   "",
+  "MODEL: Model 3 (VSURF Prediction)",
+  sprintf("Predictors: %s", paste(model_vars, collapse = ", ")),
+  "",
   "PURPOSE:",
-  "  Address quasi-separation from 23 influential cases (all discontinued)",
+  "  Address quasi-separation from influential cases",
   "",
   "METHOD:",
   "  Firth's penalized likelihood (reduces finite-sample bias)",
   "",
   "RESULTS:",
   sprintf("  Mean OR change: %.1f%%", mean_change),
-  sprintf("  Max OR change: %.1f%%", max(abs(comparison$OR_diff_pct), na.rm = TRUE)),
-  sprintf("  Significance changes: %d predictor(s)", 
-          sum(str_detect(comparison$Sig_change, "⚠️"))),
+  sprintf("  Max OR change: %.1f%%", max_change),
+  sprintf("  Significance changes: %d predictor(s)", n_sig_changes),
   sprintf("  AUC (Firth): %.3f", firth_auc_mean),
   sprintf("  AUC (Standard): %.3f", standard_auc),
   "",
-  "KEY PREDICTORS:",
-  paste(capture.output(print(key_comparison %>% select(term, Standard_OR_formatted, Firth_OR_CI, OR_diff_pct))), collapse = "\n"),
+  "ALL VSURF PREDICTORS:",
+  paste(capture.output(print(comparison %>% select(term, Standard_OR_formatted, Firth_OR_CI, OR_diff_pct, Sig_change))), collapse = "\n"),
   "",
   "INTERPRETATION:",
   interpretation,
@@ -11996,15 +12014,15 @@ report <- c(
   "═══════════════════════════════════════════════════════════════"
 )
 
-writeLines(report, "firth_summary_report.txt")
-cat("✓ Saved: firth_summary_report.txt\n\n")
+writeLines(report, "firth_summary_report_vsurf.txt")
+cat("✓ Saved: firth_summary_report_vsurf.txt\n\n")
 
 #==============================================================================
 # SUMMARY
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("FIRTH REGRESSION COMPLETE\n")
+cat("FIRTH REGRESSION COMPLETE (VSURF PREDICTION)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 for(line in report) {
@@ -12013,19 +12031,28 @@ for(line in report) {
 
 cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("NEXT STEP: Decide whether to report Firth as sensitivity or primary\n")
+cat("KEY FINDING:\n")
+cat(sprintf("  %s\n", interpretation))
+cat(sprintf("  %d/%d VSURF predictors %s\n", 
+            4 - n_sig_changes, 4,
+            ifelse(n_sig_changes == 0, "are robust", "show some sensitivity")))
 cat("═══════════════════════════════════════════════════════════════\n")
 ```
+
+
+
+
 
 ## Further Influential Case Analysis 
 
 ```{r}
 #==============================================================================
-# INFLUENTIAL CASES CHARACTERIZATION ANALYSIS
+# INFLUENTIAL CASES CHARACTERIZATION - VSURF PREDICTION MODEL
 #==============================================================================
-# Purpose: Determine if 23 influential cases are clinical subgroup or outliers
-# Question: Do they share distinct predictor profiles?
-# Impact: Determines how to interpret and report extraversion findings
+# Purpose: Determine if influential cases are clinical subgroup or outliers
+# Question: Do they share distinct predictor profiles across ALL 4 VSURF vars?
+# Impact: Determines robustness of VSURF-selected predictors
+# Updated: Now analyzes all 4 VSURF Prediction variables
 #==============================================================================
 
 library(tidyverse)
@@ -12034,7 +12061,7 @@ library(broom)
 
 cat("\n")
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("INFLUENTIAL CASES CHARACTERIZATION\n")
+cat("INFLUENTIAL CASES CHARACTERIZATION - VSURF PREDICTION\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 #==============================================================================
@@ -12047,10 +12074,13 @@ cat("─────────────────────────
 # Load imputed data
 imputed_list <- readRDS("imputed_list_with_subscales.rds")
 
-# Load final model results
-final_results <- readRDS("final_regression_results.rds")
-model_vars <- final_results$variables$model3
+# Load final model results (REVISED)
+final_results <- readRDS("final_regression_results_revised.rds")
+model_vars <- final_results$variables$model3  # VSURF Prediction set
 outcome_var <- "scrn_stopped_bzra"
+
+cat("Model: Model 3 (VSURF Prediction)\n")
+cat(sprintf("Predictors: %s\n\n", paste(model_vars, collapse = ", ")))
 
 # Use first imputation for consistent case indexing
 analysis_data <- imputed_list[[1]]
@@ -12123,377 +12153,306 @@ cat(sprintf("Odds Ratio: %.2f [%.2f, %.2f]\n\n",
             fisher_result$conf.int[2]))
 
 #==============================================================================
-# PART D: KEY PREDICTOR DISTRIBUTIONS
+# PART D: ALL 4 VSURF PREDICTOR DISTRIBUTIONS
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART D: KEY PREDICTOR DISTRIBUTIONS\n")
+cat("PART D: VSURF PREDICTOR DISTRIBUTIONS\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# BFI Extraversion
-cat("BFI EXTRAVERSION:\n")
-cat("─────────────────────────────────────────────────────────────\n")
+# Function to compare predictor by influential status
+compare_predictor <- function(data, var_name, influential_cases) {
+  cat(sprintf("%s:\n", var_name))
+  cat("─────────────────────────────────────────────────────────────\n")
+  
+  summary_stats <- data %>%
+    group_by(influential_group) %>%
+    summarise(
+      n = n(),
+      mean = mean(!!sym(var_name), na.rm = TRUE),
+      sd = sd(!!sym(var_name), na.rm = TRUE),
+      median = median(!!sym(var_name), na.rm = TRUE),
+      q25 = quantile(!!sym(var_name), 0.25, na.rm = TRUE),
+      q75 = quantile(!!sym(var_name), 0.75, na.rm = TRUE),
+      min = min(!!sym(var_name), na.rm = TRUE),
+      max = max(!!sym(var_name), na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  print(summary_stats)
+  cat("\n")
+  
+  # T-test
+  t_result <- t.test(as.formula(paste(var_name, "~ influential")), data = data)
+  
+  # Cohen's d
+  influential_mean <- mean(influential_cases[[var_name]], na.rm = TRUE)
+  non_influential_mean <- mean(data[[var_name]][!data$influential], na.rm = TRUE)
+  overall_sd <- sd(data[[var_name]], na.rm = TRUE)
+  cohens_d <- (influential_mean - non_influential_mean) / overall_sd
+  
+  cat(sprintf("t-test: t(%.1f) = %.3f, p = %.4f\n", 
+              t_result$parameter, t_result$statistic, t_result$p.value))
+  cat(sprintf("Cohen's d: %.3f\n", cohens_d))
+  cat(sprintf("95%% CI for difference: [%.3f, %.3f]\n\n", 
+              t_result$conf.int[1], t_result$conf.int[2]))
+  
+  return(list(
+    summary = summary_stats,
+    t_test = t_result,
+    cohens_d = cohens_d
+  ))
+}
 
-extraversion_summary <- analysis_data %>%
-  group_by(influential_group) %>%
-  summarise(
-    n = n(),
-    mean = mean(BFI_Extraversion, na.rm = TRUE),
-    sd = sd(BFI_Extraversion, na.rm = TRUE),
-    median = median(BFI_Extraversion, na.rm = TRUE),
-    q25 = quantile(BFI_Extraversion, 0.25, na.rm = TRUE),
-    q75 = quantile(BFI_Extraversion, 0.75, na.rm = TRUE),
-    min = min(BFI_Extraversion, na.rm = TRUE),
-    max = max(BFI_Extraversion, na.rm = TRUE),
-    .groups = "drop"
-  )
+# Compare all 4 VSURF predictors
+vsurf_comparisons <- list()
 
-print(extraversion_summary)
-cat("\n")
-
-# T-test
-t_test_extra <- t.test(BFI_Extraversion ~ influential, data = analysis_data)
-cohens_d_extra <- (mean(influential_cases$BFI_Extraversion, na.rm = TRUE) - 
-                   mean(analysis_data$BFI_Extraversion[!analysis_data$influential], na.rm = TRUE)) /
-                   sd(analysis_data$BFI_Extraversion, na.rm = TRUE)
-
-cat(sprintf("t-test: t(%.1f) = %.3f, p = %.4f\n", 
-            t_test_extra$parameter, t_test_extra$statistic, t_test_extra$p.value))
-cat(sprintf("Cohen's d: %.3f\n", cohens_d_extra))
-cat(sprintf("95%% CI for difference: [%.3f, %.3f]\n\n", 
-            t_test_extra$conf.int[1], t_test_extra$conf.int[2]))
-
-# DBAS Medications
-cat("DBAS MEDICATIONS:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-
-dbas_summary <- analysis_data %>%
-  group_by(influential_group) %>%
-  summarise(
-    n = n(),
-    mean = mean(DBAS_Medications, na.rm = TRUE),
-    sd = sd(DBAS_Medications, na.rm = TRUE),
-    median = median(DBAS_Medications, na.rm = TRUE),
-    q25 = quantile(DBAS_Medications, 0.25, na.rm = TRUE),
-    q75 = quantile(DBAS_Medications, 0.75, na.rm = TRUE),
-    min = min(DBAS_Medications, na.rm = TRUE),
-    max = max(DBAS_Medications, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-print(dbas_summary)
-cat("\n")
-
-# T-test
-t_test_dbas <- t.test(DBAS_Medications ~ influential, data = analysis_data)
-cohens_d_dbas <- (mean(influential_cases$DBAS_Medications, na.rm = TRUE) - 
-                  mean(analysis_data$DBAS_Medications[!analysis_data$influential], na.rm = TRUE)) /
-                  sd(analysis_data$DBAS_Medications, na.rm = TRUE)
-
-cat(sprintf("t-test: t(%.1f) = %.3f, p = %.4f\n", 
-            t_test_dbas$parameter, t_test_dbas$statistic, t_test_dbas$p.value))
-cat(sprintf("Cohen's d: %.3f\n", cohens_d_dbas))
-cat(sprintf("95%% CI for difference: [%.3f, %.3f]\n\n", 
-            t_test_dbas$conf.int[1], t_test_dbas$conf.int[2]))
+for(var in model_vars) {
+  vsurf_comparisons[[var]] <- compare_predictor(analysis_data, var, influential_cases)
+}
 
 #==============================================================================
-# PART E: PERCENTILE ANALYSIS
+# PART E: PERCENTILE ANALYSIS FOR ALL 4 PREDICTORS
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART E: PERCENTILE ANALYSIS\n")
+cat("PART E: PERCENTILE ANALYSIS (ALL 4 VSURF PREDICTORS)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Calculate percentiles for influential cases within the full analysis_data
-analysis_data <- analysis_data %>%
-  mutate(
-    extra_percentile = ecdf(BFI_Extraversion)(BFI_Extraversion) * 100,
-    dbas_percentile = ecdf(DBAS_Medications)(DBAS_Medications) * 100,
-    extra_extreme = extra_percentile > 75,
-    dbas_extreme = dbas_percentile < 25  # Low DBAS = more extreme (less belief in meds)
-  )
+# Calculate percentiles
+for(var in model_vars) {
+  percentile_col <- paste0(var, "_percentile")
+  analysis_data[[percentile_col]] <- ecdf(analysis_data[[var]])(analysis_data[[var]]) * 100
+}
 
-# Now filter to influential cases with percentile info
+# Update influential cases with percentile info
 influential_cases <- analysis_data %>%
   filter(influential)
 
-cat("Extraversion Percentiles:\n")
-cat("─────────────────────────────────────────────────────────────\n")
+# Report percentiles for each predictor
 percentile_breaks <- c(0, 25, 50, 75, 100)
-extra_dist <- cut(influential_cases$extra_percentile, 
+
+for(var in model_vars) {
+  cat(sprintf("%s Percentiles:\n", var))
+  cat("─────────────────────────────────────────────────────────────\n")
+  
+  percentile_col <- paste0(var, "_percentile")
+  var_dist <- cut(influential_cases[[percentile_col]], 
                   breaks = percentile_breaks,
                   labels = c("0-25th", "25-50th", "50-75th", "75-100th"),
                   include.lowest = TRUE)
-extra_table <- table(extra_dist)
-extra_pct <- prop.table(extra_table) * 100
-
-cat(sprintf("  0-25th percentile:   %2d (%.1f%%)\n", extra_table[1], extra_pct[1]))
-cat(sprintf("  25-50th percentile:  %2d (%.1f%%)\n", extra_table[2], extra_pct[2]))
-cat(sprintf("  50-75th percentile:  %2d (%.1f%%)\n", extra_table[3], extra_pct[3]))
-cat(sprintf("  75-100th percentile: %2d (%.1f%%) ← HIGH EXTRAVERSION\n", 
-            extra_table[4], extra_pct[4]))
-cat("\n")
-
-cat("DBAS Medications Percentiles:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-dbas_dist <- cut(influential_cases$dbas_percentile, 
-                 breaks = percentile_breaks,
-                 labels = c("0-25th", "25-50th", "50-75th", "75-100th"),
-                 include.lowest = TRUE)
-dbas_table <- table(dbas_dist)
-dbas_pct <- prop.table(dbas_table) * 100
-
-cat(sprintf("  0-25th percentile:   %2d (%.1f%%) ← LOW DBAS (less belief)\n", 
-            dbas_table[1], dbas_pct[1]))
-cat(sprintf("  25-50th percentile:  %2d (%.1f%%)\n", dbas_table[2], dbas_pct[2]))
-cat(sprintf("  50-75th percentile:  %2d (%.1f%%)\n", dbas_table[3], dbas_pct[3]))
-cat(sprintf("  75-100th percentile: %2d (%.1f%%)\n", dbas_table[4], dbas_pct[4]))
-cat("\n")
+  var_table <- table(var_dist)
+  var_pct <- prop.table(var_table) * 100
+  
+  cat(sprintf("  0-25th percentile:   %2d (%.1f%%)\n", var_table[1], var_pct[1]))
+  cat(sprintf("  25-50th percentile:  %2d (%.1f%%)\n", var_table[2], var_pct[2]))
+  cat(sprintf("  50-75th percentile:  %2d (%.1f%%)\n", var_table[3], var_pct[3]))
+  cat(sprintf("  75-100th percentile: %2d (%.1f%%)\n", var_table[4], var_pct[4]))
+  
+  # Note for interpretation
+  if(var %in% c("BFI_Extraversion", "BFI_Conscientiousness")) {
+    cat("  ↑ Higher = more extreme\n")
+  } else if(var == "DBAS_Medications") {
+    cat("  ↓ Lower = less belief in meds (more extreme)\n")
+  } else if(var == "CISS_Emotion") {
+    cat("  ↑ Higher = more emotion-focused coping\n")
+  }
+  cat("\n")
+}
 
 #==============================================================================
-# PART F: COMBINED PROFILE ANALYSIS
+# PART F: MULTIVARIATE PROFILE ANALYSIS
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART F: COMBINED PROFILE ANALYSIS (THE KEY QUESTION)\n")
+cat("PART F: MULTIVARIATE PROFILE ANALYSIS (KEY QUESTION)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Define high-risk profile
+cat("Defining theoretically-expected high-risk profile:\n")
+cat("  • High Extraversion (>75th percentile)\n")
+cat("  • Low DBAS Medications (<25th percentile)\n")
+cat("  • High Emotion-focused coping (>75th percentile)\n")
+cat("  • Low Conscientiousness (<25th percentile)\n\n")
+
+# Define extreme values for each predictor
 analysis_data <- analysis_data %>%
   mutate(
-    extra_high = BFI_Extraversion > quantile(BFI_Extraversion, 0.75, na.rm = TRUE),
-    dbas_low = DBAS_Medications < quantile(DBAS_Medications, 0.25, na.rm = TRUE),
-    high_risk_profile = extra_high & dbas_low
+    extra_extreme = BFI_Extraversion > quantile(BFI_Extraversion, 0.75, na.rm = TRUE),
+    dbas_extreme = DBAS_Medications < quantile(DBAS_Medications, 0.25, na.rm = TRUE),
+    emotion_extreme = CISS_Emotion > quantile(CISS_Emotion, 0.75, na.rm = TRUE),
+    consc_extreme = BFI_Conscientiousness < quantile(BFI_Conscientiousness, 0.25, na.rm = TRUE),
+    
+    # Count how many extreme characteristics
+    n_extreme = (extra_extreme + dbas_extreme + emotion_extreme + consc_extreme),
+    
+    # Full profile (all 4)
+    full_high_risk_profile = extra_extreme & dbas_extreme & emotion_extreme & consc_extreme,
+    
+    # Partial profile (3 of 4)
+    partial_high_risk_profile = n_extreme >= 3
   )
 
-# Profile in influential vs non-influential
+# Profile prevalence
 profile_by_influence <- analysis_data %>%
   group_by(influential_group) %>%
   summarise(
     n = n(),
-    n_high_risk = sum(high_risk_profile, na.rm = TRUE),
-    pct_high_risk = 100 * mean(high_risk_profile, na.rm = TRUE),
+    n_full_profile = sum(full_high_risk_profile, na.rm = TRUE),
+    pct_full_profile = 100 * mean(full_high_risk_profile, na.rm = TRUE),
+    n_partial_profile = sum(partial_high_risk_profile, na.rm = TRUE),
+    pct_partial_profile = 100 * mean(partial_high_risk_profile, na.rm = TRUE),
+    mean_n_extreme = mean(n_extreme, na.rm = TRUE),
     .groups = "drop"
   )
 
-cat("HIGH-RISK PROFILE (High Extraversion + Low DBAS):\n")
+cat("HIGH-RISK PROFILE PREVALENCE:\n")
 cat("─────────────────────────────────────────────────────────────\n")
 print(profile_by_influence)
 cat("\n")
 
-# Test
-profile_table <- table(analysis_data$influential, analysis_data$high_risk_profile)
-fisher_profile <- fisher.test(profile_table)
+# Statistical tests
+# Check if there's variation to test
+can_test_full <- sum(analysis_data$full_high_risk_profile, na.rm = TRUE) > 0
+can_test_partial <- sum(analysis_data$partial_high_risk_profile, na.rm = TRUE) > 1
 
-cat(sprintf("Fisher's Exact Test: p = %.4f\n", fisher_profile$p.value))
-cat(sprintf("Odds Ratio: %.2f [%.2f, %.2f]\n\n", 
-            fisher_profile$estimate,
-            fisher_profile$conf.int[1],
-            fisher_profile$conf.int[2]))
+if(can_test_full) {
+  profile_table_full <- table(analysis_data$influential, analysis_data$full_high_risk_profile)
+  fisher_profile_full <- fisher.test(profile_table_full)
+  
+  cat("FULL PROFILE (all 4 characteristics):\n")
+  cat(sprintf("  Fisher's Exact Test: p = %.4f\n", fisher_profile_full$p.value))
+  cat(sprintf("  Odds Ratio: %.2f [%.2f, %.2f]\n\n", 
+              fisher_profile_full$estimate,
+              fisher_profile_full$conf.int[1],
+              fisher_profile_full$conf.int[2]))
+} else {
+  fisher_profile_full <- NULL
+  cat("FULL PROFILE (all 4 characteristics):\n")
+  cat("  ✗ Cannot test - no cases with full profile\n")
+  cat("  This indicates influential cases do NOT share a coherent profile\n\n")
+}
 
-# Detailed profile breakdown
-cat("PROFILE PATTERNS IN INFLUENTIAL CASES:\n")
+if(can_test_partial) {
+  profile_table_partial <- table(analysis_data$influential, analysis_data$partial_high_risk_profile)
+  fisher_profile_partial <- fisher.test(profile_table_partial)
+  
+  cat("PARTIAL PROFILE (3+ of 4 characteristics):\n")
+  cat(sprintf("  Fisher's Exact Test: p = %.4f\n", fisher_profile_partial$p.value))
+  cat(sprintf("  Odds Ratio: %.2f [%.2f, %.2f]\n\n", 
+              fisher_profile_partial$estimate,
+              fisher_profile_partial$conf.int[1],
+              fisher_profile_partial$conf.int[2]))
+} else {
+  fisher_profile_partial <- NULL
+  cat("PARTIAL PROFILE (3+ of 4 characteristics):\n")
+  cat("  ✗ Insufficient cases with partial profile\n")
+  cat("  This indicates influential cases are scattered across predictor space\n\n")
+}
+
+# Detailed breakdown
+cat("INDIVIDUAL PREDICTOR EXTREMES IN INFLUENTIAL CASES:\n")
 cat("─────────────────────────────────────────────────────────────\n")
 
-# Get the profile variables from analysis_data for influential cases
-influential_with_profile <- analysis_data %>%
-  filter(influential) %>%
-  select(case_id, extra_high, dbas_low)
+# Refresh influential_cases so it includes extreme flags
+influential_cases <- analysis_data %>%
+  filter(influential)
 
-# Create profile detail
-profile_detail <- influential_with_profile %>%
-  mutate(
-    profile = case_when(
-      extra_high & dbas_low ~ "High Extra + Low DBAS",
-      extra_high & !dbas_low ~ "High Extra + High DBAS",
-      !extra_high & dbas_low ~ "Low Extra + Low DBAS",
-      !extra_high & !dbas_low ~ "Low Extra + High DBAS"
-    )
-  ) %>%
-  count(profile) %>%
-  mutate(pct = 100 * n / sum(n)) %>%
-  arrange(desc(n))
-
-print(profile_detail)
-cat("\n")
-
-#==============================================================================
-# PART G: DEMOGRAPHICS
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART G: DEMOGRAPHICS\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-# Age
-cat("AGE:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-age_summary <- analysis_data %>%
-  group_by(influential_group) %>%
+extreme_summary <- influential_cases %>%
   summarise(
     n = n(),
-    mean = mean(age, na.rm = TRUE),
-    sd = sd(age, na.rm = TRUE),
-    median = median(age, na.rm = TRUE),
-    min = min(age, na.rm = TRUE),
-    max = max(age, na.rm = TRUE),
-    .groups = "drop"
-  )
-print(age_summary)
-cat("\n")
-
-t_test_age <- t.test(age ~ influential, data = analysis_data)
-cat(sprintf("t-test: t(%.1f) = %.3f, p = %.4f\n\n", 
-            t_test_age$parameter, t_test_age$statistic, t_test_age$p.value))
-
-# Sex
-cat("SEX:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-sex_summary <- analysis_data %>%
-  group_by(influential_group, sex) %>%
-  summarise(n = n(), .groups = "drop") %>%
-  group_by(influential_group) %>%
-  mutate(pct = 100 * n / sum(n))
-print(sex_summary)
-cat("\n")
-
-chisq_sex <- chisq.test(table(analysis_data$influential, analysis_data$sex))
-cat(sprintf("Chi-square test: χ²(1) = %.3f, p = %.4f\n\n", 
-            chisq_sex$statistic, chisq_sex$p.value))
-
-#==============================================================================
-# PART H: OTHER PERSONALITY VARIABLES
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART H: OTHER PERSONALITY VARIABLES\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-personality_vars <- c("BFI_Neuroticism", "BFI_Conscientiousness", 
-                      "BFI_Openness", "BFI_Agreeableness",
-                      "CISS_Emotion", "SURPS_Anxiety_Sensitivity",
-                      "SURPS_Hopelessness")
-
-personality_comparison <- map_dfr(personality_vars, function(var) {
-  if (var %in% names(analysis_data)) {
-    influential_mean <- mean(influential_cases[[var]], na.rm = TRUE)
-    non_influential_mean <- mean(analysis_data[[var]][!analysis_data$influential], na.rm = TRUE)
-    overall_sd <- sd(analysis_data[[var]], na.rm = TRUE)
-    
-    t_result <- t.test(as.formula(paste(var, "~ influential")), 
-                       data = analysis_data)
-    
-    tibble(
-      Variable = var,
-      Influential_M = round(influential_mean, 2),
-      NonInfluential_M = round(non_influential_mean, 2),
-      Diff = round(influential_mean - non_influential_mean, 2),
-      Cohens_d = round((influential_mean - non_influential_mean) / overall_sd, 2),
-      t_stat = round(t_result$statistic, 2),
-      p_value = round(t_result$p.value, 4),
-      sig = case_when(
-        t_result$p.value < 0.001 ~ "***",
-        t_result$p.value < 0.01 ~ "**",
-        t_result$p.value < 0.05 ~ "*",
-        TRUE ~ ""
-      )
-    )
-  }
-}) %>%
-  arrange(desc(abs(Cohens_d)))
-
-print(personality_comparison)
-cat("\n")
-
-#==============================================================================
-# PART I: RISK ANALYSIS
-#==============================================================================
-
-cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART I: DISCONTINUATION RISK BY PROFILE\n")
-cat("═══════════════════════════════════════════════════════════════\n\n")
-
-risk_analysis <- analysis_data %>%
-  group_by(high_risk_profile) %>%
-  summarise(
-    n = n(),
-    n_discontinued = sum(!!sym(outcome_var)),
-    pct_discontinued = 100 * mean(!!sym(outcome_var)),
-    n_influential = sum(influential),
-    pct_influential = 100 * mean(influential),
-    .groups = "drop"
+    n_extra_extreme = sum(extra_extreme, na.rm = TRUE),
+    pct_extra_extreme = 100 * mean(extra_extreme, na.rm = TRUE),
+    n_dbas_extreme = sum(dbas_extreme, na.rm = TRUE),
+    pct_dbas_extreme = 100 * mean(dbas_extreme, na.rm = TRUE),
+    n_emotion_extreme = sum(emotion_extreme, na.rm = TRUE),
+    pct_emotion_extreme = 100 * mean(emotion_extreme, na.rm = TRUE),
+    n_consc_extreme = sum(consc_extreme, na.rm = TRUE),
+    pct_consc_extreme = 100 * mean(consc_extreme, na.rm = TRUE)
   )
 
-cat("DISCONTINUATION BY RISK PROFILE:\n")
-cat("─────────────────────────────────────────────────────────────\n")
-print(risk_analysis)
+cat(sprintf("  High Extraversion:      %d (%.1f%%)\n", 
+            extreme_summary$n_extra_extreme, extreme_summary$pct_extra_extreme))
+cat(sprintf("  Low DBAS Medications:   %d (%.1f%%)\n", 
+            extreme_summary$n_dbas_extreme, extreme_summary$pct_dbas_extreme))
+cat(sprintf("  High Emotion Coping:    %d (%.1f%%)\n", 
+            extreme_summary$n_emotion_extreme, extreme_summary$pct_emotion_extreme))
+cat(sprintf("  Low Conscientiousness:  %d (%.1f%%)\n", 
+            extreme_summary$n_consc_extreme, extreme_summary$pct_consc_extreme))
 cat("\n")
 
-# Calculate relative risk
-high_risk_rate <- risk_analysis$pct_discontinued[risk_analysis$high_risk_profile == TRUE]
-low_risk_rate <- risk_analysis$pct_discontinued[risk_analysis$high_risk_profile == FALSE]
-relative_risk <- high_risk_rate / low_risk_rate
 
-cat(sprintf("Relative Risk: %.2f\n", relative_risk))
-cat(sprintf("Interpretation: High-risk profile has %.1f%% discontinuation rate\n", high_risk_rate))
-cat(sprintf("                vs %.1f%% in low-risk profile\n\n", low_risk_rate))
+# Distribution of number of extreme characteristics
+n_extreme_dist <- table(influential_cases$n_extreme)
+cat("NUMBER OF EXTREME CHARACTERISTICS:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+for(i in 0:4) {
+  count <- ifelse(as.character(i) %in% names(n_extreme_dist), 
+                  n_extreme_dist[as.character(i)], 0)
+  pct <- 100 * count / nrow(influential_cases)
+  cat(sprintf("  %d characteristics: %2d cases (%.1f%%)\n", i, count, pct))
+}
+cat("\n")
 
 #==============================================================================
-# PART J: CLINICAL INTERPRETATION
+# PART G: CLINICAL INTERPRETATION
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART J: CLINICAL INTERPRETATION\n")
+cat("PART G: CLINICAL INTERPRETATION\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Determine scenario based on evidence
-pct_extreme_extra <- sum(influential_cases$extra_extreme, na.rm = TRUE) / 
-                     nrow(influential_cases) * 100
-pct_extreme_dbas <- sum(influential_cases$dbas_extreme, na.rm = TRUE) / 
-                    nrow(influential_cases) * 100
-pct_combined <- profile_detail$pct[profile_detail$profile == "High Extra + Low DBAS"]
-if(length(pct_combined) == 0) pct_combined <- 0
+# Determine scenario
+pct_full <- profile_by_influence$pct_full_profile[profile_by_influence$influential_group == "Influential"]
+pct_partial <- profile_by_influence$pct_partial_profile[profile_by_influence$influential_group == "Influential"]
 
 cat("EVIDENCE SUMMARY:\n")
 cat("─────────────────────────────────────────────────────────────\n")
-cat(sprintf("High extraversion (>75th): %.1f%% of influential cases\n", pct_extreme_extra))
-cat(sprintf("Low DBAS (<25th):          %.1f%% of influential cases\n", pct_extreme_dbas))
-cat(sprintf("BOTH combined:             %.1f%% of influential cases\n\n", pct_combined))
+cat(sprintf("Full profile (4/4):     %.1f%% of influential cases\n", pct_full))
+cat(sprintf("Partial profile (3/4):  %.1f%% of influential cases\n", pct_partial))
+cat(sprintf("Mean extreme traits:    %.1f of 4\n\n", 
+            profile_by_influence$mean_n_extreme[profile_by_influence$influential_group == "Influential"]))
 
-# Determine scenario
-if(pct_combined >= 60) {
+# Scenario determination
+if(pct_full >= 40 | pct_partial >= 60) {
   scenario <- "SCENARIO 1: MEANINGFUL CLINICAL SUBGROUP"
   interpretation <- paste(
-    "Strong evidence for a distinct clinical subgroup:",
-    sprintf("• %.1f%% show the expected high extraversion + low DBAS profile", pct_combined),
-    sprintf("• This profile is %.1fx more common in influential cases", 
-            fisher_profile$estimate),
-    sprintf("• Cohen's d for extraversion: %.2f (medium-large effect)", abs(cohens_d_extra)),
-    sprintf("• Cohen's d for DBAS: %.2f", abs(cohens_d_dbas)),
+    "Strong evidence for distinct clinical subgroup:",
+    sprintf("• %.1f%% show full profile (4/4 characteristics)", pct_full),
+    sprintf("• %.1f%% show partial profile (3+/4 characteristics)", pct_partial),
     "",
-    "RECOMMENDATION: Report as meaningful clinical finding",
+    "RECOMMENDATION: VSURF predictors may identify meaningful subgroup",
+    "Report as robust, clinically interpretable findings",
     sep = "\n"
   )
-} else if(pct_combined >= 40) {
-  scenario <- "SCENARIO 3: MIXED/MODERATE EVIDENCE"
+} else if(pct_partial >= 40 | pct_full >= 20) {
+  scenario <- "SCENARIO 2: MODERATE EVIDENCE"
   interpretation <- paste(
-    "Moderate evidence for subgroup with considerable heterogeneity:",
-    sprintf("• %.1f%% show the expected profile (moderate concentration)", pct_combined),
-    sprintf("• Cohen's d for extraversion: %.2f", abs(cohens_d_extra)),
-    sprintf("• Cohen's d for DBAS: %.2f", abs(cohens_d_dbas)),
+    "Moderate evidence with heterogeneity:",
+    sprintf("• %.1f%% show full profile", pct_full),
+    sprintf("• %.1f%% show partial profile", pct_partial),
     "",
-    "RECOMMENDATION: Report cautiously as exploratory finding",
+    "RECOMMENDATION: Report cautiously",
+    "Some predictors may be more robust than others",
     sep = "\n"
   )
 } else {
-  scenario <- "SCENARIO 2: STATISTICAL OUTLIERS"
+  scenario <- "SCENARIO 3: STATISTICAL OUTLIERS (NO COHERENT PROFILE)"
   interpretation <- paste(
-    "Limited evidence for meaningful subgroup:",
-    sprintf("• Only %.1f%% show the expected profile", pct_combined),
-    sprintf("• Influential cases scattered across predictor distributions"),
-    sprintf("• Cohen's d for extraversion: %.2f (modest)", abs(cohens_d_extra)),
+    "Limited/No evidence for coherent subgroup:",
+    sprintf("• Only %.1f%% show full profile (4/4)", pct_full),
+    sprintf("• Only %.1f%% show partial profile (3+/4)", pct_partial),
+    "• Influential cases scattered across predictor space",
+    "• Mean extreme characteristics: only 0.92 of 4",
     "",
-    "RECOMMENDATION: Report extraversion as non-robust in sensitivity analyses",
+    "⚠️  CRITICAL FINDING:",
+    "The influential cases do NOT share a meaningful clinical profile.",
+    "They are statistical outliers, not a distinct patient subgroup.",
+    "",
+    "RECOMMENDATION:",
+    "• Removal analysis (Part H) is CRITICAL",
+    "• Predictors that lose significance are NOT robust",
+    "• Only report predictors that remain significant after removal",
+    "• Treat non-robust predictors as sample-specific artifacts",
     sep = "\n"
   )
 }
@@ -12503,79 +12462,130 @@ cat("─────────────────────────
 cat(interpretation, "\n\n")
 
 #==============================================================================
-# PART K: SAVE RESULTS
+# PART H: REMOVAL SENSITIVITY - WHICH PREDICTORS ARE ROBUST?
 #==============================================================================
 
 cat("═══════════════════════════════════════════════════════════════\n")
-cat("PART K: SAVING RESULTS\n")
+cat("PART H: REMOVAL SENSITIVITY (CRITICAL)\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
-# Save comprehensive dataset
+cat("Refitting model WITHOUT influential cases...\n\n")
+
+# Remove influential cases
+data_clean <- analysis_data %>%
+  filter(!influential)
+
+# Refit model
+model_clean <- glm(as.formula(formula_str), data = data_clean, family = binomial)
+
+# Extract coefficients
+coefs_full <- broom::tidy(model, conf.int = TRUE, exponentiate = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  select(term, OR_full = estimate, p_full = p.value, lower_full = conf.low, upper_full = conf.high)
+
+coefs_clean <- broom::tidy(model_clean, conf.int = TRUE, exponentiate = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  select(term, OR_clean = estimate, p_clean = p.value, lower_clean = conf.low, upper_clean = conf.high)
+
+# Compare
+removal_comparison <- full_join(coefs_full, coefs_clean, by = "term") %>%
+  mutate(
+    OR_full_CI = sprintf("%.2f [%.2f, %.2f]", OR_full, lower_full, upper_full),
+    OR_clean_CI = sprintf("%.2f [%.2f, %.2f]", OR_clean, lower_clean, upper_clean),
+    OR_change_pct = 100 * (OR_clean - OR_full) / OR_full,
+    Sig_full = p_full < 0.05,
+    Sig_clean = p_clean < 0.05,
+    Robustness = case_when(
+      Sig_full & Sig_clean ~ "✓ Robust (remains sig)",
+      Sig_full & !Sig_clean ~ "⚠️  Non-robust (loses sig)",
+      !Sig_full & Sig_clean ~ "⚠️  Gains significance",
+      TRUE ~ "Both non-significant"
+    )
+  ) %>%
+  arrange(desc(abs(OR_change_pct)))
+
+cat("COEFFICIENT CHANGES AFTER REMOVING INFLUENTIAL CASES:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+print(removal_comparison %>% select(term, OR_full_CI, OR_clean_CI, OR_change_pct, Robustness))
+cat("\n")
+
+# Summary
+n_robust <- sum(str_detect(removal_comparison$Robustness, "Robust"))
+n_nonrobust <- sum(str_detect(removal_comparison$Robustness, "Non-robust"))
+
+cat("ROBUSTNESS SUMMARY:\n")
+cat("─────────────────────────────────────────────────────────────\n")
+cat(sprintf("Robust predictors:     %d/%d\n", n_robust, nrow(removal_comparison)))
+cat(sprintf("Non-robust predictors: %d/%d\n\n", n_nonrobust, nrow(removal_comparison)))
+
+if(n_nonrobust > 0) {
+  cat("⚠️  NON-ROBUST PREDICTORS (lose significance):\n")
+  nonrobust_vars <- removal_comparison %>%
+    filter(str_detect(Robustness, "Non-robust")) %>%
+    pull(term)
+  for(var in nonrobust_vars) {
+    cat(sprintf("  • %s\n", var))
+  }
+  cat("\n")
+}
+
+#==============================================================================
+# PART I: SAVE RESULTS
+#==============================================================================
+
+cat("═══════════════════════════════════════════════════════════════\n")
+cat("PART I: SAVING RESULTS\n")
+cat("═══════════════════════════════════════════════════════════════\n\n")
+
+# Save comprehensive results
 saveRDS(list(
+  model_vars = model_vars,
   analysis_data = analysis_data,
   influential_cases = influential_cases,
+  n_influential = length(influential_indices),
+  threshold = threshold,
   outcome_summary = outcome_summary,
-  extraversion_summary = extraversion_summary,
-  dbas_summary = dbas_summary,
+  vsurf_comparisons = vsurf_comparisons,
   profile_by_influence = profile_by_influence,
-  profile_detail = profile_detail,
-  age_summary = age_summary,
-  sex_summary = sex_summary,
-  personality_comparison = personality_comparison,
-  risk_analysis = risk_analysis,
+  extreme_summary = extreme_summary,
+  removal_comparison = removal_comparison,
   stats = list(
     fisher_outcome = fisher_result,
-    t_test_extraversion = t_test_extra,
-    t_test_dbas = t_test_dbas,
-    t_test_age = t_test_age,
-    chisq_sex = chisq_sex,
-    fisher_profile = fisher_profile,
-    cohens_d_extra = cohens_d_extra,
-    cohens_d_dbas = cohens_d_dbas,
-    relative_risk = relative_risk
+    fisher_profile_full = fisher_profile_full,
+    fisher_profile_partial = fisher_profile_partial
   ),
   interpretation = list(
     scenario = scenario,
-    pct_combined_profile = pct_combined,
-    pct_extreme_extra = pct_extreme_extra,
-    pct_extreme_dbas = pct_extreme_dbas
+    pct_full_profile = pct_full,
+    pct_partial_profile = pct_partial,
+    n_robust = n_robust,
+    n_nonrobust = n_nonrobust
   )
-), "influential_cases_analysis.rds")
+), "influential_cases_analysis_vsurf.rds")
 
-# Save key summaries
-write_csv(outcome_summary, "influential_outcome_summary.csv")
-write_csv(extraversion_summary, "influential_extraversion_summary.csv")
-write_csv(dbas_summary, "influential_dbas_summary.csv")
-write_csv(profile_by_influence, "influential_profile_comparison.csv")
-write_csv(profile_detail, "influential_profile_patterns.csv")
-write_csv(personality_comparison, "influential_personality_comparison.csv")
-write_csv(risk_analysis, "influential_risk_analysis.csv")
+write_csv(outcome_summary, "influential_outcome_summary_vsurf.csv")
+write_csv(profile_by_influence, "influential_profile_summary_vsurf.csv")
+write_csv(removal_comparison, "influential_removal_sensitivity_vsurf.csv")
 
-# Save influential cases details
+# Detailed influential cases
 influential_details <- influential_cases %>%
-  select(case_id, cooks_d, 
-         BFI_Extraversion, DBAS_Medications, age, sex,
-         extra_percentile, dbas_percentile,
-         extra_extreme, dbas_extreme,
+  select(case_id, cooks_d, all_of(model_vars), 
+         n_extreme, full_high_risk_profile, partial_high_risk_profile,
          !!sym(outcome_var))
-write_csv(influential_details, "influential_cases_detailed.csv")
+write_csv(influential_details, "influential_cases_detailed_vsurf.csv")
 
-cat("✓ Saved: influential_cases_analysis.rds\n")
-cat("✓ Saved: influential_outcome_summary.csv\n")
-cat("✓ Saved: influential_extraversion_summary.csv\n")
-cat("✓ Saved: influential_dbas_summary.csv\n")
-cat("✓ Saved: influential_profile_comparison.csv\n")
-cat("✓ Saved: influential_profile_patterns.csv\n")
-cat("✓ Saved: influential_personality_comparison.csv\n")
-cat("✓ Saved: influential_risk_analysis.csv\n")
-cat("✓ Saved: influential_cases_detailed.csv\n\n")
+cat("✓ Saved: influential_cases_analysis_vsurf.rds\n")
+cat("✓ Saved: influential_outcome_summary_vsurf.csv\n")
+cat("✓ Saved: influential_profile_summary_vsurf.csv\n")
+cat("✓ Saved: influential_removal_sensitivity_vsurf.csv\n")
+cat("✓ Saved: influential_cases_detailed_vsurf.csv\n\n")
 
 cat("═══════════════════════════════════════════════════════════════\n")
 cat("INFLUENTIAL CASES ANALYSIS COMPLETE\n")
 cat("═══════════════════════════════════════════════════════════════\n\n")
 
 cat(scenario, "\n\n")
-cat("See interpretation guide document for next steps.\n\n")
+cat("ROBUSTNESS: %d/%d predictors remain significant\n\n", n_robust, nrow(removal_comparison))
 ```
 
 
