@@ -1,0 +1,8 @@
+Variable,Influential_M,NonInfluential_M,Diff,Cohens_d,t_stat,p_value,sig
+BFI_Conscientiousness,3.8,4.09,-0.29,-0.32,1.17,0.2508,
+SURPS_Anxiety_Sensitivity,2.16,2.07,0.09,0.2,-0.98,0.3335,
+BFI_Openness,3.36,3.47,-0.11,-0.11,0.46,0.6521,
+CISS_Emotion,3.49,3.51,-0.03,-0.05,0.18,0.8556,
+SURPS_Hopelessness,2.07,2.05,0.03,0.05,-0.2,0.8401,
+BFI_Neuroticism,3,2.99,0.01,0.01,-0.07,0.9467,
+BFI_Agreeableness,3.76,3.75,0.01,0.01,-0.08,0.9391,

@@ -1,0 +1,6 @@
+Metric,Value,Interpretation
+Apparent AUC (Mean),0.6421600877192982,"[0.622, 0.669]"
+CV AUC (Mean),0.5964381720430108,"[0.568, 0.628]"
+Optimism,0.04572191567628747,Moderate
+Apparent SD,0.01221910403227141,Variability across imputations
+CV SD,0.017544814826778696,Variability across imputations

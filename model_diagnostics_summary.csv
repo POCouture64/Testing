@@ -1,0 +1,5 @@
+Check,Result,Flag
+Multicollinearity (max VIF),1.65,✓
+Influential cases (% of sample),9.0%,⚠️⚠️
+Hosmer-Lemeshow p-value,0.467,✓
+Events per variable,4.7,⚠️⚠️

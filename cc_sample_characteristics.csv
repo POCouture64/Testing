@@ -1,0 +1,8 @@
+Variable,CC_n,CC_value,Full_n,Full_value,stringsAsFactors
+age,301,73.18 (6.14),397,73.31 (6.07),NA
+sex,301,192 / 109,397,255 / 142,NA
+scrn_stopped_bzra,301,230 / 71,397,304 / 93,NA
+phq2_score,301,1.26 (1.51),397,1.36 (1.57),NA
+osss_3_score,301,10.25 (2.22),397,10.21 (2.28),NA
+med_quant,301,6.33 (3.89),397,6.42 (3.95),NA
+n_health_conditions,301,5.56 (3.01),397,5.59 (3.02),NA

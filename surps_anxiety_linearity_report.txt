@@ -1,0 +1,27 @@
+═══════════════════════════════════════════════════════════════
+SURPS ANXIETY SENSITIVITY LINEARITY ANALYSIS
+═══════════════════════════════════════════════════════════════
+
+BACKGROUND:
+Box-Tidwell test detected potential non-linearity (p=0.03)
+
+TESTS PERFORMED:
+1. Quadratic term:  p = 0.5761
+2. Spline model:    p = 0.7664
+3. Linear Δ-AIC:    1.8
+
+RECOMMENDATION:
+✓ KEEP LINEAR SPECIFICATION
+
+DETAILS:
+Although the Box-Tidwell test suggested non-linearity (p=0.03),
+multiple confirmatory tests do not support this:
+  • Quadratic term not significant
+  • Spline model not significantly better
+  • Linear model within 2 AIC units of best
+  • Visual inspection shows approximately linear trend
+
+The initial p=0.03 was likely a Type I error or borderline finding.
+Linear specification is appropriate and more parsimonious.
+
+═══════════════════════════════════════════════════════════════

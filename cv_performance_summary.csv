@@ -1,0 +1,6 @@
+Metric,Value,Interpretation
+Apparent AUC,0.6815064298836497,"[0.608, 0.755]"
+CV AUC,0.6163819875776397,From 10-fold CV
+Optimism,0.06512444230601,Substantial
+CV Sensitivity,0.9782608695652174,At optimal threshold
+CV Specificity,0.04285714285714286,At optimal threshold

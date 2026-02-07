@@ -1,0 +1,169 @@
+Model,term,Imp_OR_CI,Imp_p,Imp_sig,CC_OR_CI,CC_p,CC_sig,Sig_change
+Model_1,(Intercept),"0.59 [0.01, 28.81]",0.7913,,NA,NA,NA,✓ Consistent
+Model_1,BFI_Agreeableness,"1.15 [0.82, 1.62]",0.4149,,"1.08 [0.75, 1.57]",0.668,,✓ Consistent
+Model_1,BFI_Conscientiousness,"0.97 [0.67, 1.39]",0.8541,,"0.88 [0.61, 1.27]",0.5007,,✓ Consistent
+Model_1,BFI_Extraversion,"1.40 [1.04, 1.89]",0.0267,*,"1.50 [1.12, 2.00]",0.0067,**,✓ Consistent
+Model_1,BFI_Neuroticism,"1.20 [0.88, 1.64]",0.2451,,"1.31 [0.94, 1.82]",0.1159,,✓ Consistent
+Model_1,BFI_Openness,"1.12 [0.78, 1.62]",0.5328,,"1.12 [0.81, 1.56]",0.4873,,✓ Consistent
+Model_1,CISS_Avoidance,"1.28 [0.77, 2.15]",0.3472,,"0.93 [0.47, 1.85]",0.8466,,✓ Consistent
+Model_1,CISS_Emotion,"0.55 [0.27, 1.12]",0.1027,,"0.52 [0.24, 1.13]",0.1,,✓ Consistent
+Model_1,CISS_Task,"0.89 [0.40, 1.97]",0.7736,,"1.27 [0.61, 2.64]",0.5263,,✓ Consistent
+Model_1,DBAS_Consequences,"0.70 [0.56, 0.88]",0.002,**,"1.09 [0.89, 1.34]",0.3964,,⚠️  Lost significance in CC
+Model_1,DBAS_Expectations,"1.11 [0.88, 1.41]",0.3721,,"1.05 [0.84, 1.30]",0.6912,,✓ Consistent
+Model_1,DBAS_Medications,"0.87 [0.70, 1.10]",0.2505,,"0.85 [0.69, 1.05]",0.1257,,✓ Consistent
+Model_1,DBAS_Worry_Helplessness,"1.15 [0.93, 1.42]",0.1908,,"0.84 [0.67, 1.06]",0.148,,✓ Consistent
+Model_1,SURPS_Anxiety_Sensitivity,"1.07 [0.45, 2.56]",0.882,,"0.89 [0.38, 2.10]",0.7986,,✓ Consistent
+Model_1,SURPS_Hopelessness,"0.76 [0.37, 1.57]",0.4563,,"1.19 [0.58, 2.47]",0.636,,✓ Consistent
+Model_1,SURPS_Impulsivity,"0.92 [0.42, 1.99]",0.8273,,"1.03 [0.41, 2.62]",0.9482,,✓ Consistent
+Model_1,SURPS_Sensation_Seeking,"1.33 [0.64, 2.75]",0.4506,,"1.52 [0.85, 2.73]",0.1603,,✓ Consistent
+Model_2,(Intercept),"0.02 [0.00, 119464726810775083961253300659469177237372272838654620239314037682830461728084804213226210888233178020467629408047260307081080620533087549240007295851449898159330452312436400203927719085562729503580067118710679041086885980350635922532529186690268274358944540112475960963511026751522495004672.00]",0.9909,,NA,NA,NA,✓ Consistent
+Model_2,BFI_Agreeableness,"1.17 [0.81, 1.69]",0.4161,,"1.11 [0.75, 1.63]",0.6039,,✓ Consistent
+Model_2,BFI_Conscientiousness,"0.96 [0.65, 1.41]",0.8311,,"0.84 [0.57, 1.23]",0.369,,✓ Consistent
+Model_2,BFI_Extraversion,"1.42 [1.03, 1.97]",0.0342,*,"1.53 [1.12, 2.07]",0.0069,**,✓ Consistent
+Model_2,BFI_Neuroticism,"1.21 [0.87, 1.68]",0.2479,,"1.28 [0.91, 1.80]",0.1629,,✓ Consistent
+Model_2,BFI_Openness,"1.15 [0.78, 1.71]",0.4739,,"1.12 [0.79, 1.58]",0.514,,✓ Consistent
+Model_2,CISS_Avoidance,"1.26 [0.72, 2.20]",0.4218,,"0.87 [0.43, 1.75]",0.6956,,✓ Consistent
+Model_2,CISS_Emotion,"0.53 [0.24, 1.15]",0.1098,,"0.59 [0.26, 1.33]",0.2034,,✓ Consistent
+Model_2,CISS_Task,"0.96 [0.41, 2.24]",0.9281,,"1.21 [0.57, 2.56]",0.6201,,✓ Consistent
+Model_2,DBAS_Consequences,"0.70 [0.55, 0.88]",0.0024,**,"1.09 [0.88, 1.35]",0.4222,,⚠️  Lost significance in CC
+Model_2,DBAS_Expectations,"1.10 [0.86, 1.42]",0.4557,,"1.04 [0.83, 1.31]",0.7148,,✓ Consistent
+Model_2,DBAS_Medications,"0.87 [0.68, 1.11]",0.2632,,"0.82 [0.65, 1.02]",0.0754,,✓ Consistent
+Model_2,DBAS_Worry_Helplessness,"1.14 [0.91, 1.44]",0.2604,,"0.87 [0.69, 1.10]",0.2567,,✓ Consistent
+Model_2,SURPS_Anxiety_Sensitivity,"1.00 [0.40, 2.54]",0.9945,,"0.93 [0.39, 2.24]",0.8719,,✓ Consistent
+Model_2,SURPS_Hopelessness,"0.72 [0.32, 1.62]",0.4295,,"0.95 [0.44, 2.05]",0.9055,,✓ Consistent
+Model_2,SURPS_Impulsivity,"0.90 [0.40, 2.02]",0.7965,,"0.96 [0.36, 2.56]",0.9362,,✓ Consistent
+Model_2,SURPS_Sensation_Seeking,"1.31 [0.59, 2.90]",0.5093,,"1.42 [0.77, 2.59]",0.2606,,✓ Consistent
+Model_2,age,"0.97 [0.92, 1.01]",0.1679,,"0.96 [0.91, 1.01]",0.1007,,✓ Consistent
+Model_2,driving_freq,NA,NA,NA,"0.83 [0.56, 1.23]",0.3457,,✓ Consistent
+Model_2,driving_freq.C,"1.19 [0.53, 2.67]",0.6786,,NA,NA,NA,✓ Consistent
+Model_2,driving_freq.L,"0.96 [0.34, 2.68]",0.9319,,NA,NA,NA,✓ Consistent
+Model_2,driving_freq.Q,"0.94 [0.38, 2.30]",0.8936,,NA,NA,NA,✓ Consistent
+Model_2,education,NA,NA,NA,"1.39 [0.95, 2.05]",0.0924,,✓ Consistent
+Model_2,education.C,"0.00 [0.00, Inf]",0.9846,,NA,NA,NA,✓ Consistent
+Model_2,education.L,"74.38 [0.00, 3551514753010899772278250093478887826436374765481566057166730386934659662491805346937656019801323253768726280805081887507863453094081015903913968687020633544109693950087282531858250615718985160807642928322852104543557124096.00]",0.9867,,NA,NA,NA,✓ Consistent
+Model_2,education.Q,"105.71 [0.00, 340324405084580846186059810527581465489218957224181068277706792219041564577549869074866524281418071542756575223003608385331559868785758773329753684508135514501654757059506833870803118850048.00]",0.983,,NA,NA,NA,✓ Consistent
+Model_2,education^4,"1173.48 [0.00, Inf]",0.9856,,NA,NA,NA,✓ Consistent
+Model_2,employment,NA,NA,NA,"0.91 [0.54, 1.53]",0.7248,,✓ Consistent
+Model_2,employment.C,"0.09 [0.00, 1329748179044284036423840628890690069998079087095903146824116169470391894130702048922571028775953450387228995569607799652653247408412628811992171103586298464798181909419512192351650916843197911290940159191075883002179606550675456.00]",0.9928,,NA,NA,NA,✓ Consistent
+Model_2,employment.L,"0.00 [0.00, Inf]",0.9887,,NA,NA,NA,✓ Consistent
+Model_2,employment.Q,"0.00 [0.00, Inf]",0.9883,,NA,NA,NA,✓ Consistent
+Model_2,income,NA,NA,NA,"0.76 [0.55, 1.05]",0.0969,,✓ Consistent
+Model_2,income.C,"0.44 [0.11, 1.80]",0.2529,,NA,NA,NA,✓ Consistent
+Model_2,income.L,"0.24 [0.02, 3.26]",0.2865,,NA,NA,NA,✓ Consistent
+Model_2,income.Q,"2.60 [0.28, 24.14]",0.4018,,NA,NA,NA,✓ Consistent
+Model_2,income^4,"1.19 [0.53, 2.66]",0.6753,,NA,NA,NA,✓ Consistent
+Model_2,sex,"0.93 [0.50, 1.74]",0.8179,,"1.14 [0.59, 2.20]",0.6973,,✓ Consistent
+Model_3,(Intercept),"0.54 [0.02, 12.73]",0.6997,,NA,NA,NA,✓ Consistent
+Model_3,BFI_Conscientiousness,"0.98 [0.70, 1.36]",0.9014,,"0.88 [0.62, 1.24]",0.4579,,✓ Consistent
+Model_3,BFI_Extraversion,"1.37 [1.03, 1.81]",0.0301,*,"1.52 [1.15, 2.00]",0.0034,**,✓ Consistent
+Model_3,BFI_Neuroticism,"1.17 [0.88, 1.55]",0.2807,,"1.28 [0.94, 1.75]",0.115,,✓ Consistent
+Model_3,BFI_Openness,"1.16 [0.83, 1.62]",0.3747,,"1.13 [0.82, 1.55]",0.4656,,✓ Consistent
+Model_3,CISS_Emotion,"0.64 [0.39, 1.08]",0.0947,,"0.62 [0.35, 1.10]",0.1013,,✓ Consistent
+Model_3,DBAS_Medications,"0.83 [0.72, 0.96]",0.0133,*,"0.80 [0.68, 0.95]",0.0089,**,✓ Consistent
+Model_3,SURPS_Anxiety_Sensitivity,"1.24 [0.63, 2.44]",0.5362,,"1.02 [0.49, 2.11]",0.967,,✓ Consistent
+Model_3,SURPS_Hopelessness,"0.84 [0.43, 1.65]",0.622,,"1.12 [0.55, 2.29]",0.747,,✓ Consistent
+Model_4,(Intercept),"0.03 [0.00, 36864862011347441603373347440427824381513072980789859748095669235407196661303820078483712316389198992596367603908094295805537042073879831143420334531029874652097300494485097491844509148435325511348710343376137965385655534031081818139827602254047481450285748622280939649187366399121633490685275406336.00]",0.9924,,NA,NA,NA,✓ Consistent
+Model_4,BFI_Conscientiousness,"0.98 [0.69, 1.39]",0.9061,,"0.85 [0.59, 1.23]",0.3961,,✓ Consistent
+Model_4,BFI_Extraversion,"1.38 [1.02, 1.88]",0.0413,*,"1.54 [1.14, 2.08]",0.0046,**,✓ Consistent
+Model_4,BFI_Neuroticism,"1.16 [0.86, 1.56]",0.3303,,"1.28 [0.93, 1.76]",0.1349,,✓ Consistent
+Model_4,BFI_Openness,"1.20 [0.84, 1.71]",0.3286,,"1.14 [0.82, 1.59]",0.4407,,✓ Consistent
+Model_4,CISS_Emotion,"0.64 [0.37, 1.10]",0.1094,,"0.64 [0.36, 1.16]",0.1401,,✓ Consistent
+Model_4,DBAS_Medications,"0.82 [0.70, 0.95]",0.0099,**,"0.78 [0.66, 0.93]",0.0046,**,✓ Consistent
+Model_4,SURPS_Anxiety_Sensitivity,"1.14 [0.55, 2.35]",0.7211,,"1.02 [0.48, 2.19]",0.9509,,✓ Consistent
+Model_4,SURPS_Hopelessness,"0.78 [0.38, 1.63]",0.5122,,"0.89 [0.43, 1.86]",0.7615,,✓ Consistent
+Model_4,age,"0.96 [0.92, 1.00]",0.0787,,"0.95 [0.90, 1.00]",0.061,,✓ Consistent
+Model_4,driving_freq,NA,NA,NA,"0.84 [0.57, 1.24]",0.3838,,✓ Consistent
+Model_4,driving_freq.C,"1.09 [0.51, 2.33]",0.8169,,NA,NA,NA,✓ Consistent
+Model_4,driving_freq.L,"0.97 [0.37, 2.53]",0.9545,,NA,NA,NA,✓ Consistent
+Model_4,driving_freq.Q,"0.99 [0.43, 2.30]",0.9825,,NA,NA,NA,✓ Consistent
+Model_4,education,NA,NA,NA,"1.37 [0.94, 2.01]",0.1012,,✓ Consistent
+Model_4,education.C,"0.00 [0.00, Inf]",0.9849,,NA,NA,NA,✓ Consistent
+Model_4,education.L,"92.53 [0.00, 116090417829742564205127913237862661411057406847304837918431430915897370022648684694558126239275512510542003489164885815026094488600749898111034646065393599001163095407717421367847922522754195458068904845443362317931279217065984.00]",0.9863,,NA,NA,NA,✓ Consistent
+Model_4,education.Q,"96.20 [0.00, 1683424518911434322764514623260863606742448654095720936009701493483223796068224764884187186052891636757485304474538788577219031174118854210029220523355114953726454275685875170088894159602581504.00]",0.9837,,NA,NA,NA,✓ Consistent
+Model_4,education^4,"1114.93 [0.00, Inf]",0.986,,NA,NA,NA,✓ Consistent
+Model_4,employment,NA,NA,NA,"0.97 [0.59, 1.58]",0.8923,,✓ Consistent
+Model_4,employment.C,"0.07 [0.00, 11893615946463444730308355277721656959730146049680347280594492091749923945715174861617335978991684952162605713554669468781442564150961441368728834179066763621810685828363774102257175078262010449697136938966244262924256628996893946413056.00]",0.9925,,NA,NA,NA,✓ Consistent
+Model_4,employment.L,"0.00 [0.00, Inf]",0.9893,,NA,NA,NA,✓ Consistent
+Model_4,employment.Q,"0.00 [0.00, Inf]",0.9889,,NA,NA,NA,✓ Consistent
+Model_4,income,NA,NA,NA,"0.72 [0.53, 0.97]",0.0322,*,✓ Consistent
+Model_4,income.C,"0.44 [0.13, 1.51]",0.1921,,NA,NA,NA,✓ Consistent
+Model_4,income.L,"0.26 [0.03, 2.42]",0.2376,,NA,NA,NA,✓ Consistent
+Model_4,income.Q,"2.38 [0.35, 15.95]",0.3729,,NA,NA,NA,✓ Consistent
+Model_4,income^4,"1.12 [0.54, 2.35]",0.7588,,NA,NA,NA,✓ Consistent
+Model_4,sex,"0.86 [0.49, 1.53]",0.6109,,"1.19 [0.63, 2.25]",0.5821,,✓ Consistent
+Model_5,(Intercept),"0.05 [0.00, 521091031721037260983710380753475698805676578891055158871179936291708446365976568562155417572511582309352927731164084330754690331064436165249278860534111172938552273658877650622587074798233799311461956245219669782038593882642160172856030567986161693167468428299966701890610566425978339328.00]",0.9928,,NA,NA,NA,✓ Consistent
+Model_5,BFI_Agreeableness,"1.20 [0.81, 1.76]",0.364,,"1.11 [0.75, 1.65]",0.6024,,✓ Consistent
+Model_5,BFI_Conscientiousness,"0.92 [0.62, 1.39]",0.6996,,"0.80 [0.54, 1.18]",0.2634,,✓ Consistent
+Model_5,BFI_Extraversion,"1.43 [1.01, 2.02]",0.0455,*,"1.53 [1.12, 2.08]",0.007,**,✓ Consistent
+Model_5,BFI_Neuroticism,"1.20 [0.85, 1.69]",0.3026,,"1.23 [0.87, 1.76]",0.244,,✓ Consistent
+Model_5,BFI_Openness,"1.20 [0.78, 1.83]",0.4072,,"1.11 [0.78, 1.57]",0.5722,,✓ Consistent
+Model_5,CISS_Avoidance,"1.22 [0.68, 2.19]",0.509,,"0.87 [0.43, 1.75]",0.6929,,✓ Consistent
+Model_5,CISS_Emotion,"0.53 [0.24, 1.17]",0.1163,,"0.70 [0.31, 1.58]",0.3891,,✓ Consistent
+Model_5,CISS_Task,"0.97 [0.40, 2.36]",0.9475,,"1.02 [0.47, 2.21]",0.9527,,✓ Consistent
+Model_5,DBAS_Consequences,"0.70 [0.56, 0.89]",0.0043,**,"1.06 [0.85, 1.32]",0.608,,⚠️  Lost significance in CC
+Model_5,DBAS_Expectations,"1.05 [0.79, 1.40]",0.7328,,"1.02 [0.81, 1.29]",0.8705,,✓ Consistent
+Model_5,DBAS_Medications,"0.89 [0.68, 1.17]",0.4067,,"0.78 [0.62, 0.99]",0.0416,*,⚠️  Gained significance in CC
+Model_5,DBAS_Worry_Helplessness,"1.14 [0.89, 1.47]",0.3133,,"0.91 [0.71, 1.17]",0.46,,✓ Consistent
+Model_5,SURPS_Anxiety_Sensitivity,"1.01 [0.38, 2.67]",0.9813,,"0.96 [0.39, 2.38]",0.9248,,✓ Consistent
+Model_5,SURPS_Hopelessness,"0.66 [0.28, 1.53]",0.3331,,"0.84 [0.38, 1.86]",0.6601,,✓ Consistent
+Model_5,SURPS_Impulsivity,"0.87 [0.37, 2.05]",0.7469,,"0.73 [0.26, 2.03]",0.5433,,✓ Consistent
+Model_5,SURPS_Sensation_Seeking,"1.11 [0.45, 2.71]",0.8185,,"1.29 [0.69, 2.40]",0.4277,,✓ Consistent
+Model_5,age,"0.97 [0.92, 1.01]",0.1715,,"0.96 [0.91, 1.01]",0.1144,,✓ Consistent
+Model_5,driving_freq,NA,NA,NA,"0.82 [0.55, 1.23]",0.3415,,✓ Consistent
+Model_5,driving_freq.C,"1.17 [0.51, 2.69]",0.7085,,NA,NA,NA,✓ Consistent
+Model_5,driving_freq.L,"1.00 [0.35, 2.91]",0.9955,,NA,NA,NA,✓ Consistent
+Model_5,driving_freq.Q,"0.81 [0.32, 2.06]",0.6573,,NA,NA,NA,✓ Consistent
+Model_5,education,NA,NA,NA,"1.45 [0.97, 2.17]",0.0716,,✓ Consistent
+Model_5,education.C,"0.00 [0.00, Inf]",0.9842,,NA,NA,NA,✓ Consistent
+Model_5,education.L,"77.49 [0.00, 578677524731152684820857744845704422721946638289458385718349475370708278343395478980531039368836424244773651399826962059735388800671428818258323099327394394131826526537896407938162018033710794911660334686896639319212032.00]",0.9864,,NA,NA,NA,✓ Consistent
+Model_5,education.Q,"113.78 [0.00, 222537427561463419775054585638354035352181304753141084426698383174812529832912605350054543446199777978719958751069014538980673911768009093997076586380963430909016245457669735591207501824.00]",0.9825,,NA,NA,NA,✓ Consistent
+Model_5,education^4,"1176.33 [0.00, Inf]",0.9854,,NA,NA,NA,✓ Consistent
+Model_5,employment,NA,NA,NA,"1.00 [0.58, 1.72]",0.9954,,✓ Consistent
+Model_5,employment.C,"0.08 [0.00, 28888352037292399997439940687765287729799047186362400498656115565531253519433893840573265778168550314511565547169543497430675551357380874257318785670774113014645583959696449228111653100971578503878079557046451506989697983315968.00]",0.9924,,NA,NA,NA,✓ Consistent
+Model_5,employment.L,"0.00 [0.00, Inf]",0.9886,,NA,NA,NA,✓ Consistent
+Model_5,employment.Q,"0.00 [0.00, Inf]",0.9883,,NA,NA,NA,✓ Consistent
+Model_5,income,NA,NA,NA,"0.76 [0.55, 1.06]",0.1088,,✓ Consistent
+Model_5,income.C,"0.40 [0.11, 1.55]",0.1876,,NA,NA,NA,✓ Consistent
+Model_5,income.L,"0.22 [0.02, 2.43]",0.2185,,NA,NA,NA,✓ Consistent
+Model_5,income.Q,"2.96 [0.37, 23.68]",0.3084,,NA,NA,NA,✓ Consistent
+Model_5,income^4,"1.13 [0.50, 2.57]",0.769,,NA,NA,NA,✓ Consistent
+Model_5,sex,"0.97 [0.51, 1.86]",0.9384,,"1.07 [0.55, 2.09]",0.844,,✓ Consistent
+Model_5,side_effects_1,NA,NA,NA,"1.54 [1.18, 2.01]",0.0014,**,✓ Consistent
+Model_5,side_effects_1.C,"0.77 [0.42, 1.42]",0.4064,,NA,NA,NA,✓ Consistent
+Model_5,side_effects_1.L,"2.33 [0.97, 5.58]",0.0593,,NA,NA,NA,✓ Consistent
+Model_5,side_effects_1.Q,"1.94 [0.80, 4.73]",0.1465,,NA,NA,NA,✓ Consistent
+Model_5,side_effects_1^4,"1.06 [0.46, 2.48]",0.887,,NA,NA,NA,✓ Consistent
+Model_6,(Intercept),"0.07 [0.00, 17863324786305233417244668361987994091728596178594718897123662910063021733396639128010226109911973891600148710840029741106731067723923718307784629326097921007132609591740533144316194077293723908976813518407444614268587297237421060630436434734467661913435518700408476190247286516921331483672576.00]",0.9937,,NA,NA,NA,✓ Consistent
+Model_6,BFI_Conscientiousness,"0.98 [0.67, 1.42]",0.9058,,"0.83 [0.57, 1.21]",0.3291,,✓ Consistent
+Model_6,BFI_Extraversion,"1.41 [1.02, 1.96]",0.0417,*,"1.54 [1.14, 2.09]",0.0051,**,✓ Consistent
+Model_6,BFI_Neuroticism,"1.14 [0.83, 1.57]",0.4273,,"1.20 [0.86, 1.68]",0.277,,✓ Consistent
+Model_6,BFI_Openness,"1.21 [0.83, 1.78]",0.3243,,"1.13 [0.80, 1.59]",0.4807,,✓ Consistent
+Model_6,CISS_Emotion,"0.63 [0.36, 1.12]",0.115,,"0.65 [0.36, 1.18]",0.1546,,✓ Consistent
+Model_6,DBAS_Medications,"0.82 [0.69, 0.96]",0.0171,*,"0.76 [0.63, 0.91]",0.0023,**,✓ Consistent
+Model_6,SURPS_Anxiety_Sensitivity,"1.01 [0.48, 2.12]",0.984,,"0.89 [0.40, 1.98]",0.7815,,✓ Consistent
+Model_6,SURPS_Hopelessness,"0.68 [0.31, 1.50]",0.3446,,"0.83 [0.38, 1.78]",0.6265,,✓ Consistent
+Model_6,age,"0.96 [0.92, 1.01]",0.091,,"0.95 [0.90, 1.00]",0.0753,,✓ Consistent
+Model_6,driving_freq,NA,NA,NA,"0.83 [0.56, 1.22]",0.3471,,✓ Consistent
+Model_6,driving_freq.C,"1.09 [0.50, 2.40]",0.8211,,NA,NA,NA,✓ Consistent
+Model_6,driving_freq.L,"1.06 [0.39, 2.85]",0.908,,NA,NA,NA,✓ Consistent
+Model_6,driving_freq.Q,"0.84 [0.35, 2.02]",0.6929,,NA,NA,NA,✓ Consistent
+Model_6,education,NA,NA,NA,"1.41 [0.95, 2.10]",0.0842,,✓ Consistent
+Model_6,education.C,"0.00 [0.00, Inf]",0.9843,,NA,NA,NA,✓ Consistent
+Model_6,education.L,"97.71 [0.00, 5019302679559546121651163456898840973916932396580827463517966879905141621836946586597837158403905363427440991972397577015965746765488555880034476414935207716230049793908682278711474800607659546549207935255493099418288128.00]",0.9857,,NA,NA,NA,✓ Consistent
+Model_6,education.Q,"100.38 [0.00, 1001923532388373346136683181234462023247509157942658668790443151464802391960363787310523051072204531110080153312719435679355317644333929936544803736223125366391683323661682685380329996288.00]",0.983,,NA,NA,NA,✓ Consistent
+Model_6,education^4,"1135.58 [0.00, Inf]",0.9855,,NA,NA,NA,✓ Consistent
+Model_6,employment,NA,NA,NA,"1.02 [0.60, 1.71]",0.9533,,✓ Consistent
+Model_6,employment.C,"0.07 [0.00, 370181615248610935394942234019115042363884566872581706705870143610811417015889799176231169773503185934410069707478332196541468766100891939806064914013615166636741300407359423000216914984891873379548343412500279813628561352160182272.00]",0.992,,NA,NA,NA,✓ Consistent
+Model_6,employment.L,"0.00 [0.00, Inf]",0.9892,,NA,NA,NA,✓ Consistent
+Model_6,employment.Q,"0.00 [0.00, Inf]",0.9888,,NA,NA,NA,✓ Consistent
+Model_6,income,NA,NA,NA,"0.76 [0.55, 1.03]",0.076,,✓ Consistent
+Model_6,income.C,"0.37 [0.11, 1.27]",0.1158,,NA,NA,NA,✓ Consistent
+Model_6,income.L,"0.21 [0.02, 1.85]",0.1616,,NA,NA,NA,✓ Consistent
+Model_6,income.Q,"3.04 [0.47, 19.49]",0.2419,,NA,NA,NA,✓ Consistent
+Model_6,income^4,"1.13 [0.53, 2.42]",0.7463,,NA,NA,NA,✓ Consistent
+Model_6,sex,"0.89 [0.49, 1.61]",0.7085,,"1.10 [0.57, 2.09]",0.7804,,✓ Consistent
+Model_6,side_effects_1,NA,NA,NA,"1.56 [1.21, 2.00]",6e-4,***,✓ Consistent
+Model_6,side_effects_1.C,"0.78 [0.44, 1.40]",0.4074,,NA,NA,NA,✓ Consistent
+Model_6,side_effects_1.L,"2.62 [1.14, 5.99]",0.0243,*,NA,NA,NA,✓ Consistent
+Model_6,side_effects_1.Q,"1.65 [0.73, 3.73]",0.2298,,NA,NA,NA,✓ Consistent
+Model_6,side_effects_1^4,"1.08 [0.49, 2.36]",0.849,,NA,NA,NA,✓ Consistent

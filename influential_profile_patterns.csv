@@ -1,0 +1,5 @@
+profile,n,pct
+Low Extra + High DBAS,16,64
+High Extra + High DBAS,5,20
+High Extra + Low DBAS,2,8
+Low Extra + Low DBAS,2,8

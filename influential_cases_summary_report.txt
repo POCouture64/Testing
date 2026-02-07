@@ -1,0 +1,29 @@
+═══════════════════════════════════════════════════════════════
+INFLUENTIAL CASES SENSITIVITY ANALYSIS - SUMMARY
+═══════════════════════════════════════════════════════════════
+
+Model: Model_3
+Sample size: 301
+Influential cases: 23 (7.6%)
+
+IMPACT ASSESSMENT:
+  Overall: SUBSTANTIAL
+  Maximum OR change: 97.6% (SURPS_Anxiety_Sensitivity)
+  Significance changes: 2 predictor(s)
+  AUC change: 0.112
+
+INTERPRETATION:
+⚠️⚠️  Influential cases have substantial impact (>20% change)
+
+KEY PREDICTORS:
+  BFI_Extraversion: +47.9% change, ✓ Remains significant
+  DBAS_Medications: -10.9% change, ✓ Remains significant
+
+RECOMMENDATION:
+⚠️⚠️  Substantial sensitivity to influential cases. Consider:
+   1. Investigating characteristics of influential cases
+   2. Reporting both analyses as co-primary
+   3. Discussing clinical/methodological reasons for discrepancy
+   4. Recommending external validation
+
+═══════════════════════════════════════════════════════════════

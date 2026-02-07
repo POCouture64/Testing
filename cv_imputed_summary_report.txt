@@ -1,0 +1,35 @@
+═══════════════════════════════════════════════════════════════
+CROSS-VALIDATION ON IMPUTED DATA - SUMMARY
+═══════════════════════════════════════════════════════════════
+
+MODEL: Model 3 (Minimal Robust)
+Predictors: 4
+Sample size: 397
+Imputations: 20
+
+PERFORMANCE:
+  Apparent AUC: 0.648 (SD: 0.010)
+  CV AUC:       0.604 (SD: 0.013)
+  Optimism:     0.044
+
+INTERPRETATION:
+  ⚠️  MODERATE optimism (0.02-0.05)
+
+Model shows acceptable generalizability. Some optimism present but
+within normal range for sample size.
+
+RECOMMENDATION:
+Report both apparent and CV AUC. Use CV estimate for external
+validation planning.
+
+COMPARISON:
+  Imputed CV:      0.604
+  Complete-case CV: 0.616
+  Improvement:     +-0.012
+
+FOLD STABILITY:
+  Mean:  0.633
+  SD:    0.090
+  Range: 0.524 to 0.838
+
+═══════════════════════════════════════════════════════════════

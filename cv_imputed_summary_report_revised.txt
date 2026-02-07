@@ -1,0 +1,30 @@
+═══════════════════════════════════════════════════════════════
+CROSS-VALIDATION ON IMPUTED DATA - SUMMARY (REVISED)
+═══════════════════════════════════════════════════════════════
+
+MODEL: Model 3 (VSURF Prediction - PRIMARY)
+Predictors: 4 (DBAS_Medications, CISS_Emotion, BFI_Extraversion, BFI_Conscientiousness)
+Sample size: 397
+Imputations: 20
+
+PERFORMANCE:
+  Apparent AUC: 0.642 (SD: 0.012)
+  CV AUC:       0.596 (SD: 0.018)
+  Optimism:     0.046
+
+INTERPRETATION:
+  ⚠️  MODERATE optimism (0.02-0.05)
+
+Model shows acceptable generalizability. Some optimism present but
+within normal range for sample size.
+
+RECOMMENDATION:
+Report both apparent and CV AUC. Use CV estimate for external
+validation planning.
+
+FOLD STABILITY:
+  Mean:  0.616
+  SD:    0.089
+  Range: 0.522 to 0.830
+
+═══════════════════════════════════════════════════════════════

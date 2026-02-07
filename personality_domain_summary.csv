@@ -1,0 +1,6 @@
+"Domain","N_Variables","N_Significant_p05","N_Significant_p10","Min_p"
+"DBAS (Sleep Beliefs)",4,1,1,2.63885541678146e-09
+"Big Five",5,1,2,0.00436373552431535
+"CISS (Coping)",3,0,1,0.0815081896016441
+"Other",14,0,0,0.402260746373619
+"SURPS (Substance Personality)",4,0,0,0.411892293046159

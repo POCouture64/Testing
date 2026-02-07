@@ -1,0 +1,7 @@
+Variable,Selected_Threshold,Selected_Interp,Selected_Pred,Status
+age,TRUE,TRUE,TRUE,Selected
+sex,TRUE,TRUE,TRUE,Selected
+education,TRUE,FALSE,FALSE,Threshold only
+income,TRUE,FALSE,FALSE,Threshold only
+employment,FALSE,FALSE,FALSE,Eliminated
+driving_freq,FALSE,FALSE,FALSE,Eliminated

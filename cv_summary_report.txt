@@ -1,0 +1,30 @@
+═══════════════════════════════════════════════════════════════
+CROSS-VALIDATION SUMMARY REPORT
+═══════════════════════════════════════════════════════════════
+
+Model: Model_3
+Sample size: 301
+Events: 71 (23.6%)
+Predictors: 8
+
+PERFORMANCE:
+  Apparent AUC: 0.682 [0.608, 0.755]
+  CV AUC:       0.616
+  Optimism:     0.065
+
+INTERPRETATION:
+  ⚠️⚠️  SUBSTANTIAL optimism (>0.05)
+
+Model shows concerning overfitting. Apparent performance
+overestimates true discrimination ability.
+
+RECOMMENDATION:
+Report CV AUC as primary estimate. Consider model
+simplification or larger sample. External validation critical.
+
+FOLD STABILITY:
+  Mean AUC:  0.624
+  SD:        0.082
+  Range:     0.472 to 0.708
+
+═══════════════════════════════════════════════════════════════

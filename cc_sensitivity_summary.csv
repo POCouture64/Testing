@@ -1,0 +1,5 @@
+Model,term,Imp_OR_CI,Imp_p,Imp_sig,CC_OR_CI,CC_p,CC_sig,Sig_change
+Model_1,DBAS_Consequences,"0.70 [0.56, 0.88]",0.002,**,"1.09 [0.89, 1.34]",0.3964,,⚠️  Lost significance in CC
+Model_2,DBAS_Consequences,"0.70 [0.55, 0.88]",0.0024,**,"1.09 [0.88, 1.35]",0.4222,,⚠️  Lost significance in CC
+Model_5,DBAS_Consequences,"0.70 [0.56, 0.89]",0.0043,**,"1.06 [0.85, 1.32]",0.608,,⚠️  Lost significance in CC
+Model_5,DBAS_Medications,"0.89 [0.68, 1.17]",0.4067,,"0.78 [0.62, 0.99]",0.0416,*,⚠️  Gained significance in CC

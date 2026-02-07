@@ -1,0 +1,24 @@
+═══════════════════════════════════════════════════════════════
+MODEL DIAGNOSTICS REPORT
+Model: Model_6
+Date: 2026-02-03
+═══════════════════════════════════════════════════════════════
+
+SUMMARY:
+
+⚠️  MINOR ISSUES DETECTED - Model generally acceptable
+
+✓ Multicollinearity (max VIF): 1.65
+⚠️⚠️ Influential cases (% of sample): 9.0%
+✓ Hosmer-Lemeshow p-value: 0.467
+⚠️⚠️ Events per variable: 4.7
+
+═══════════════════════════════════════════════════════════════
+KEY RECOMMENDATIONS:
+═══════════════════════════════════════════════════════════════
+• Investigate influential cases - consider sensitivity analysis without them
+• Low EPV - consider reducing number of predictors or combining with external validation
+
+═══════════════════════════════════════════════════════════════
+END OF REPORT
+═══════════════════════════════════════════════════════════════

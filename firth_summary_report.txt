@@ -1,0 +1,35 @@
+═══════════════════════════════════════════════════════════════
+FIRTH PENALIZED LOGISTIC REGRESSION - SUMMARY
+═══════════════════════════════════════════════════════════════
+
+PURPOSE:
+  Address quasi-separation from 23 influential cases (all discontinued)
+
+METHOD:
+  Firth's penalized likelihood (reduces finite-sample bias)
+
+RESULTS:
+  Mean OR change: 0.5%
+  Max OR change: 0.9%
+  Significance changes: 0 predictor(s)
+  AUC (Firth): 0.648
+  AUC (Standard): 0.648
+
+KEY PREDICTORS:
+# A tibble: 2 × 4
+  term             Standard_OR_formatted Firth_OR_CI       OR_diff_pct
+  <chr>            <chr>                 <chr>                   <dbl>
+1 BFI_Extraversion 1.33                  1.32 [1.04, 1.69]      -0.527
+2 DBAS_Medications 0.84                  0.84 [0.73, 0.96]       0.314
+
+INTERPRETATION:
+✓ MINIMAL DIFFERENCES
+
+Firth and standard logistic yield very similar estimates. The
+penalization has minimal impact, suggesting separation is not severe.
+
+RECOMMENDATION:
+Report standard logistic as primary analysis. Mention Firth as
+sensitivity check showing robustness.
+
+═══════════════════════════════════════════════════════════════
